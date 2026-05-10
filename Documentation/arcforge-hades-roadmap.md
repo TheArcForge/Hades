@@ -100,15 +100,15 @@ A second purpose: validate that the UniClaude infrastructure we plan to reuse ac
 
 ### Done criteria
 
-- [ ] Hades GitHub repository exists with planned directory structure
-- [ ] Unity Package skeleton is installable via UPM git URL
-- [ ] Node.js MCP bridge skeleton starts and connects to Unity-side server
-- [ ] Empty MCP tool that returns "Hades is alive" works end-to-end (agent → bridge → Unity → response)
-- [ ] Unity Test Runner configured and runs sample tests
-- [ ] Node.js test framework configured and runs sample tests
-- [ ] CI pipeline runs both test suites on every commit
-- [ ] At least one synthetic Unity project fixture exists for integration tests
-- [ ] UniClaude infrastructure (MCPServer, HttpTransport, MCPDispatcher, Main Thread Bridge, Path Sandbox, Domain Reload Resilience) is extracted and works in the new repository
+- [x] Hades GitHub repository exists with planned directory structure
+- [x] Unity Package skeleton is installable via UPM git URL
+- [x] Node.js MCP bridge skeleton starts and connects to Unity-side server
+- [x] Empty MCP tool that returns "Hades is alive" works end-to-end (agent → bridge → Unity → response)
+- [x] Unity Test Runner configured and runs sample tests
+- [x] Node.js test framework configured and runs sample tests
+- [ ] CI pipeline runs both test suites on every commit *(Bridge tests only — Unity tests require license server, deferred)*
+- [x] At least one synthetic Unity project fixture exists for integration tests
+- [x] UniClaude infrastructure (MCPServer, HttpTransport, MCPDispatcher, Main Thread Bridge, Path Sandbox, Domain Reload Resilience) is extracted and works in the new repository
 
 ### Scope: what's in
 
