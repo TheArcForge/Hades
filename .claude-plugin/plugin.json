@@ -1,0 +1,12 @@
+{
+  "name": "arcforge-hades",
+  "version": "0.1.0",
+  "displayName": "Hades",
+  "description": "Unity-aware AI infrastructure: project knowledge graph, observability, memory, and skills for Claude Code.",
+  "author": "ArcForge",
+  "license": "MIT",
+  "mcp": {
+    "command": "node",
+    "args": ["Bridge~/dist/index.js"]
+  }
+}

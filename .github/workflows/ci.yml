@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  bridge-tests:
+    name: Bridge (Node.js) Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "Bridge~/package-lock.json"
+
+      - name: Install dependencies
+        working-directory: Bridge~
+        run: npm ci
+
+      - name: Run tests
+        working-directory: Bridge~
+        run: npm test
+
+      - name: Build
+        working-directory: Bridge~
+        run: npm run build

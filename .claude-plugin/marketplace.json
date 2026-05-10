@@ -1,0 +1,10 @@
+{
+  "id": "arcforge-hades",
+  "name": "Hades",
+  "shortDescription": "Unity project intelligence for Claude Code — knowledge graph, tracing, memory, and 25+ skills.",
+  "category": "game-development",
+  "tags": ["unity", "game-development", "mcp", "knowledge-graph"],
+  "homepage": "https://github.com/TheArcForge/Hades",
+  "repository": "https://github.com/TheArcForge/Hades",
+  "minimumClaudeCodeVersion": "1.0.0"
+}

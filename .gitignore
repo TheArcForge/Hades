@@ -1,0 +1,50 @@
+# Unity
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+*.csproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vs/
+*.swp
+*.swo
+
+# Node
+Bridge~/node_modules/
+Bridge~/dist/
+
+# Hades runtime artifacts (machine-specific)
+.arcforge/graph.db
+.arcforge/traces.db
+.arcforge/server.json
+
+# Keep memory tracked
+!.arcforge/memory/
+
+# Superpowers artifacts
+docs/
+docs.meta

@@ -1,0 +1,25 @@
+{
+  "name": "com.arcforge.hades",
+  "version": "0.1.0",
+  "displayName": "Hades",
+  "description": "Unity-aware AI infrastructure: project knowledge graph, observability, memory, and skills for Claude Code.",
+  "unity": "6000.0",
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  },
+  "keywords": [
+    "ai",
+    "claude",
+    "mcp",
+    "knowledge-graph",
+    "editor"
+  ],
+  "author": {
+    "name": "ArcForge"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TheArcForge/Hades.git"
+  }
+}
