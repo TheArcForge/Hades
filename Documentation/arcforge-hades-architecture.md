@@ -108,7 +108,7 @@ A substantial portion of Hades's runtime infrastructure is reused from UniClaude
 
 What changes from UniClaude:
 
-- **No Node.js Sidecar.** UniClaude had a separate Node.js process running the Anthropic Agent SDK, which called the MCP server's `/rpc` endpoint via custom JSON-RPC. Hades does not embed the Agent SDK and therefore does not need a sidecar. The agent client is external (Claude Code), and it speaks the standard MCP protocol directly to Hades's MCP server.
+- **No Node.js Sidecar (but a thin bridge).** UniClaude had a separate Node.js process running the Anthropic Agent SDK, which called the MCP server's `/rpc` endpoint via custom JSON-RPC. Hades does not embed the Agent SDK and therefore does not need a sidecar. The agent client is external (Claude Code or Claude Desktop), and it speaks the standard MCP protocol directly to Hades's MCP server. However, Claude Desktop (and some other MCP clients) only support stdio-based MCP servers, not HTTP. For these clients, Hades deploys a lightweight Node.js bridge script (`~/.arcforge/mcp-bridge.js`) that translates between stdio and Hades's HTTP/SSE transport via `npx mcp-remote`. This bridge is not an agent — it performs no reasoning, holds no state, and simply pipes messages. **Node.js is therefore a runtime dependency for Claude Desktop support.** Claude Code connects directly over HTTP and does not require Node.js.
 - **No chat UI.** UniClaude exposed a chat window in the Unity Editor as the user's primary interaction surface. Hades has no chat UI; the user interacts through their agent client.
 - **MCP-compliant transport.** UniClaude used custom JSON-RPC over HTTP. Hades uses the MCP protocol's official transport (HTTP/SSE per the spec). The `MCPServer.cs` infrastructure is upgraded to expose MCP-compliant endpoints, but the underlying threading model and lifecycle handling stay identical.
 
@@ -120,11 +120,15 @@ Communication between the agent client and the Unity Package happens over **HTTP
 
 Specifically:
 
-- The Unity Package's MCP server listens on `http://localhost:<port>` where `<port>` is dynamically chosen at startup (default range 7780-7790; if all are busy, a random ephemeral port is used).
-- The chosen port is written to a discovery file at `.arcforge/server.json` so the agent client can find it. This file is gitignored.
-- The agent client reads `.arcforge/server.json` from the Unity project's working directory (resolved by the agent client's CWD or a config option), then connects to the discovered port.
+- The Unity Package's MCP server listens on `http://localhost:<port>` where `<port>` is dynamically chosen at startup (if the requested port is busy, a random ephemeral port is used).
+- On startup, `MCPClientConfig` performs three registration steps automatically:
+  1. **Server registry entry** — writes `~/.arcforge/servers/{ProjectName}-{hash}.json` containing port, PID, project path, and start timestamp. This central registry supports multiple simultaneous Unity instances.
+  2. **Claude Code config** — writes or updates `{project}/.mcp.json` with a stdio entry pointing at the bridge script (`~/.arcforge/mcp-bridge.js --project {projectPath}`). This file is gitignored.
+  3. **Claude Desktop config** — updates `claude_desktop_config.json` (platform-specific path) with a `hades-{projectName}` entry using the same bridge script and `--project` argument.
+- The bridge script (`~/.arcforge/mcp-bridge.js`) is a cross-platform Node.js script that polls the server registry for the specified project, waits in standby mode if the server isn't running yet, and connects via `npx mcp-remote` when available. It reconnects automatically if Unity restarts.
+- Claude Code reads `.mcp.json` and launches the bridge, which discovers the running server and proxies stdio ↔ HTTP/SSE. Claude Desktop reads its own config and does the same.
 - Standard MCP protocol messages flow over the connection: `initialize`, `tools/list`, `tools/call`, etc.
-- For long-running operations or streamed responses, Server-Sent Events (SSE) is used.
+- For long-running operations or streamed responses, Server-Sent Events (SSE) is used. The transport supports both legacy SSE (`GET /sse`) and Streamable HTTP (`GET /rpc`) endpoints.
 
 This pattern was chosen over alternatives (file-based handoff, named pipes, Unix sockets) for the following reasons:
 
@@ -165,8 +169,8 @@ A typical day in the life of Hades:
 1. User opens the Unity Editor. `[InitializeOnLoad]` triggers Hades startup. The MCP server begins listening on a chosen port. The graph is loaded from disk (or rebuilt if the disk version is missing or outdated).
 2. The graph is brought up to date with any project changes that happened while Unity was closed. This can take seconds to a minute on a large project.
 3. The Charon emitter starts logging events.
-4. The user opens their agent client (Claude Code). The Hades plugin is already installed; its MCP config points to the discovery file.
-5. The agent client reads `.arcforge/server.json`, finds the port, and connects to the Hades MCP server. Standard MCP `initialize` handshake completes.
+4. The user opens their agent client (Claude Code or Claude Desktop). Hades auto-configured the MCP client during step 1 — `.mcp.json` for Claude Code, `claude_desktop_config.json` for Claude Desktop. Both point at the bridge script with `--project` targeting.
+5. The bridge script reads the server registry at `~/.arcforge/servers/`, finds the running server entry for this project, and connects via `npx mcp-remote`. Standard MCP `initialize` handshake completes. If the agent client starts before Unity, the bridge enters standby mode — polling the registry every 3 seconds until the server appears.
 6. The user starts a session with the agent. The agent makes Hades tool calls as needed.
 7. While the user works, Unity Editor lifecycle events (asset save, scene save, prefab apply) trigger graph updates. These happen in the background, fast enough that the user doesn't notice.
 8. Trace events accumulate in `traces.db`. The user can inspect them at any time via the Charon dashboard.
@@ -183,8 +187,8 @@ The design property that makes this work: **Hades is fully project-scoped. Each 
 What this looks like concretely:
 
 - **Per-project storage.** Each project has its own `.arcforge/graph.db`, `.arcforge/traces.db`, `.arcforge/memory/`. Project A's data lives in Project A's directory; Project B's lives in Project B's. No cross-contamination.
-- **Independent MCP servers.** Each Unity instance starts its own MCP server on its own port. The default port range (7780-7790) accommodates ~10 simultaneous instances; beyond that, ephemeral ports are used. Two instances of Hades will never conflict because each writes its own discovery file at `<project>/.arcforge/server.json`.
-- **Discovery file scoping.** The discovery file lives within the project directory. The agent client (Claude Code, etc.) resolves the discovery file via its current working directory, which is the project the agent is operating on. This automatically routes the right agent to the right Hades instance.
+- **Independent MCP servers.** Each Unity instance starts its own MCP server on its own port. If the requested port is busy, an ephemeral port is used. Two instances of Hades never conflict because each writes its own server registry entry at `~/.arcforge/servers/{ProjectName}-{hash}.json`.
+- **Central registry with project targeting.** The server registry lives at `~/.arcforge/servers/` and contains one JSON file per running Hades instance. Each agent client's MCP config includes `--project {projectPath}`, so the bridge script matches exactly the right server entry. Claude Code resolves this via its working directory (`.mcp.json`); Claude Desktop uses per-project entries (`hades-{projectName}`) in its global config. Stale entries (where the PID is no longer alive) are cleaned up automatically by the bridge script.
 - **Independent dashboards.** When the user launches the Charon dashboard from Unity instance A, the dashboard process is scoped to Project A's traces database and uses port 7878. If the user launches a dashboard from Unity instance B, it gets the next available port (7879, 7880, etc.) and reads Project B's traces. The two dashboards run simultaneously without interference. The user can have multiple browser tabs open, one per project.
 - **Independent skills config.** Skills are installed globally in the Claude Code config (per Vision §7.5), not per project. Both instances of the agent client read from the same global skill library. This is the correct shape — skills are meant to be shared across projects.
 
@@ -1130,6 +1134,56 @@ validation_status: ok
 ---
 
 # Architectural Decisions
+
+### Vendored gilzoide/unity-sqlite-net for Graph Database Access
+
+**Date:** 2026-05-11
+**Status:** Active (supersedes previous Mono.Data.Sqlite approach)
+**Scope:** Hades Graph (Section 2)
+
+GraphDatabase.cs uses [gilzoide/unity-sqlite-net](https://github.com/gilzoide/unity-sqlite-net) (v1.3.2) — a Unity-specific port of praeclarum/sqlite-net that P/Invokes directly into platform-native sqlite3 binaries. The entire package is vendored into `ThirdParty/unity-sqlite-net/` for self-contained UPM distribution with no external dependencies.
+
+**Key API patterns:**
+- `SQLiteConnection` (auto-opens on construction, plain path — no URI prefix)
+- `Execute(sql, args)` and `ExecuteScalar<T>(sql, args)` with positional `?` params
+- `SQLitePreparedStatement` for complex reads (`Bind()`/`Step()`/`GetString()`/`GetLong()`)
+- `ExecuteScript()` for multi-statement DDL
+- `RunInTransaction(Action)` for transactional writes
+
+**Previous approach (Mono.Data.Sqlite) — why it was replaced:** The bundled `Mono.Data.Sqlite.dll` and `System.Data.dll` were reference assemblies (stubs with empty method bodies) from Unity's `MonoBleedingEdge/lib/mono/unity/` directory. These compiled successfully but threw `InvalidProgramException` at runtime, causing all 55 database-touching tests to fail.
+
+**Alternatives considered:**
+- Mono.Data.Sqlite bundled DLLs (rejected: reference assembly stubs cause runtime InvalidProgramException)
+- Microsoft.Data.Sqlite via NuGet (rejected: SQLitePCLRaw.Batteries_V2.Init() cannot find native binaries in Unity's Mono runtime)
+- SQLite4Unity3d (rejected: unmaintained, outdated sqlite3 binaries)
+- External UPM dependency on gilzoide/unity-sqlite-net (rejected: adds external dependency for consumers)
+
+**Rationale:** gilzoide/unity-sqlite-net provides platform-native sqlite3 binaries (macOS, Windows, Linux, Android) with a clean C# API that still allows raw SQL for PRAGMAs, schema control, and complex graph queries. Vendoring ensures Hades remains a self-contained UPM package.
+
+**Maintenance:** The vendored source lives in `ThirdParty/unity-sqlite-net/`. To update, clone the upstream repo, copy updated files, and verify license compliance. `ATTRIBUTION.md` in the vendored directory documents the source commit and licenses (MIT for sqlite-net, public domain for sqlite3).
+
+### MCP Auto-Discovery with Standby Bridge
+
+**Date:** 2026-05-11
+**Status:** Active
+**Scope:** MCP Transport (Section 1.5)
+
+Agent clients (Claude Code, Claude Desktop) automatically discover and connect to Hades's MCP server without manual configuration. The system consists of three components:
+
+1. **Central server registry** (`~/.arcforge/servers/`) — one JSON file per running Unity instance, containing port, PID, project path, and timestamp. Written on server start, deleted on server stop.
+2. **Bridge script** (`~/.arcforge/mcp-bridge.js`) — a cross-platform Node.js script that translates stdio ↔ HTTP/SSE via `npx mcp-remote`. Supports standby mode (polls the registry every 3 seconds until the server appears) and automatic reconnection if Unity restarts.
+3. **Auto-configured client entries** — `.mcp.json` for Claude Code (per-project, gitignored), `claude_desktop_config.json` for Claude Desktop (per-platform global config). Both use `--project` argument for exact project targeting.
+
+**Key property: order-independent startup.** The agent client can start before Unity. The bridge enters standby mode and connects as soon as the server appears. No restart required on either side.
+
+**Alternatives considered:**
+- Direct HTTP URL in client config (rejected: port changes across Unity restarts; requires manual reconfiguration)
+- Project-local discovery file only (rejected: Claude Desktop doesn't support per-project configs; needs global config with per-project entries)
+- Shell script bridge (rejected: not cross-platform; Node.js is more portable across macOS/Windows/Linux)
+
+**Runtime dependency:** Node.js is required for Claude Desktop support (the bridge script and `npx mcp-remote`). Claude Code's direct HTTP connection does not require Node.js, but the current implementation routes all clients through the bridge for consistency. This may be optimized in future to use Claude Code's native `type: http` config when available.
+
+**Maintenance:** The bridge script is embedded as a string in `MCPClientConfig.cs` and versioned (`BridgeVersion` constant). On server start, `EnsureBridgeScript()` checks the version marker and rewrites the script only if outdated.
 
 ### SO Event Channels for Inter-System Communication
 
@@ -2380,6 +2434,33 @@ Charon continues operating during play mode — observability of agent actions d
 - Memory self-validation surfaces inconsistencies between memory claims and graph state. If the graph itself is wrong, this often surfaces as "memory says X, graph says Y" warnings.
 - The user can run `/hades:rebuild-graph` at any time as recovery.
 
+#### 8.2.4 Re-entry loop in asset postprocessor
+
+**What happens:** Graph rebuild triggers scene scanning, which opens scene assets, which triggers Unity's `OnPostprocessAllAssets`, which re-enqueues graph work, creating an infinite loop. The Unity Editor freezes.
+
+**Risk to Hades:** Complete editor freeze on large projects. Observed on a 55k-node project during first full rebuild.
+
+**Mitigation:**
+
+- `GraphUpdateHandler` exposes an `IsBusy` property (checks `BuildStatus != Idle`).
+- `GraphAssetPostprocessor.OnPostprocessAllAssets` checks `IsBusy` and returns early if the graph is already being built.
+- This breaks the re-entry cycle: rebuild → scan → postprocessor fires → sees busy → skips → rebuild continues normally.
+
+**Phase 1 lesson:** This was not caught in unit tests because the re-entry only occurs on real projects with enough assets to trigger scene scanning during rebuild. First observed as an editor freeze on a production Unity project with 55k+ graph nodes.
+
+#### 8.2.5 sqlite-net null binding
+
+**What happens:** `SQLitePreparedStatement.Bind(index, null)` throws an exception in sqlite-net. Unlike ADO.NET, sqlite-net does not accept null string arguments in prepared statement bindings.
+
+**Risk to Hades:** Query methods that accept optional filter parameters (e.g., `SearchByName(namePattern, typeFilter)`) crash when called with null arguments.
+
+**Mitigation:**
+
+- All optional parameters are coalesced to safe defaults before binding: `var pattern = namePattern ?? "%"`.
+- sqlite-net uses 1-indexed `Bind()` parameters (unlike ADO.NET's 0-indexed), which is documented in the codebase and the architectural decision record.
+
+**Phase 1 lesson:** Discovered during the SQLite migration from Mono.Data.Sqlite to gilzoide/unity-sqlite-net. The `SearchByName` method passed null directly to `Bind()`, which worked with Mono.Data.Sqlite but throws in sqlite-net. All 3 test failures during migration were variations of this API incompatibility.
+
 ### 8.3 Charon-level failures
 
 #### 8.3.1 Trace database fills the disk
@@ -2445,29 +2526,71 @@ Charon continues operating during play mode — observability of agent actions d
 
 #### 8.5.1 Port collision
 
-**What happens:** The default port range (7780-7790) is all in use by other applications.
+**What happens:** The requested port is already in use by another application.
 
 **Risk to Hades:** MCP server can't start. Agent client can't connect.
 
 **Mitigation:**
 
-- Falls back to a random ephemeral port if the default range is unavailable.
-- Selected port is written to the discovery file so the agent client finds it.
-- Diagnostic command `/hades:status` reports the current port.
+- Falls back to a random ephemeral port if the requested port is unavailable.
+- Selected port is written to the server registry at `~/.arcforge/servers/` so the bridge script discovers it automatically.
+- The bridge abstracts port changes entirely — clients never need to know the port.
 
-#### 8.5.2 Discovery file out of sync
+#### 8.5.2 Port changes across Unity restarts
 
-**What happens:** The discovery file points to a port that's no longer in use (e.g., Unity crashed without writing a new file, then restarted on a different port).
+**What happens:** Unity recompiles or restarts, and the MCP server binds to a different port. Any hardcoded port in client configs becomes stale.
 
-**Risk to Hades:** Agent client fails to connect.
+**Risk to Hades:** Agent client fails to connect after Unity restart.
 
 **Mitigation:**
 
-- Discovery file is written atomically on every port change.
-- Discovery file includes a PID; agent client validates the PID is alive before trusting the port.
-- If validation fails, agent client re-reads the file periodically (every 5 seconds during failed connections).
+- Clients never connect directly to a port. They connect via the bridge script (`~/.arcforge/mcp-bridge.js`), which reads the server registry to discover the current port.
+- On server start, `MCPClientConfig.OnServerStart()` writes the new port to the server registry. The bridge detects the change on its next poll cycle (3-second interval).
+- On server stop, `MCPClientConfig.OnServerStop()` removes the registry entry. The bridge enters standby mode and waits for the server to reappear.
 
-#### 8.5.3 Agent client doesn't speak MCP correctly
+**Phase 1 lesson:** This was discovered during real-project testing when Unity recompiled mid-session, changed port from 57171 to 57846, and broke the manually-configured Claude Desktop connection. It motivated the entire auto-discovery system.
+
+#### 8.5.3 Client starts before Unity
+
+**What happens:** The user opens Claude Code or Claude Desktop before opening Unity. The MCP server doesn't exist yet.
+
+**Risk to Hades:** Agent client shows connection errors, requiring manual restart after Unity starts.
+
+**Mitigation:**
+
+- The bridge script enters **standby mode** — it polls the server registry every 3 seconds, waiting for a server entry to appear. When Unity starts and writes the registry entry, the bridge auto-connects.
+- Claude Code and Claude Desktop do not need to be restarted. The bridge handles the wait internally.
+- **First-run limitation:** The bridge script and client configs are deployed by Unity's `OnServerStart()`. On the very first run, Unity must start first to bootstrap these files. After that, standby mode works for all subsequent sessions.
+
+#### 8.5.4 Claude Desktop vs Claude Code transport differences
+
+**What happens:** Claude Code supports HTTP-based MCP servers (direct connection). Claude Desktop only supports stdio-based MCP servers (`command` + `args` in config).
+
+**Risk to Hades:** A single transport strategy cannot serve both clients.
+
+**Mitigation:**
+
+- Both clients are configured to use the stdio bridge script (`~/.arcforge/mcp-bridge.js`), which translates stdio ↔ HTTP via `npx mcp-remote`.
+- The bridge connects to Hades's `/rpc` endpoint, which supports both Streamable HTTP (`POST /rpc` for JSON-RPC) and SSE (`GET /rpc` for event stream).
+- Node.js is a runtime dependency for this bridge. Without Node.js, Claude Desktop cannot connect to Hades.
+
+**Phase 1 lesson:** Claude Desktop's stdio-only constraint was discovered during integration testing. The initial assumption was that both clients could connect directly via HTTP URL — only Claude Code can. The bridge architecture was designed specifically to solve this gap.
+
+#### 8.5.5 Streamable HTTP endpoint compatibility
+
+**What happens:** `mcp-remote` uses an "http-first" strategy — it POSTs to the given URL before falling back to SSE. If the POST endpoint returns 404, the fallback to SSE-only transport is unreliable and causes rapid connect/disconnect cycles.
+
+**Risk to Hades:** Bridge connects briefly then disconnects repeatedly, making the MCP server appear flaky.
+
+**Mitigation:**
+
+- The Hades MCP server handles both `POST /rpc` (JSON-RPC) and `GET /rpc` (SSE) on the same `/rpc` endpoint, conforming to the MCP Streamable HTTP specification.
+- The bridge script connects to `/rpc` (not `/sse`), so `mcp-remote`'s http-first strategy succeeds on the first attempt.
+- Legacy `/sse` endpoint is still supported for backward compatibility with older clients.
+
+**Phase 1 lesson:** The initial bridge URL pointed to `/sse`. `mcp-remote` POSTed to `/sse` (404), fell back to SSE (connected), then disconnected immediately — repeating in a tight loop. Changing the URL to `/rpc` and ensuring both HTTP methods are handled on the same endpoint resolved the issue.
+
+#### 8.5.6 Agent client doesn't speak MCP correctly
 
 **What happens:** Some clients have buggy MCP implementations or use non-standard extensions.
 
@@ -2476,7 +2599,7 @@ Charon continues operating during play mode — observability of agent actions d
 **Mitigation:**
 
 - Strict MCP spec compliance on the server side.
-- Extensive integration tests with major clients (Claude Code, Cursor, Cline, Continue).
+- Integration tested with Claude Code and Claude Desktop via the bridge.
 - Charon traces capture exact request/response payloads for diagnosis.
 
 ### 8.6 Performance degradation modes

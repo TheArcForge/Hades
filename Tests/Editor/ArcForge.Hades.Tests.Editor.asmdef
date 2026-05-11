@@ -3,6 +3,7 @@
   "rootNamespace": "ArcForge.Hades.Editor.Tests",
   "references": [
     "ArcForge.Hades.Editor",
+    "Gilzoide.SqliteNet",
     "UnityEngine.TestRunner",
     "UnityEditor.TestRunner"
   ],

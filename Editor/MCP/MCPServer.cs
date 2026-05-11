@@ -84,6 +84,7 @@ namespace ArcForge.Hades.Editor.MCP
                 DiscoveryFile.DefaultPath,
                 port,
                 Process.GetCurrentProcess().Id);
+            MCPClientConfig.OnServerStart(port);
 
             EditorApplication.update += ProcessMainThreadQueue;
             EditorApplication.quitting += Stop;
@@ -106,6 +107,7 @@ namespace ArcForge.Hades.Editor.MCP
             _reloadStrategy = null;
 
             DiscoveryFile.Delete(DiscoveryFile.DefaultPath);
+            MCPClientConfig.OnServerStop();
 
             while (_workQueue != null && _workQueue.TryDequeue(out var item))
                 item.Completion.TrySetCanceled();

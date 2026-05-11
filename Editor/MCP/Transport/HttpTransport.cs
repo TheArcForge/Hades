@@ -111,7 +111,7 @@ namespace ArcForge.Hades.Editor.MCP
             {
                 if (context.Request.HttpMethod == "POST" && path == "/rpc")
                     await HandleRPC(context);
-                else if (context.Request.HttpMethod == "GET" && path == "/sse")
+                else if (context.Request.HttpMethod == "GET" && (path == "/sse" || path == "/rpc"))
                     await HandleSSE(context, ct);
                 else
                 {

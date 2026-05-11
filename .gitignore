@@ -39,8 +39,11 @@ Bridge~/dist/
 
 # Hades runtime artifacts (machine-specific)
 .arcforge/graph.db
+.arcforge/graph.db-wal
+.arcforge/graph.db-shm
 .arcforge/traces.db
 .arcforge/server.json
+.mcp.json
 
 # Keep memory tracked
 !.arcforge/memory/

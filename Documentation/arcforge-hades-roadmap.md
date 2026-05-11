@@ -406,6 +406,24 @@ Phase 1 is the first phase with substantial behavior. Prior phase's tests (Phase
 
 The Phase 1 test suite becomes the regression baseline for all subsequent phases.
 
+### Phase 1 implementation notes
+
+Issues encountered during Phase 1 development, documented for future reference:
+
+1. **Mono.Data.Sqlite was unusable.** The bundled DLLs in Unity's `MonoBleedingEdge/` directory are reference assembly stubs — they compile but throw `InvalidProgramException` at runtime. Every database-touching test failed. Replaced with vendored gilzoide/unity-sqlite-net (see Architecture ADR).
+
+2. **sqlite-net API differences from ADO.NET.** Three breaking differences: (a) `Bind()` is 1-indexed, not 0-indexed; (b) `Bind()` does not accept null strings — must coalesce to safe defaults; (c) `ExecuteScript()` is needed for multi-statement DDL instead of `Execute()`.
+
+3. **Editor freeze from asset postprocessor re-entry.** On a 55k-node production project, full graph rebuild triggered scene scanning → `OnPostprocessAllAssets` fired → re-enqueued graph work → infinite loop. Fixed with `IsBusy` guard in the postprocessor. Not caught in unit tests because re-entry requires enough assets to trigger scene scanning.
+
+4. **Claude Desktop only supports stdio MCP servers.** Initial assumption was both Claude Code and Claude Desktop could connect via HTTP URL. Only Claude Code can. Required building a Node.js bridge script that translates stdio ↔ HTTP/SSE via `npx mcp-remote`. Node.js is now a runtime dependency for Claude Desktop support.
+
+5. **Port instability across Unity restarts.** The MCP server port changes on recompile/restart, breaking any hardcoded config. Motivated the auto-discovery system: central server registry at `~/.arcforge/servers/`, bridge script with standby mode, and auto-managed client configs.
+
+6. **Streamable HTTP endpoint mismatch.** `mcp-remote` uses an "http-first" strategy (POST before SSE fallback). When the bridge URL pointed to `/sse`, POST returned 404, and the SSE fallback caused rapid connect/disconnect cycles. Fixed by pointing to `/rpc` which handles both `POST` (JSON-RPC) and `GET` (SSE) per the MCP Streamable HTTP spec.
+
+7. **MCPToolResult envelope mismatch.** `MCPToolResult.Success()` does not wrap results in the `{"result":...}` envelope expected by status-checking tools. `SuccessWithConfidence()` was needed for tools that return structured graph metadata.
+
 ### Bridge to next phase
 
 Phase 1 unlocks Phase 2 by:

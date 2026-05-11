@@ -1,4 +1,5 @@
 using System;
+using ArcForge.Hades.Editor.Graph.Models;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -22,6 +23,19 @@ namespace ArcForge.Hades.Editor.MCP
 
             var text = content is string s ? s : JsonConvert.SerializeObject(content, Formatting.Indented);
             return new MCPToolResult(false, text);
+        }
+
+        public static MCPToolResult SuccessWithConfidence(object content, ConfidenceBlock confidence)
+        {
+            if (content == null) throw new ArgumentNullException(nameof(content));
+            if (confidence == null) throw new ArgumentNullException(nameof(confidence));
+
+            var wrapper = new JObject
+            {
+                ["result"] = content is string s ? JToken.Parse(s) : JToken.FromObject(content),
+                ["confidence"] = confidence.ToJObject()
+            };
+            return new MCPToolResult(false, wrapper.ToString(Formatting.Indented));
         }
 
         public static MCPToolResult Error(string message)
