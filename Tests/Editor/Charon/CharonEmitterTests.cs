@@ -18,6 +18,7 @@ namespace ArcForge.Hades.Editor.Tests.Charon
             _testDbPath = Path.Combine(Path.GetTempPath(), $"charon_emitter_test_{Guid.NewGuid()}.db");
             _db = new CharonDatabase(_testDbPath);
             CharonEmitter.Initialize(_db);
+            CharonEmitter.Flush();
         }
 
         [TearDown]

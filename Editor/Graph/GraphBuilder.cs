@@ -88,6 +88,7 @@ namespace ArcForge.Hades.Editor.Graph
                     _db.SetMetadata("last_full_rebuild_at",
                         DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
                     _status = BuildStatus.Idle;
+                    Asphodel.AsphodeInitializer.OnGraphRebuildComplete();
                 }
             }
         }
@@ -144,6 +145,7 @@ namespace ArcForge.Hades.Editor.Graph
                     _db.SetMetadata("last_incremental_at",
                         DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
                     _status = BuildStatus.Idle;
+                    Asphodel.AsphodeInitializer.OnGraphRebuildComplete();
                 }
             }
         }

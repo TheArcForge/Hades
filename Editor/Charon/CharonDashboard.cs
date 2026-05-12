@@ -82,10 +82,12 @@ namespace ArcForge.Hades.Editor.Charon
 
             var portFile = Path.Combine(Path.GetTempPath(), $"hades_dashboard_port_{System.Guid.NewGuid()}.tmp");
 
+            var memoryDir = Path.Combine(projectRoot, ".arcforge", "memory");
+
             var startInfo = new ProcessStartInfo
             {
                 FileName = nodePath,
-                Arguments = $"\"{serverScript}\" --db \"{dbPath}\"",
+                Arguments = $"\"{serverScript}\" --db \"{dbPath}\" --memory \"{memoryDir}\"",
                 WorkingDirectory = dashboardDir,
                 UseShellExecute = false,
                 CreateNoWindow = true

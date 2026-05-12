@@ -136,7 +136,8 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 ["last_full_rebuild"] = db.GetMetadata("last_full_rebuild_at"),
                 ["last_incremental_update"] = db.GetMetadata("last_incremental_at"),
                 ["type_counts"] = JObject.FromObject(db.GetTypeCounts()),
-                ["version"] = "0.2.0"
+                ["version"] = "0.4.0",
+                ["memory_files"] = Asphodel.AsphodeInitializer.Manager?.ListFiles()?.Count ?? 0
             };
 
             return MCPToolResult.SuccessWithConfidence(result, BuildConfidence());

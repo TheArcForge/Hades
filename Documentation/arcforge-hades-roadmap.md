@@ -652,22 +652,22 @@ The validation engine — C# code that checks memory claims against the Graph an
 
 ### Done criteria
 
-- [ ] `.arcforge/memory/` directory structure created on Hades initialization
-- [ ] Default Tier 1 file templates exist (decisions.md, patterns.md, conventions.md, pitfalls.md, glossary.md, intent.md)
-- [ ] Markdown parser correctly handles YAML frontmatter and inline comments
-- [ ] Memory file I/O via Unity Package (read, write atomic via temp+rename)
-- [ ] FileSystemWatcher detects external edits to memory files
-- [ ] Validation engine (C# code) parses validation rules from frontmatter
-- [ ] Validation engine executes graph queries and compares results against expected outcomes
-- [ ] Validation engine writes results back to memory file (frontmatter status, inline HTML comments)
-- [ ] Validation runs on three triggers: startup, post-graph-update, on demand
-- [ ] Validation budget per query (1 second default) is enforced
-- [ ] Memory MCP tools work: `get_memory_summary`, `recall_memory`, `propose_memory_update`, `validate_memory`
-- [ ] Proposal queue at `.arcforge/memory/proposals/` exists; Claude proposals go there
-- [ ] Charon dashboard adds "Memory" view: shows files, validation status, conflicts
-- [ ] Charon dashboard adds "Proposals" view: pending proposals with accept/reject UI
-- [ ] Tier 1 files are git-tracked (in `.gitignore` template, only Tier 2 inferred/ subdirectory excluded)
-- [ ] Conflict detection: when memory file edited externally during Hades operation, conflict surfaces in dashboard
+- [x] `.arcforge/memory/` directory structure created on Hades initialization
+- [x] Default Tier 1 file templates exist (decisions.md, patterns.md, conventions.md, pitfalls.md, glossary.md, intent.md)
+- [x] Markdown parser correctly handles YAML frontmatter and inline comments
+- [x] Memory file I/O via Unity Package (read, write atomic via temp+rename)
+- [x] FileSystemWatcher detects external edits to memory files
+- [x] Validation engine (C# code) parses validation rules from frontmatter
+- [x] Validation engine executes graph queries and compares results against expected outcomes
+- [x] Validation engine writes results back to memory file (frontmatter status, inline HTML comments)
+- [x] Validation runs on three triggers: startup, post-graph-update, on demand
+- [x] Validation budget per query (1 second default) is enforced
+- [x] Memory MCP tools work: `get_memory_summary`, `recall_memory`, `propose_memory_update`, `validate_memory`
+- [x] Proposal queue at `.arcforge/memory/proposals/` exists; Claude proposals go there
+- [x] Charon dashboard adds "Memory" view: shows files, validation status, conflicts
+- [x] Charon dashboard adds "Proposals" view: pending proposals with accept/reject UI
+- [x] Tier 1 files are git-tracked (in `.gitignore` template, only Tier 2 inferred/ subdirectory excluded)
+- [x] Conflict detection: when memory file edited externally during Hades operation, conflict surfaces in dashboard
 
 ### Scope: what's in
 
@@ -1306,7 +1306,33 @@ It is ready to be used by developers who are not the original developer.
 
 ---
 
-## 10. Closing
+## 10. Known issues
+
+Issues discovered during development that need resolution. Tracked here for visibility across phases.
+
+### Multi-instance MCP discovery broken
+
+**Discovered:** Phase 3 happy path validation (2026-05-12)
+**Severity:** Medium — blocks multi-project workflows, does not affect single-project use
+**Ref:** Architecture §1.8
+
+Running two Unity projects simultaneously with Hades should produce two independent MCP servers on different ports, each discoverable by Claude Code. In practice, opening a second project does not register a second MCP server in the Claude Code tool list — only the first project's connection is visible.
+
+Likely cause: discovery file collision. Both projects write `.arcforge/server.json` to advertise their MCP endpoint, but Claude Code's stdio bridge discovers servers by scanning a fixed path or process name. Two instances overwrite the same discovery entry rather than registering separately. Needs investigation of the bridge's server enumeration logic and the `server.json` path resolution.
+
+### Validation warnings duplicate on repeated runs
+
+**Discovered:** Phase 3 happy path validation (2026-05-12)
+**Severity:** Low — cosmetic, does not affect validation correctness
+**Ref:** `Editor/Asphodel/MemoryValidator.cs`
+
+When `validate_memory` is called multiple times on a file with failing rules (or when the FileWatcher re-triggers validation after the validator itself writes back to the file), identical `<!-- HADES VALIDATION WARNING -->` HTML comment blocks are appended each time. Observed: a single failing rule produced 3 duplicate warning blocks after 3 validation passes.
+
+The warning-writing logic in `MemoryValidator` needs to be idempotent — either strip existing warning comments before writing new ones, or check for duplicates before appending. The former is cleaner: on each validation pass, remove all `<!-- HADES VALIDATION WARNING ... -->` blocks, then write current warnings fresh. This also correctly handles the case where a previously failing rule now passes (the stale warning gets removed).
+
+---
+
+## 11. Closing
 
 This roadmap is a sequence of phases, each building on the last, each producing something coherent on its own, accumulating into a complete product that realizes the Vision.
 

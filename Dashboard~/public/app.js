@@ -282,41 +282,209 @@ function TraceDetailView({ traceId, onBack }) {
   );
 }
 
+// === Memory API helpers ===
+async function fetchMemoryFiles() {
+  var res = await fetch("/api/memory");
+  return res.json();
+}
+
+async function fetchMemoryFile(filename) {
+  var res = await fetch("/api/memory/" + encodeURIComponent(filename));
+  if (!res.ok) return null;
+  return res.json();
+}
+
+async function fetchProposals() {
+  var res = await fetch("/api/proposals");
+  return res.json();
+}
+
+async function acceptProposal(id) {
+  var res = await fetch("/api/proposals/" + encodeURIComponent(id) + "/accept", { method: "POST" });
+  return res.json();
+}
+
+async function rejectProposal(id) {
+  var res = await fetch("/api/proposals/" + encodeURIComponent(id) + "/reject", { method: "POST" });
+  return res.json();
+}
+
+// === Memory Views ===
+function validationBadge(status) {
+  var cls = status === "ok" ? "ok" : status === "warning" ? "warning" : "error";
+  return h("span", { className: "status-badge " + cls }, status.toUpperCase());
+}
+
+function MemoryFileRow({ file, onClick }) {
+  return h("div", { className: "trace-row", onClick: onClick },
+    h("span", { className: "name" }, file.filename),
+    h("span", null, validationBadge(file.validation_status)),
+    h("span", { className: "time" }, file.last_reviewed ? "Reviewed: " + file.last_reviewed : ""),
+    h("span", { className: "spans" }, Math.round(file.size / 1024 * 10) / 10 + " KB")
+  );
+}
+
+function MemoryDetailView({ filename, onBack }) {
+  var _a = useState(null), data = _a[0], setData = _a[1];
+  var _b = useState(true), loading = _b[0], setLoading = _b[1];
+
+  useEffect(function() {
+    setLoading(true);
+    fetchMemoryFile(filename)
+      .then(function(d) { setData(d); })
+      .finally(function() { setLoading(false); });
+  }, [filename]);
+
+  if (loading) return h("div", null,
+    h("span", { className: "back-link", onClick: onBack }, "← Back to memory"),
+    h("div", { className: "loading" }, "Loading...")
+  );
+
+  if (!data) return h("div", null,
+    h("span", { className: "back-link", onClick: onBack }, "← Back to memory"),
+    h("div", { className: "error-msg" }, "File not found")
+  );
+
+  return h("div", null,
+    h("span", { className: "back-link", onClick: onBack }, "← Back to memory"),
+    h("div", { className: "trace-header" },
+      h("h2", null, data.filename),
+      h("div", { className: "trace-meta" },
+        h("span", null, validationBadge(data.validation_status)),
+        data.last_reviewed ? h("span", null, "Reviewed: " + data.last_reviewed) : null,
+        data.last_validated ? h("span", null, "Validated: " + data.last_validated.substring(0, 10)) : null
+      )
+    ),
+    h("pre", { style: { whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", fontSize: "13px", background: "var(--bg-secondary)", padding: "16px", borderRadius: "8px", lineHeight: "1.5" } }, data.body)
+  );
+}
+
+function MemoryListView() {
+  var _a = useState([]), files = _a[0], setFiles = _a[1];
+  var _b = useState(true), loading = _b[0], setLoading = _b[1];
+  var _c = useState(null), selected = _c[0], setSelected = _c[1];
+
+  useEffect(function() {
+    setLoading(true);
+    fetchMemoryFiles()
+      .then(function(data) { setFiles(data.files || []); })
+      .finally(function() { setLoading(false); });
+  }, []);
+
+  if (selected) {
+    return h(MemoryDetailView, { filename: selected, onBack: function() { setSelected(null); } });
+  }
+
+  if (loading) return h("div", { className: "loading" }, "Loading memory files...");
+
+  return h("div", null,
+    files.length === 0
+      ? h("div", { className: "loading" }, "No memory files found")
+      : h("div", { className: "trace-list" },
+          files.map(function(f) {
+            return h(MemoryFileRow, { key: f.filename, file: f, onClick: function() { setSelected(f.filename); } });
+          })
+        )
+  );
+}
+
+function ProposalRow({ proposal, onAccept, onReject }) {
+  return h("div", { className: "trace-row", style: { flexDirection: "column", alignItems: "flex-start", gap: "8px" } },
+    h("div", { style: { display: "flex", width: "100%", justifyContent: "space-between", alignItems: "center" } },
+      h("span", { className: "name" }, "→ " + proposal.target_file + ".md"),
+      h("span", { className: "time" }, proposal.created_at ? proposal.created_at.substring(0, 10) : "")
+    ),
+    h("div", { style: { fontSize: "12px", color: "var(--text-secondary)" } }, proposal.rationale),
+    h("pre", { style: { fontSize: "11px", background: "var(--bg-secondary)", padding: "8px", borderRadius: "4px", margin: "0", whiteSpace: "pre-wrap", maxHeight: "120px", overflow: "auto", width: "100%" } }, proposal.content),
+    h("div", { style: { display: "flex", gap: "8px" } },
+      h("button", { onClick: function() { onAccept(proposal.id); }, style: { background: "#2ecc71", color: "#fff", border: "none", padding: "4px 12px", borderRadius: "4px", cursor: "pointer" } }, "Accept"),
+      h("button", { onClick: function() { onReject(proposal.id); }, style: { background: "#e94560", color: "#fff", border: "none", padding: "4px 12px", borderRadius: "4px", cursor: "pointer" } }, "Reject")
+    )
+  );
+}
+
+function ProposalsView() {
+  var _a = useState([]), proposals = _a[0], setProposals = _a[1];
+  var _b = useState(true), loading = _b[0], setLoading = _b[1];
+
+  var load = function() {
+    setLoading(true);
+    fetchProposals()
+      .then(function(data) { setProposals(data.proposals || []); })
+      .finally(function() { setLoading(false); });
+  };
+
+  useEffect(load, []);
+
+  var handleAccept = function(id) {
+    acceptProposal(id).then(load);
+  };
+
+  var handleReject = function(id) {
+    rejectProposal(id).then(load);
+  };
+
+  if (loading) return h("div", { className: "loading" }, "Loading proposals...");
+
+  return h("div", null,
+    proposals.length === 0
+      ? h("div", { className: "loading" }, "No pending proposals")
+      : h("div", { className: "trace-list" },
+          proposals.map(function(p) {
+            return h(ProposalRow, { key: p.id, proposal: p, onAccept: handleAccept, onReject: handleReject });
+          })
+        )
+  );
+}
+
 function App() {
-  var _a = useState(null), selectedTraceId = _a[0], setSelectedTraceId = _a[1];
+  var _a = useState("traces"), tab = _a[0], setTab = _a[1];
+  var _b = useState(null), selectedTraceId = _b[0], setSelectedTraceId = _b[1];
 
   useEffect(function() {
     var hash = window.location.hash.slice(1);
-    if (hash) setSelectedTraceId(hash);
-
-    var onHashChange = function() {
-      var h = window.location.hash.slice(1);
-      setSelectedTraceId(h || null);
-    };
-    window.addEventListener("hashchange", onHashChange);
-    return function() { window.removeEventListener("hashchange", onHashChange); };
+    if (hash.startsWith("trace/")) setSelectedTraceId(hash.slice(6));
+    else if (hash === "memory") setTab("memory");
+    else if (hash === "proposals") setTab("proposals");
   }, []);
 
   var selectTrace = function(id) {
-    window.location.hash = id;
+    window.location.hash = "trace/" + id;
     setSelectedTraceId(id);
   };
 
-  var goBack = function() {
+  var goBackTraces = function() {
     window.location.hash = "";
     setSelectedTraceId(null);
   };
 
+  var switchTab = function(t) {
+    setTab(t);
+    setSelectedTraceId(null);
+    window.location.hash = t === "traces" ? "" : t;
+  };
+
+  var content;
+  if (tab === "traces") {
+    content = selectedTraceId
+      ? h(TraceDetailView, { traceId: selectedTraceId, onBack: goBackTraces })
+      : h(TraceListView, { onSelectTrace: selectTrace });
+  } else if (tab === "memory") {
+    content = h(MemoryListView);
+  } else if (tab === "proposals") {
+    content = h(ProposalsView);
+  }
+
   return h("div", null,
     h("div", { className: "header" },
       h("h1", null, "Charon"),
-      h("span", { className: "subtitle" }, "Trace Dashboard")
+      h("div", { className: "tab-bar" },
+        h("button", { className: "tab-btn" + (tab === "traces" ? " active" : ""), onClick: function() { switchTab("traces"); } }, "Traces"),
+        h("button", { className: "tab-btn" + (tab === "memory" ? " active" : ""), onClick: function() { switchTab("memory"); } }, "Memory"),
+        h("button", { className: "tab-btn" + (tab === "proposals" ? " active" : ""), onClick: function() { switchTab("proposals"); } }, "Proposals")
+      )
     ),
-    h("div", { className: "container" },
-      selectedTraceId
-        ? h(TraceDetailView, { traceId: selectedTraceId, onBack: goBack })
-        : h(TraceListView, { onSelectTrace: selectTrace })
-    )
+    h("div", { className: "container" }, content)
   );
 }
 
