@@ -13,6 +13,7 @@ namespace ArcForge.Hades.Editor.MCP
         HttpListener _listener;
         CancellationTokenSource _cts;
         Func<string, Task<string>> _requestHandler;
+        Func<string, string, Task<string>> _traceAwareHandler;
         bool _running;
         int _port;
         int _connectedClients;
@@ -25,6 +26,12 @@ namespace ArcForge.Hades.Editor.MCP
         public void SetRequestHandler(Func<string, Task<string>> handler)
         {
             _requestHandler = handler;
+        }
+
+        public void SetTraceAwareRequestHandler(Func<string, string, Task<string>> handler)
+        {
+            _traceAwareHandler = handler;
+            _requestHandler = (json) => handler(json, null);
         }
 
         public void Start(int port = 0)
@@ -132,7 +139,13 @@ namespace ArcForge.Hades.Editor.MCP
             using (var reader = new StreamReader(context.Request.InputStream, Encoding.UTF8))
                 json = await reader.ReadToEndAsync();
 
-            var responseTask = _requestHandler(json);
+            var traceId = context.Request.Headers["X-Hades-Trace-Id"];
+
+            Task<string> responseTask;
+            if (_traceAwareHandler != null)
+                responseTask = _traceAwareHandler(json, traceId);
+            else
+                responseTask = _requestHandler(json);
 
             if (await Task.WhenAny(responseTask, Task.Delay(30000)) != responseTask)
             {

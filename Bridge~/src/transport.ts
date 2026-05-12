@@ -20,7 +20,18 @@ export function parseJsonRpcResponse(json: string): JsonRpcResponse {
   return JSON.parse(json) as JsonRpcResponse;
 }
 
-export function sendToUnity(endpoint: string, body: string): Promise<string> {
+export function buildHeaders(body: string, traceId?: string): Record<string, string | number> {
+  const headers: Record<string, string | number> = {
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(body),
+  };
+  if (traceId) {
+    headers["X-Hades-Trace-Id"] = traceId;
+  }
+  return headers;
+}
+
+export function sendToUnity(endpoint: string, body: string, traceId?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const url = new URL(endpoint);
     const req = request(
@@ -29,10 +40,7 @@ export function sendToUnity(endpoint: string, body: string): Promise<string> {
         port: url.port,
         path: url.pathname,
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(body),
-        },
+        headers: buildHeaders(body, traceId),
       },
       (res) => {
         let data = "";

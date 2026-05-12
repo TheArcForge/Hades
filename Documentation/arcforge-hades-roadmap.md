@@ -450,22 +450,22 @@ The phase includes the observability infrastructure (OpenTelemetry instrumentati
 
 ### Done criteria
 
-- [ ] OpenTelemetry SDK integrated into the Hades Unity Package
-- [ ] CharonEmitter API allows starting and ending spans with attributes and events
-- [ ] Every MCP tool call automatically emits a root span (via wrapper or interceptor)
-- [ ] Every graph query emits a child span with query type and result count
-- [ ] Every scanner invocation emits a span with duration and outcome
-- [ ] Every memory operation emits a span (preparation for Phase 3)
-- [ ] Spans nest correctly via `AsyncLocal<Span>` context propagation
-- [ ] SQLite trace database initializes with full schema (traces, spans tables)
-- [ ] Trace buffer flushes asynchronously every 500ms or 1000 spans
-- [ ] Cross-process trace ID propagation via `X-Hades-Trace-Id` header works
-- [ ] Charon dashboard process starts via `Hades: Open Charon Dashboard` menu
-- [ ] Dashboard handles port collisions (tries 7878, 7879, etc.) per Architecture §1.8
-- [ ] Dashboard displays trace list with filters (date, status, name pattern)
-- [ ] Dashboard displays trace detail with span tree visualization
-- [ ] Privacy defaults: paths not redacted, content not captured, 30-day retention
-- [ ] Trace WAL survives Unity crash (verified by force-killing Unity, restarting, traces from before crash present)
+- [x] ~~OpenTelemetry SDK integrated into the Hades Unity Package~~ Custom CharonEmitter API (OpenTelemetry-inspired span model without the SDK dependency)
+- [x] CharonEmitter API allows starting and ending spans with attributes and events
+- [x] Every MCP tool call automatically emits a root span (via `CallToolWithTracing` interceptor)
+- [x] Every graph query emits a child span with query type and result count
+- [x] Every scanner invocation emits a span with duration and outcome
+- [ ] Every memory operation emits a span (preparation for Phase 3) *(deferred — Asphodel not yet built)*
+- [x] Spans nest correctly via `AsyncLocal<Span>` context propagation
+- [x] SQLite trace database initializes with full schema (traces, spans tables)
+- [x] Trace buffer flushes asynchronously every 500ms or 1000 spans
+- [x] Cross-process trace ID propagation via `X-Hades-Trace-Id` header works
+- [x] Charon dashboard process starts via `Hades: Open Charon Dashboard` menu
+- [x] ~~Dashboard handles port collisions (tries 7878, 7879, etc.)~~ Dashboard uses OS-assigned ephemeral port via `app.listen(0)` (see Architecture ADR)
+- [x] Dashboard displays trace list with filters (date, status, name pattern)
+- [x] Dashboard displays trace detail with span tree visualization
+- [x] Privacy defaults: paths not redacted, content not captured, 30-day retention with auto-pruning on startup
+- [ ] ~~Trace WAL survives Unity crash (verified by force-killing Unity, restarting, traces from before crash present)~~ *(SKIPPED — not explicitly verified, expected to work due to WAL mode)*
 
 ### Scope: what's in
 
@@ -562,14 +562,14 @@ The phase includes the observability infrastructure (OpenTelemetry instrumentati
 - Dashboard reads traces correctly from database
 - Multiple Unity instances produce separate trace databases (no cross-contamination)
 
-**Charon-based regression:**
+**Charon-based regression:** *(SKIPPED — framework built but no baseline datasets recorded yet; deferred to future workflow integration)*
 - Record trace of Phase 1 Happy Path scenario 1 ("Tell me about this project")
 - Replay deterministic parts (graph queries with same inputs)
 - Verify same outputs produced — this is now part of regression suite
 
 ### Happy Path scenarios
 
-**Scenario 4: Diagnose a problem**
+**Scenario 4: Diagnose a problem** *(SKIPPED — deferred to later validation)*
 
 The developer encounters a confusing agent suggestion. They ask the agent for the same task again, then run `/hades:show-traces` and inspect the trace from the first attempt. They see the chain of tool calls, the data the agent saw, and identify why the agent made the choice it did.
 
@@ -579,7 +579,7 @@ For testing purposes, deliberately create a confusing situation: ask the agent t
 **Implicitly verifies:** Phase 1 graph queries (still work), Phase 1 incremental update (rebuild detection), Phase 2 confidence modeling propagates through traces.
 **Pass criteria:** developer can identify root cause of the confusing suggestion from the trace alone, without needing to reproduce or guess.
 
-**Scenario 5: Performance investigation**
+**Scenario 5: Performance investigation** *(SKIPPED — deferred to later validation)*
 
 The developer notices a tool call feels slow. They open the dashboard, find the trace, and see exactly which sub-operation took the time — a specific graph query, a slow scanner, an HTTP roundtrip.
 
@@ -589,7 +589,7 @@ For testing purposes, deliberately introduce a slow query (e.g., recursive deep 
 **Implicitly verifies:** Phase 1 graph performs reasonably; Phase 2 instrumentation captures latency accurately.
 **Pass criteria:** the slow operation is immediately visible in the trace; developer doesn't have to dig.
 
-**Scenario 6: Multi-project workflow**
+**Scenario 6: Multi-project workflow** ✅
 
 The developer has two Unity instances open on different projects (per Architecture §1.8). They open dashboards for both. Traces from each project show only that project's activity. No cross-contamination.
 
@@ -607,6 +607,24 @@ All Phase 1 tests must continue to pass. Specifically:
 - Multi-instance tests
 
 Charon-based regression for Phase 1 Happy Path scenarios is now part of the suite (recorded in this phase).
+
+### Phase 2 implementation notes
+
+Issues encountered during Phase 2 development, documented for future reference:
+
+1. **Unity's `Process.Start` does not inherit the shell PATH.** Launching `node` directly via `Process.Start("node", ...)` fails with "Cannot find the specified file" because Unity's process environment lacks PATH entries from login shells (nvm, fnm, Homebrew, etc.). This affects macOS, Linux, and Windows differently. Fixed by building `ProcessResolver.cs` — a cross-platform utility that resolves executable paths via `which` (macOS/Linux, using `bash -lc` for login shell) or `where` (Windows), with per-session caching. This is now the standard way to launch external processes throughout Hades (see Architecture ADR).
+
+2. **Package path resolution fails with `file:` UPM references.** During development, the Unity Package is installed via `file:` reference, meaning `Packages/com.arcforge.hades/Dashboard~` is a symlink that doesn't resolve the way `PackageInfo.resolvedPath` does. Fixed by using `PackageInfo.FindForAssembly(typeof(CharonDashboard).Assembly).resolvedPath` to get the actual filesystem path regardless of how the package was installed (git URL, tarball, or local `file:` reference).
+
+3. **`OutputDataReceived` events silently fail in Unity's process context.** The dashboard server started correctly (verified by manual `node` invocation) but Unity never received stdout/stderr events from the child process. Unity's event pump does not reliably deliver async process output events. Fixed by replacing stdout parsing with port file IPC: the server writes its assigned port to a temp file via `HADES_PORT_FILE` environment variable, and Unity polls for the file (200ms intervals, 6-second timeout). This is more reliable than event-based approaches across all platforms.
+
+4. **Dashboard process orphaned on Unity domain reload.** When Unity recompiles scripts, it tears down and reconstructs the AppDomain. Static fields — including the `Process` reference to the dashboard — are lost. The dashboard process continues running but Unity can no longer stop it. Fixed by storing the PID in `SessionState` (which survives domain reloads) and reattaching via `Process.GetProcessById()` in a static constructor. `EditorApplication.quitting` hook is re-registered on reattach.
+
+5. **TOCTOU race in port assignment.** The original architecture specified sequential port scanning (try 7878, then 7879, etc.), which has a time-of-check-to-time-of-use race condition. Between finding a free port and binding to it, another process could claim it. Fixed by using `app.listen(0)` — the OS atomically assigns an available port. The assigned port is communicated back via the port file IPC mechanism from issue #3. This also eliminates the arbitrary port range limitation. Architecture §3.6 updated accordingly.
+
+6. **`ReadToEnd` on both stdout and stderr causes pipe buffer deadlock.** Calling `stdout.ReadToEnd()` and `stderr.ReadToEnd()` synchronously in sequence can deadlock: if stderr's OS pipe buffer fills while stdout is being read, the child process blocks writing to stderr, which prevents it from writing to stdout, which prevents `ReadToEnd()` from completing. Fixed by reading stderr asynchronously (`StandardError.ReadToEndAsync()`) while reading stdout synchronously. For long-lived processes (like the dashboard), stdout/stderr are not redirected at all — the process runs detached.
+
+7. **Regression framework test parameter type mismatch.** The `hades_regression_record` tool declares `tool_calls` as a `string` parameter (expecting a JSON array serialized as string), but tests passed a raw `JArray` object in the arguments `JObject`. The MCPDispatcher's `BindArguments` cannot convert `JArray` to `string`, causing all 4 `RegressionToolsTests` to fail. Fixed by serializing the array with `.ToString(Formatting.None)` before passing. This was a test bug, not a tool bug — the tool's contract is correct.
 
 ### Bridge to next phase
 

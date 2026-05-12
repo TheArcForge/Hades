@@ -189,7 +189,7 @@ What this looks like concretely:
 - **Per-project storage.** Each project has its own `.arcforge/graph.db`, `.arcforge/traces.db`, `.arcforge/memory/`. Project A's data lives in Project A's directory; Project B's lives in Project B's. No cross-contamination.
 - **Independent MCP servers.** Each Unity instance starts its own MCP server on its own port. If the requested port is busy, an ephemeral port is used. Two instances of Hades never conflict because each writes its own server registry entry at `~/.arcforge/servers/{ProjectName}-{hash}.json`.
 - **Central registry with project targeting.** The server registry lives at `~/.arcforge/servers/` and contains one JSON file per running Hades instance. Each agent client's MCP config includes `--project {projectPath}`, so the bridge script matches exactly the right server entry. Claude Code resolves this via its working directory (`.mcp.json`); Claude Desktop uses per-project entries (`hades-{projectName}`) in its global config. Stale entries (where the PID is no longer alive) are cleaned up automatically by the bridge script.
-- **Independent dashboards.** When the user launches the Charon dashboard from Unity instance A, the dashboard process is scoped to Project A's traces database and uses port 7878. If the user launches a dashboard from Unity instance B, it gets the next available port (7879, 7880, etc.) and reads Project B's traces. The two dashboards run simultaneously without interference. The user can have multiple browser tabs open, one per project.
+- **Independent dashboards.** When the user launches the Charon dashboard from Unity instance A, the dashboard process is scoped to Project A's traces database and binds to an OS-assigned ephemeral port. If the user launches a dashboard from Unity instance B, it gets its own OS-assigned port and reads Project B's traces. The two dashboards run simultaneously without interference. The user can have multiple browser tabs open, one per project.
 - **Independent skills config.** Skills are installed globally in the Claude Code config (per Vision §7.5), not per project. Both instances of the agent client read from the same global skill library. This is the correct shape — skills are meant to be shared across projects.
 
 Unity itself prevents two instances from opening the same project simultaneously, so the case of "two Hades instances writing to the same `.arcforge/` directory" cannot occur. This simplifies our concurrency model significantly: each `.arcforge/` directory has at most one writer at a time.
@@ -960,10 +960,13 @@ The eval dataset feature (described in 3.7) operates on traces that the user has
 
 ### 3.6 The Charon dashboard
 
-The dashboard is a separate Node.js process that reads `traces.db` and renders a local web UI on `http://localhost:<port>`. The default port is 7878; if it is already in use (e.g., because the user has another dashboard running for a different project per §1.8), the process tries 7879, 7880, etc., until it finds a free one. The chosen port is reported back to the user via the launch command output and via the Unity Editor menu item that opened it. It is started on demand:
+The dashboard is a separate Node.js process that reads `traces.db` and renders a local web UI on `http://127.0.0.1:<port>`. The server binds to port 0 (OS-assigned ephemeral port), which atomically allocates an available port with no TOCTOU race. The assigned port is communicated back to Unity via a temp file (the `HADES_PORT_FILE` environment variable points to the file path; the server writes the port number on startup). Unity polls for this file at 200ms intervals with a 6-second timeout, then opens the user's browser to the URL.
 
-- A menu item in the Unity Editor: `Hades: Open Charon Dashboard`. This launches the Node.js process and opens the user's browser to the URL.
-- A CLI command: `hades-charon` (installed by the Unity Package's setup wizard). Useful for users who prefer terminal.
+**Phase 2 lesson:** The original design specified sequential port scanning (try 7878, 7879, etc.), which has a TOCTOU race condition and an arbitrary port range limitation. OS-assigned ports eliminate both problems. Port file IPC replaced stdout event parsing because Unity's `OutputDataReceived` events do not fire reliably in Unity's process context.
+
+The dashboard is started on demand:
+
+- A menu item in the Unity Editor: `Hades: Open Charon Dashboard`. This launches the Node.js process and opens the user's browser to the URL. A second menu item, `Hades: Stop Charon Dashboard`, terminates the process.
 
 The dashboard is local-first and does not require an internet connection.
 
@@ -1206,6 +1209,55 @@ We chose ScriptableObject event channels over UnityEvents and direct references 
 - `Assets/Events/LevelLoaded.asset`
 
 **Enforcement:** All new inter-system communication must use this pattern. Existing UnityEvents in legacy code should be migrated when touched.
+
+### ProcessResolver for Cross-Platform Executable Resolution
+
+**Date:** 2026-05-12
+**Status:** Active
+**Scope:** Editor infrastructure (used by Charon Dashboard, potentially all external process invocations)
+
+`ProcessResolver.cs` provides two capabilities: (1) resolving the full path of an executable by name across platforms, and (2) running synchronous commands with deadlock-safe I/O handling.
+
+**The problem:** Unity's `Process.Start` does not inherit the user's login shell PATH. On macOS/Linux, Node.js installed via nvm/fnm/Homebrew is invisible to Unity. On Windows, `where.exe` resolves differently than Unix `which`. Passing just `"node"` to `Process.Start` fails with "Cannot find the specified file."
+
+**The solution:**
+- `FindExecutable(string name)` — resolves via `bash -lc "which {name}"` on macOS/Linux (login shell, picks up nvm/fnm), `cmd.exe /c where {name}` on Windows. Results cached per session in a static dictionary.
+- `Run(string executable, string arguments, string workingDirectory, int timeoutMs)` — runs a resolved executable synchronously. Reads stderr asynchronously (`ReadToEndAsync()`) while reading stdout synchronously to prevent pipe buffer deadlock. Kills process on timeout.
+
+**Key design decisions:**
+- Login shell (`-lc`) on bash is deliberate: non-login shells don't source `.bash_profile`/`.zshrc` where nvm/fnm inject their PATH modifications.
+- Per-session caching (static dictionary) is appropriate because executable locations don't change within a Unity session. Cache is lost on domain reload (static field reset), which is acceptable.
+- Stderr read is async to prevent deadlock when both stdout and stderr have data. This is a well-known .NET process I/O pattern.
+
+**Alternatives considered:**
+- Hardcoded paths (rejected: not portable across systems)
+- Environment variable for node path (rejected: additional user configuration burden)
+- Async process execution (rejected: unnecessary complexity for short-lived commands; long-lived processes like the dashboard don't redirect I/O)
+
+**Maintenance:** `ProcessResolver` is used by `CharonDashboard.cs` and `EnsureDashboardBuilt()`. Any future external tool invocations from Unity Editor code should use `ProcessResolver` rather than raw `Process.Start`.
+
+### OS-Assigned Port with Port File IPC for Dashboard
+
+**Date:** 2026-05-12
+**Status:** Active (supersedes sequential port scanning approach described in original §3.6)
+**Scope:** Charon Dashboard (Section 3.6)
+
+The dashboard server binds to port 0 (`app.listen(0, "127.0.0.1", ...)`), letting the OS atomically assign an available ephemeral port. The assigned port is communicated to Unity via a temp file: Unity sets the `HADES_PORT_FILE` environment variable to a unique temp path before launching the server; the server writes the port number to that file on startup; Unity polls for the file at 200ms intervals (30 attempts, 6-second timeout).
+
+**Previous approach — why it was replaced:** The original design specified sequential port scanning (try 7878, 7879, etc.). This has two problems: (a) TOCTOU race — between checking port availability and binding, another process can claim it; (b) arbitrary range limitation — only ports 7878-7888 were tried, which is fragile. The original design also specified stdout event parsing (`OutputDataReceived`) for port communication, which does not fire reliably in Unity's process context.
+
+**Key properties:**
+- No TOCTOU race: OS port assignment is atomic.
+- No arbitrary port range: any available ephemeral port works.
+- No stdout/stderr redirection for the dashboard process: avoids pipe buffer issues with long-lived processes.
+- Port file is cleaned up after reading (one-shot communication).
+- PID is stored in `SessionState` for domain reload resilience (see §8.3.3).
+
+**Alternatives considered:**
+- Sequential port scanning (rejected: TOCTOU race, arbitrary range)
+- stdout parsing via `OutputDataReceived` (rejected: unreliable in Unity's process context)
+- Named pipes / Unix domain sockets (rejected: platform-specific complexity for a one-shot port number)
+- Fixed port (rejected: prevents multi-instance per §1.8)
 ```
 
 #### 4.2.2 Tier 2: Inferred memory
@@ -2481,7 +2533,27 @@ Charon continues operating during play mode — observability of agent actions d
 
 **Risk to Hades:** User can't view traces.
 
-**Mitigation:** Dashboard is independent of the Unity Package. Crash of dashboard doesn't affect graph, memory, or MCP server. User restarts dashboard. Trace data is intact in the database.
+**Mitigation:** Dashboard is independent of the Unity Package. Crash of dashboard doesn't affect graph, memory, or MCP server. User restarts dashboard via menu. Trace data is intact in the database.
+
+#### 8.3.3 Dashboard process orphaned on domain reload
+
+**What happens:** Unity recompiles scripts, tears down the AppDomain. Static fields holding the `Process` reference are lost. The dashboard Node.js process continues running but Unity no longer has a handle to stop it.
+
+**Risk to Hades:** Orphaned dashboard processes accumulate. Port file stale. User confusion about running instances.
+
+**Mitigation:** Dashboard PID is stored in `SessionState` (survives domain reloads but not Unity restarts). Static constructor reattaches via `Process.GetProcessById()` on domain reload. `EditorApplication.quitting` hook is re-registered. If the stored PID no longer exists (e.g., dashboard crashed between reloads), the stale session state is cleaned up.
+
+**Phase 2 lesson:** This was discovered when the dashboard appeared to start successfully but could not be stopped after a script recompile. The pattern of storing PIDs in `SessionState` and reattaching in static constructors applies to any long-lived child process Hades may launch.
+
+#### 8.3.4 Node.js not found on PATH
+
+**What happens:** `Process.Start("node", ...)` fails with "Cannot find the specified file" because Unity's process environment does not inherit the user's login shell PATH (nvm, fnm, Homebrew paths are missing).
+
+**Risk to Hades:** Dashboard cannot start. Affects macOS, Linux, and Windows differently depending on how Node.js was installed.
+
+**Mitigation:** `ProcessResolver.FindExecutable("node")` resolves the full path via platform-specific shell commands (`bash -lc "which node"` on macOS/Linux, `cmd.exe /c where node` on Windows). The `-lc` flag on bash ensures login shell profile is sourced, picking up nvm/fnm PATH modifications. Results are cached per session.
+
+**Phase 2 lesson:** This is a general Unity platform issue, not specific to the dashboard. Any external tool invocation from Unity Editor code must go through `ProcessResolver` rather than relying on PATH.
 
 ### 8.4 Asphodel-level failures
 

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Threading.Tasks;
+using ArcForge.Hades.Editor.Charon;
 using ArcForge.Hades.Editor.Core;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
@@ -76,7 +77,7 @@ namespace ArcForge.Hades.Editor.MCP
             _reloadStrategy = new AutoReloadStrategy(settings.ReloadTimeoutSeconds);
 
             _transport = new HttpTransport();
-            _transport.SetRequestHandler(EnqueueAndWait);
+            (_transport as HttpTransport)?.SetTraceAwareRequestHandler(EnqueueAndWait);
             _transport.Start(settings.Port);
 
             var port = (_transport as HttpTransport)?.Port ?? 0;
@@ -130,15 +131,27 @@ namespace ArcForge.Hades.Editor.MCP
             if (_instance == this) _instance = null;
         }
 
-        Task<string> EnqueueAndWait(string json)
+        Task<string> EnqueueAndWait(string json, string traceId)
         {
             var tcs = new TaskCompletionSource<string>();
-            _workQueue.Enqueue(new WorkItem(json, tcs));
+            _workQueue.Enqueue(new WorkItem(json, tcs, traceId));
             return tcs.Task;
+        }
+
+        string CreateJsonRpcSuccess(JToken id, JObject result)
+        {
+            return new JObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = id?.DeepClone(),
+                ["result"] = result
+            }.ToString(Newtonsoft.Json.Formatting.None);
         }
 
         void ProcessMainThreadQueue()
         {
+            CharonEmitter.TickFlush();
+
             while (_workQueue.TryDequeue(out var item))
             {
                 try
@@ -147,7 +160,20 @@ namespace ArcForge.Hades.Editor.MCP
                     if (toolName != null)
                         _reloadStrategy?.OnToolCallStart(toolName);
 
-                    var response = _dispatcher.HandleRequest(item.Json);
+                    string response;
+                    if (toolName != null)
+                    {
+                        var request = JObject.Parse(item.Json);
+                        var id = request["id"];
+                        var arguments = request["params"]?["arguments"] as JObject ?? new JObject();
+
+                        var toolResult = _dispatcher.CallToolWithTracing(toolName, arguments, item.TraceId);
+                        response = CreateJsonRpcSuccess(id, toolResult.ToMCPResponse());
+                    }
+                    else
+                    {
+                        response = _dispatcher.HandleRequest(item.Json);
+                    }
 
                     if (toolName != null)
                     {
@@ -196,12 +222,14 @@ namespace ArcForge.Hades.Editor.MCP
         class WorkItem
         {
             public string Json { get; }
+            public string TraceId { get; }
             public TaskCompletionSource<string> Completion { get; }
 
-            public WorkItem(string json, TaskCompletionSource<string> completion)
+            public WorkItem(string json, TaskCompletionSource<string> completion, string traceId = null)
             {
                 Json = json;
                 Completion = completion;
+                TraceId = traceId;
             }
         }
     }

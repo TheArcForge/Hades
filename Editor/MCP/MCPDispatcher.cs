@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using ArcForge.Hades.Editor.Charon;
 
 namespace ArcForge.Hades.Editor.MCP
 {
@@ -127,6 +128,22 @@ namespace ArcForge.Hades.Editor.MCP
             catch (Exception ex)
             {
                 return MCPToolResult.Error(ex.Message);
+            }
+        }
+
+        public MCPToolResult CallToolWithTracing(string name, JObject arguments, string traceId = null)
+        {
+            using (var span = CharonEmitter.StartSpan($"mcp.tool.{name}", SpanKind.Server, traceId))
+            {
+                span.SetAttribute("tool.name", name);
+                span.SetAttribute("tool.input", arguments.ToString(Newtonsoft.Json.Formatting.None));
+
+                var result = CallTool(name, arguments);
+
+                if (result.IsError)
+                    span.SetStatus(SpanStatus.Error);
+
+                return result;
             }
         }
 

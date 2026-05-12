@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using ArcForge.Hades.Editor.Charon;
 using ArcForge.Hades.Editor.Graph.Models;
 using ArcForge.Hades.Editor.Graph.Scanning;
 using UnityEditor;
@@ -46,34 +47,48 @@ namespace ArcForge.Hades.Editor.Graph
 
             _db.SetCurrentOperation("rebuild");
 
-            try
+            using (var span = CharonEmitter.StartSpan("graph.build.full_rebuild", SpanKind.Internal))
             {
-                _db.Execute("DELETE FROM edges;");
-                _db.Execute("DELETE FROM nodes;");
-                _db.Execute("DELETE FROM scanned_assets;");
+                span.SetAttribute("assets.total", (long)allPaths.Length);
 
-                EnsureProjectNode();
-
-                int total = allPaths.Length;
-                int processed = 0;
-
-                foreach (var path in allPaths)
+                try
                 {
-                    processed++;
-                    if (processed % 100 == 0)
-                        EditorUtility.DisplayProgressBar("Hades: Rebuilding Graph",
-                            $"Scanning {processed}/{total}...", (float)processed / total);
+                    _db.Execute("DELETE FROM edges;");
+                    _db.Execute("DELETE FROM nodes;");
+                    _db.Execute("DELETE FROM scanned_assets;");
 
-                    ScanAsset(path);
+                    EnsureProjectNode();
+
+                    int total = allPaths.Length;
+                    int processed = 0;
+
+                    foreach (var path in allPaths)
+                    {
+                        processed++;
+                        if (processed % 100 == 0)
+                            EditorUtility.DisplayProgressBar("Hades: Rebuilding Graph",
+                                $"Scanning {processed}/{total}...", (float)processed / total);
+
+                        ScanAsset(path);
+                    }
+
+                    span.SetAttribute("nodes.count", _db.GetNodeCount());
+                    span.SetAttribute("edges.count", _db.GetEdgeCount());
                 }
-            }
-            finally
-            {
-                EditorUtility.ClearProgressBar();
-                _db.ClearCurrentOperation();
-                _db.SetMetadata("last_full_rebuild_at",
-                    DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
-                _status = BuildStatus.Idle;
+                catch (Exception ex)
+                {
+                    span.SetStatus(SpanStatus.Error);
+                    span.SetAttribute("error.message", ex.Message);
+                    throw;
+                }
+                finally
+                {
+                    EditorUtility.ClearProgressBar();
+                    _db.ClearCurrentOperation();
+                    _db.SetMetadata("last_full_rebuild_at",
+                        DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
+                    _status = BuildStatus.Idle;
+                }
             }
         }
 
@@ -84,41 +99,52 @@ namespace ArcForge.Hades.Editor.Graph
             _status = BuildStatus.Updating;
             _db.SetCurrentOperation("update", guids);
 
-            try
+            using (var span = CharonEmitter.StartSpan("graph.build.incremental", SpanKind.Internal))
             {
-                _db.RunInTransaction(() =>
+                span.SetAttribute("assets.count", (long)guids.Length);
+
+                try
                 {
-                    foreach (var guid in guids)
+                    _db.RunInTransaction(() =>
                     {
-                        var assetPath = AssetDatabase.GUIDToAssetPath(guid);
-                        if (string.IsNullOrEmpty(assetPath))
+                        foreach (var guid in guids)
                         {
+                            var assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                            if (string.IsNullOrEmpty(assetPath))
+                            {
+                                _db.DeleteNodesByGuid(guid);
+                                continue;
+                            }
+
+                            if (!File.Exists(assetPath) && !Directory.Exists(assetPath))
+                            {
+                                _db.DeleteNodesByGuid(guid);
+                                continue;
+                            }
+
+                            var currentHash = ComputeContentHash(assetPath);
+                            var storedHash = _db.GetScannedAssetHash(guid);
+
+                            if (storedHash == currentHash) continue;
+
                             _db.DeleteNodesByGuid(guid);
-                            continue;
+                            ScanAsset(assetPath);
                         }
-
-                        if (!File.Exists(assetPath) && !Directory.Exists(assetPath))
-                        {
-                            _db.DeleteNodesByGuid(guid);
-                            continue;
-                        }
-
-                        var currentHash = ComputeContentHash(assetPath);
-                        var storedHash = _db.GetScannedAssetHash(guid);
-
-                        if (storedHash == currentHash) continue;
-
-                        _db.DeleteNodesByGuid(guid);
-                        ScanAsset(assetPath);
-                    }
-                });
-            }
-            finally
-            {
-                _db.ClearCurrentOperation();
-                _db.SetMetadata("last_incremental_at",
-                    DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
-                _status = BuildStatus.Idle;
+                    });
+                }
+                catch (Exception ex)
+                {
+                    span.SetStatus(SpanStatus.Error);
+                    span.SetAttribute("error.message", ex.Message);
+                    throw;
+                }
+                finally
+                {
+                    _db.ClearCurrentOperation();
+                    _db.SetMetadata("last_incremental_at",
+                        DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
+                    _status = BuildStatus.Idle;
+                }
             }
         }
 
@@ -148,25 +174,43 @@ namespace ArcForge.Hades.Editor.Graph
             var scanner = _scannerRegistry.GetScannerForPath(assetPath);
             if (scanner == null) return;
 
-            try
+            using (var span = CharonEmitter.StartSpan($"graph.scan.{scanner.GetType().Name}", SpanKind.Internal))
             {
-                var scanResult = scanner.Scan(assetPath);
-                var guid = AssetDatabase.AssetPathToGUID(assetPath);
+                span.SetAttribute("asset.path", assetPath);
+                span.SetAttribute("scanner.type", scanner.GetType().Name);
 
-                WriteScanResult(scanResult, guid);
-
-                var hash = ComputeContentHash(assetPath);
-                _db.RecordScannedAsset(guid, hash, scanner.Version);
-
-                foreach (var warning in scanResult.Warnings)
+                try
                 {
-                    if (warning.Severity >= WarningSeverity.Warning)
-                        Debug.LogWarning($"[Hades] {warning.Message} ({warning.AssetPath})");
+                    var scanResult = scanner.Scan(assetPath);
+                    var guid = AssetDatabase.AssetPathToGUID(assetPath);
+
+                    WriteScanResult(scanResult, guid);
+
+                    var hash = ComputeContentHash(assetPath);
+                    _db.RecordScannedAsset(guid, hash, scanner.Version);
+
+                    span.SetAttribute("nodes.produced", (long)scanResult.Nodes.Count);
+                    span.SetAttribute("edges.produced", (long)scanResult.Edges.Count);
+
+                    foreach (var warning in scanResult.Warnings)
+                    {
+                        if (warning.Severity >= WarningSeverity.Warning)
+                        {
+                            span.AddEvent("scan.warning", new System.Collections.Generic.Dictionary<string, string>
+                            {
+                                { "message", warning.Message },
+                                { "asset_path", warning.AssetPath }
+                            });
+                            Debug.LogWarning($"[Hades] {warning.Message} ({warning.AssetPath})");
+                        }
+                    }
                 }
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError($"[Hades] Scanner error on {assetPath}: {ex.Message}");
+                catch (Exception ex)
+                {
+                    span.SetStatus(SpanStatus.Error);
+                    span.SetAttribute("error.message", ex.Message);
+                    Debug.LogError($"[Hades] Scanner error on {assetPath}: {ex.Message}");
+                }
             }
         }
 

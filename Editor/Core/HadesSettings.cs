@@ -47,5 +47,17 @@ namespace ArcForge.Hades.Editor.Core
             get => EditorPrefs.GetInt(Prefix + "ReloadTimeout", 120);
             set => EditorPrefs.SetInt(Prefix + "ReloadTimeout", value);
         }
+
+        public bool CharonEnabled
+        {
+            get => EditorPrefs.GetBool(Prefix + "CharonEnabled", true);
+            set => EditorPrefs.SetBool(Prefix + "CharonEnabled", value);
+        }
+
+        public int CharonRetentionDays
+        {
+            get => EditorPrefs.GetInt(Prefix + "CharonRetentionDays", 30);
+            set => EditorPrefs.SetInt(Prefix + "CharonRetentionDays", value);
+        }
     }
 }
