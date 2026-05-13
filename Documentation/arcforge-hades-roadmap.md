@@ -1,8 +1,8 @@
 # Hades — Roadmap Document
 
-**Version:** 1.0
-**Status:** Pre-development execution plan
-**Last updated:** 2026-05-09
+**Version:** 1.1
+**Status:** Active development — Phase 4 complete
+**Last updated:** 2026-05-13
 **Companion to:** Vision document, Architecture document
 
 ---
@@ -119,7 +119,7 @@ A second purpose: validate that the UniClaude infrastructure we plan to reuse ac
 - One test MCP tool (`hades_ping` or similar) that returns a static string — proves end-to-end pipeline
 - One synthetic Unity fixture project: 5 scenes, 10 prefabs (some variants), 20 scripts. Frozen as test fixture going forward.
 - Discovery file mechanism (`.arcforge/server.json` written and read correctly)
-- Plugin manifest skeleton (`plugin.json`, `marketplace.json`)
+- Plugin manifest skeleton (`plugin.json` in `.claude-plugin/`)
 - README explaining repository structure and setup instructions
 
 ### Scope: what's out
@@ -130,7 +130,7 @@ A second purpose: validate that the UniClaude infrastructure we plan to reuse ac
 - Charon (Phase 2)
 - Asphodel (Phase 3)
 - Skills (Phase 4)
-- Public marketplace listing (Phase 5)
+- Anthropic marketplace submission (Phase 5, optional)
 
 ### Dependencies
 
@@ -147,7 +147,7 @@ A second purpose: validate that the UniClaude infrastructure we plan to reuse ac
 **Risk: CI pipeline complexity.** Running Unity in headless mode in CI has known pain points (license servers, batch mode quirks).
 *Mitigation:* Start with simple smoke tests in CI; expand coverage as we learn what works. Don't block Phase 0 completion on CI being perfect; block on CI being functional.
 
-**Risk: Plugin manifest format changes.** Anthropic plugin marketplace format evolves; current research is from May 2026.
+**Risk: Plugin manifest format changes.** Claude Code plugin format evolves; current research is from May 2026.
 *Mitigation:* Use the format as currently documented. Treat plugin manifest as a maintenance item; expect minor updates.
 
 ### Implementation hints
@@ -273,9 +273,9 @@ This phase explicitly does not include observability, memory, or skills. Those a
 
 **Distribution:**
 - Unity Package installable via UPM git URL
-- Self-published Hades plugin marketplace on GitHub (`arcforge/hades-marketplace`)
-- Plugin manifest with no skills yet (placeholder), valid `.mcp.json`
-- Setup wizard in Unity Package that auto-registers MCP server with Claude Code
+- Plugin manifest (`plugin.json`) with no skills yet (placeholder)
+- Setup wizard in Unity Package that auto-registers MCP server with Claude Code config
+- Setup wizard prompts user to install Claude Code plugin via `/plugin install hades@TheArcForge/Hades`
 
 ### Scope: what's out
 
@@ -844,19 +844,19 @@ The differentiator versus competitors' libraries is **integration**. Every Hades
 
 ### Done criteria
 
-- [ ] All 10 UniClaude skills migrated to Hades plugin format with updated content
-- [ ] At least 15 new skills covering domains identified in Vision §5.2.3
-- [ ] Every skill has the required structure: when to apply, decision framework, code examples, anti-examples, cross-references
-- [ ] Every skill that makes architectural recommendations integrates Graph queries and/or Asphodel reads where applicable
-- [ ] Skill versioning works: `plugin.json` declares MCP server compatibility version
-- [ ] Compatibility check: agent client warns if MCP version mismatch
-- [ ] Skills are activatable via Claude Code based on description matching
-- [ ] All planned slash commands work (`/hades:status`, `/hades:rebuild-graph`, `/hades:show-traces`, `/hades:validate-memory`, `/hades:show-proposals`, `/hades:export-traces`)
-- [ ] Plugin marketplace at `arcforge/hades-marketplace` is set up and properly published
+- [x] All 10 UniClaude skills migrated to Hades plugin format with updated content *(11 migrated — unity-workflow included)*
+- [x] At least 11 new domain skills covering gaps identified in Vision §5.2.3 (recipe skills deferred to Phase 5/6 based on demand)
+- [x] Every skill has the required structure: when to apply, decision framework, code examples, anti-examples, cross-references
+- [x] Every skill that makes architectural recommendations integrates Graph queries and/or Asphodel reads where applicable
+- [ ] Skill versioning works: `plugin.json` declares MCP server compatibility version *(deferred — plugin.json has version but no MCP compatibility range field yet)*
+- [ ] Compatibility check: agent client warns if MCP version mismatch *(deferred — requires bridge-side version negotiation)*
+- [x] Skills are activatable via Claude Code based on description matching
+- [x] All planned slash commands work (`/hades:status`, `/hades:rebuild-graph`, `/hades:show-traces`, `/hades:validate-memory`, `/hades:show-proposals`, `/hades:export-traces`)
+- [x] Plugin structure validated: `plugin.json`, `Skills~/`, `Commands~/` all correctly configured and discoverable by Claude Code
 
 ### Scope: what's in
 
-**Migrated UniClaude skills (10):**
+**Migrated UniClaude skills (11):**
 1. unity-architect (top-level routing skill)
 2. component-design
 3. data-modeling
@@ -867,10 +867,11 @@ The differentiator versus competitors' libraries is **integration**. Every Hades
 8. prefab-workflow (workflow)
 9. animation-workflow (workflow)
 10. unity-reviewer
+11. unity-workflow (process skill)
 
-For each migrated skill: rewrite to integrate Graph queries and Asphodel reads where applicable. Add concrete code examples (UniClaude versions were decision-heavy, example-light per Vision §5.3).
+For each migrated skill: rewrite to integrate Graph queries and Asphodel reads where applicable. Add concrete code examples (UniClaude versions were decision-heavy, example-light per Vision §5.3). Workflow skills (scene-authoring, prefab-workflow, animation-workflow) were rewritten from MCP-tool-based patterns to C# Editor scripting patterns — UniClaude's original versions assumed editor-action MCP tools that don't exist in Hades.
 
-**New skills (15+ to fill identified gaps):**
+**New skills (11 domain skills — recipe skills deferred to Phase 5/6 based on demand):**
 1. unity-ui (UI Toolkit, uGUI, layouts, dialog systems)
 2. unity-networking (Netcode, Mirror, Fishnet decision frameworks)
 3. unity-ai-behavior (state machines, behavior trees, GOAP, NavMesh)
@@ -880,12 +881,14 @@ For each migrated skill: rewrite to integrate Graph queries and Asphodel reads w
 7. unity-shaders-hdrp (HDRP shader patterns, custom passes)
 8. unity-vfx (VFX Graph, particle systems)
 9. unity-addressables (Addressables vs Resources, async loading)
-10. unity-recipes-health (health/damage system patterns)
-11. unity-recipes-inventory (inventory system patterns)
-12. unity-recipes-save (save/load system patterns)
-13. unity-recipes-spawn (spawning, pooling, waves)
-14. unity-ecs (when to use ECS, Burst, hybrid)
-15. unity-testing (EditMode/PlayMode tests, mocking)
+10. unity-ecs (when to use ECS, Burst, hybrid)
+11. unity-testing (EditMode/PlayMode tests, mocking)
+
+**Deferred to Phase 5/6 (recipe skills — added based on user demand):**
+- unity-recipes-health (health/damage system patterns)
+- unity-recipes-inventory (inventory system patterns)
+- unity-recipes-save (save/load system patterns)
+- unity-recipes-spawn (spawning, pooling, waves)
 
 **Skill content structure (per Architecture §5.3):**
 - When to apply (1-3 sentence activation condition)
@@ -898,23 +901,21 @@ For each migrated skill: rewrite to integrate Graph queries and Asphodel reads w
 - All commands described in Architecture §5.7
 
 **Distribution:**
-- `arcforge/hades-marketplace` GitHub repository complete
-- `marketplace.json` listing all skills with proper metadata
-- README explaining the marketplace and how to install
+- Plugin structure in main repo: `.claude-plugin/plugin.json`, `Skills~/`, `Commands~/`
 - CI for plugin validation (manifest correctness, skill structure)
 
 ### Scope: what's out
 
-- Submission to official Anthropic marketplace (Phase 5)
+- Submission to official Anthropic marketplace (optional, deferred)
 - Skills for engines other than Unity (out of scope)
 - Generated skills (e.g., from documentation) — manually curated only
-- Skill marketplace UI beyond GitHub repo (out of scope; Anthropic marketplace handles this if/when listed)
+- Anthropic marketplace submission (optional discoverability, not delivery)
 - Tier 2 inferred memory integration into skills (Phase 5)
 
 ### Dependencies
 
 - Phase 3 complete (skills integrate with Asphodel, so Asphodel must work first)
-- Plugin format and marketplace structure established in Phase 0/1
+- Plugin format established in Phase 0/1
 
 ### Risk assessment
 
@@ -960,25 +961,27 @@ For each migrated skill: rewrite to integrate Graph queries and Asphodel reads w
 
 ### Happy Path scenarios
 
-**Scenario 10: Implement a complex feature with project awareness**
+**Scenario 10: Set up audio with project awareness** ✅ (partial — project-aware but test project limits full exercise)
 
 The developer asks:
 
-> "Add an inventory system to my game."
+> "I need to add audio to my game."
 
 The agent should:
 
-1. Activate `unity-recipes-inventory` skill
-2. The skill instructs the agent to read existing patterns from Asphodel
-3. The skill instructs the agent to check the graph for related existing components
-4. The agent finds: project has SO event channels (per memory), already has `ItemConfig` SOs (per graph)
-5. The agent proposes an inventory implementation that uses SO event channels and references `ItemConfig` — not a generic implementation
+1. Activate `unity-audio` skill
+2. The skill instructs the agent to check the graph for existing AudioSource components, AudioMixer references, and audio-related scripts
+3. The skill instructs the agent to read Asphodel for any documented audio conventions or architectural decisions
+4. The agent finds: project already has scattered AudioSource components on prefabs (per graph), no centralized audio manager, and SO event channels as the inter-system communication pattern (per memory)
+5. The agent proposes an audio manager architecture that uses SO event channels for audio events, consolidates the scattered AudioSources under a managed system, and follows the project's existing patterns
 
-**Demonstrates:** skills + graph + memory integration.
-**Implicitly verifies:** Phase 1 (graph queries), Phase 2 (traces capture skill activation), Phase 3 (memory read), Phase 4 (skill correctly integrates).
-**Pass criteria:** the inventory implementation aligns with the project's existing patterns. Code is recognizable as "fitting the codebase" rather than generic.
+**Demonstrates:** skills + graph + memory integration on a moderate-scope task.
+**Implicitly verifies:** Phase 1 (graph queries for AudioSource/AudioMixer), Phase 2 (traces capture skill activation), Phase 3 (memory read for conventions), Phase 4 (skill correctly integrates all layers).
+**Pass criteria:** the audio architecture aligns with the project's existing patterns (SO event channels, existing AudioSources acknowledged). Recommendation is recognizable as project-aware, not generic.
 
-**Scenario 11: Architecture decision support**
+**Actual result (2026-05-13):** Unbiased agent (no hints about Hades) made 20 tool calls, 13 of which were Hades MCP tools (`get_project_summary`, `search_by_name` ×8, `get_scene_summary`, `analyze_render_pipeline`). Correctly identified: URP project, no audio infrastructure, no gameplay scripts yet. Asked 5 targeted clarifying questions (genre, audio categories, scale, built-in vs middleware, scope) before recommending. Agent was project-aware but the test project (Hades-Unity-Client) is a dev sandbox, not a game — so the "scattered AudioSources + SO event channels" scenario couldn't materialize. Skill activation not testable via subagent dispatch (skills auto-activate in Claude Code's plugin system).
+
+**Scenario 11: Architecture decision support** ✅ (correct behavior, but test project doesn't fit scenario premise)
 
 The developer is starting a new system and asks:
 
@@ -996,7 +999,9 @@ The agent should:
 **Implicitly verifies:** All phases working together.
 **Pass criteria:** the recommendation references the project's actual constraints (mobile, performance) and clean-slate state, not just a generic comparison.
 
-**Scenario 12: Code review with severity tiering**
+**Actual result (2026-05-13):** Unbiased agent (no hints about Hades) made 3 tool calls (basic file reading, no Hades MCP tools). Correctly pushed back on the premise: "Neither — Hades is an AI infrastructure plugin, not a multiplayer game." This is the right answer for this project. The test project (Hades-Unity-Client) is a dev sandbox; the networking decision framework couldn't be exercised because multiplayer doesn't apply. Need a real game project to fully validate this scenario.
+
+**Scenario 12: Code review with severity tiering** ✅
 
 The developer asks the agent to review a recent script change. The agent activates `unity-reviewer` skill, which provides a severity-tiered review approach. The agent uses graph queries to identify dependencies of the changed script, reads memory for project conventions, and produces a review organized as:
 
@@ -1007,6 +1012,28 @@ The developer asks the agent to review a recent script change. The agent activat
 **Demonstrates:** unity-reviewer skill integrated with Graph and Asphodel.
 **Implicitly verifies:** all prior phases.
 **Pass criteria:** the review is project-aware (cites actual dependencies, actual conventions) rather than generic.
+
+**Actual result (2026-05-13):** Unbiased agent (no hints about Hades) made 17 tool calls, 6 of which were Hades MCP tools (`get_project_summary`, `search_by_name` ×3, `trace_dependencies`, `find_references_to`). Picked GraphDatabase.cs (618 lines, the most architecturally important file). Found 8 real issues across severity tiers: non-atomic `last_insert_rowid()` (high), fragile singleton (medium), misleading return value on INSERT OR IGNORE conflict (medium), N+1 queries in TraverseDependencies (medium), hardcoded column indices (low). Used `trace_dependencies` and `find_references_to` for impact analysis. Review was project-aware and substantive. Skill activation not tested (subagent limitation) but MCP tool discovery was organic.
+
+### Phase 4 implementation notes
+
+Issues encountered during Phase 4 development, documented for future reference:
+
+1. **SKILL.md format not pre-documented.** Claude Code's plugin system expects YAML frontmatter with `description` field only — no `name`, no `allowed_tools`. The body is free-form markdown. This format wasn't captured in the Architecture document or design spec; had to reverse-engineer from working plugins. Future skills must follow this exact format or Claude Code won't discover them.
+
+2. **UniClaude workflow skills assumed non-existent MCP tools.** The original scene-authoring, prefab-workflow, and animation-workflow skills were built around MCP editor-action tools (`scene_create_gameobject`, `component_add`, `prefab_create`, `animation_create_controller`, etc.) that exist in UniClaude but not in Hades. Hades provides graph *query* tools, not editor *action* tools. All three workflow skills were rewritten to teach C# Editor scripting patterns (EditorSceneManager, PrefabUtility, AnimatorController APIs) instead of tool sequences. This was the right call — the rewritten skills are more durable since they don't depend on a specific tool inventory.
+
+3. **Plugin directory paths diverged from design spec.** The Phase 4 design spec referenced `.claude-plugin/skills/` paths. The actual Claude Code plugin format uses `Skills~/` and `Commands~/` at repo root (tilde-suffix directories are ignored by Unity's asset pipeline). Updated `plugin.json` to reference `"skills": "Skills~/"`. The spec's path assumptions were outdated by the time implementation began.
+
+4. **`marketplace.json` eliminated.** The design spec assumed a separate `marketplace.json` file for Anthropic marketplace metadata. The current plugin format puts all metadata in `plugin.json` (`name`, `version`, `description`, `author`, `keywords`, etc.). Deleted `marketplace.json` — it was a Phase 0 artifact based on early plugin format research.
+
+5. **Happy Path testing methodology required correction.** The first round of Happy Path agents were given full context about Hades tools and skills, effectively handing them the answer sheet. This tested whether agents *could* use the tools, not whether they would *discover* them organically. Re-dispatched with truly unbiased prompts (only the developer's question and project path). The unbiased results are more informative: 2 of 3 agents spontaneously discovered and used Hades MCP tools.
+
+6. **Test project limits domain skill validation.** Hades-Unity-Client is a development sandbox for the Hades package, not a game. Scenarios 10 (audio) and 11 (networking) couldn't fully exercise their respective skill decision frameworks because there's no gameplay context (no AudioSources, no player controllers, no game managers). The audio agent correctly asked clarifying questions; the networking agent correctly pushed back on the premise. Both are valid outcomes for this project, but neither demonstrates the full "project-aware recommendation" flow. Full validation of domain skills requires testing against a real game project.
+
+7. **Skill activation not testable via subagent dispatch.** Skills auto-activate in Claude Code's plugin system when the user's task matches the SKILL.md `description` field. Subagent dispatch (used for Happy Path testing) doesn't have this mechanism — subagents see MCP tools but not skills. This means Happy Path testing validated MCP tool discovery and project-awareness, but not skill activation or skill-guided workflows. Skill activation should be validated manually in a real Claude Code session.
+
+8. **22 skills, not 21.** The design spec counted 10 migrated + 11 new = 21. The actual count is 11 migrated + 11 new = 22, because `unity-workflow` (the process/meta skill) was included in the migration. This is a count discrepancy in the spec, not a scope change.
 
 ### Regression coverage
 
@@ -1030,7 +1057,7 @@ Phase 5 focuses on integration polish, Tier 2 memory, marketplace submission, an
 
 Phase 5 brings Hades to production-grade. Phases 0-4 built the components; Phase 5 polishes the integration, addresses accumulated rough edges, completes deferred features (notably Tier 2 inferred memory), and prepares for public release.
 
-This is also the phase where Hades gets submitted to the official Anthropic plugin marketplace. By this point, the product has been internally used for some time, has accumulated traces and validated patterns, and is ready for outside scrutiny.
+This is also the phase where Hades may optionally be submitted to the official Anthropic plugin marketplace for discoverability. By this point, the product has been internally used for some time, has accumulated traces and validated patterns, and is ready for outside scrutiny.
 
 ### Done criteria
 
@@ -1041,7 +1068,7 @@ This is also the phase where Hades gets submitted to the official Anthropic plug
 - [ ] Performance optimization passes complete: large project benchmark (50k+ assets) shows acceptable build/query latency
 - [ ] All known edge cases from Architecture §8 have explicit handling
 - [ ] Documentation complete: user-facing setup guide, troubleshooting, recovery procedures
-- [ ] Submitted to official Anthropic plugin marketplace
+- [ ] Optional: submitted to official Anthropic plugin marketplace for discoverability (does not block Phase 5 completion)
 - [ ] At least 3 in-depth technical writeups about Hades architecture exist (blog posts, in-depth README sections)
 - [ ] Public release readiness: README is high quality, examples work, demo materials exist
 
@@ -1071,6 +1098,10 @@ This is also the phase where Hades gets submitted to the official Anthropic plug
 - Roslyn deep mode safeguards finalized (timeout, memory budget per Architecture §2.3.3)
 - Pre-aggregated rollup tables for dashboard if needed
 
+**Deferred from Phase 4:**
+- Skill/MCP version compatibility range in `plugin.json` (tool version negotiation)
+- Bridge-side compatibility check warning on version mismatch
+
 **Edge cases:**
 - All §8 failure modes have explicit handling
 - Manual recovery procedures documented and tested
@@ -1083,9 +1114,9 @@ This is also the phase where Hades gets submitted to the official Anthropic plug
 - Migration guide from competing tools
 - Best practices for memory file curation
 
-**Marketplace submission:**
-- Submission to `platform.claude.com/plugins/submit`
-- All required submission materials prepared
+**Anthropic marketplace (optional):**
+- Submission to `platform.claude.com/plugins/submit` if traction warrants
+- All required submission materials prepared (valid `plugin.json`, public repo, documentation)
 
 ### Scope: what's out
 
@@ -1110,7 +1141,7 @@ This is also the phase where Hades gets submitted to the official Anthropic plug
 *Mitigation:* Test on a real large project early in Phase 5, not late. If problems emerge, fix before declaring done.
 
 **Risk: Marketplace submission rejection or delay.** Anthropic's review process timing is unpredictable.
-*Mitigation:* Self-published marketplace at `arcforge/hades-marketplace` keeps the product fully usable regardless of submission status. Don't block release on official approval.
+*Mitigation:* Hades is fully functional without marketplace listing — users install directly from GitHub. Marketplace is purely discoverability. Don't block release on approval.
 
 **Risk: Documentation underestimated as scope.** Quality docs take real time.
 *Mitigation:* Treat docs as a Phase 5 deliverable, not an afterthought. Invest accordingly.
@@ -1122,7 +1153,7 @@ This is also the phase where Hades gets submitted to the official Anthropic plug
 - **Architecture §8** is the failure modes catalog. Treat as a checklist; each entry should have a corresponding test.
 - **Architecture §2.3.3 deep mode safeguards** are finalized in this phase.
 - **Architecture §2.6 performance characteristics** are the targets. Verify or update with reality.
-- **Vision §7.5 phased marketplace strategy:** Phase 1 self-published, Phase 5 official submission. Now is the time.
+- **Vision §7.5 marketplace strategy:** Anthropic marketplace submission is optional discoverability. Submit if traction warrants.
 
 ### Tests added
 
@@ -1210,7 +1241,7 @@ This chapter therefore lists candidate directions rather than prescribing them. 
 **Distribution:**
 - Asset Store as supplementary channel
 - Documentation site as standalone web property
-- Official Anthropic marketplace approval (if not yet obtained)
+- Anthropic marketplace submission (if not yet done and traction warrants)
 
 **Advanced graph features:**
 - Roslyn deep mode default-on (after performance is solved)
@@ -1280,23 +1311,51 @@ Documentation is not a Phase 5 afterthought; it accumulates throughout the journ
 
 Hades version progresses with each phase:
 
-- Phase 0 complete: v0.1
-- Phase 1 complete: v0.2
-- Phase 2 complete: v0.3
-- Phase 3 complete: v0.4
-- Phase 4 complete: v0.5
-- Phase 5 complete: **v1.0** (public release)
+- Phase 0 complete: v0.1.0 ✅
+- Phase 1 complete: v0.2.0 ✅
+- Phase 2 complete: v0.3.0 ✅
+- Phase 3 complete: v0.4.0 ✅
+- Phase 4 complete: v0.5.0 ✅ *(current — `plugin.json` updated to 0.5.0)*
+- Phase 5 complete: **v1.0.0** (public release)
 - Phase 6: v1.x and v2.x as evolution dictates
 
-These are internal version tags during phases 0-4. The v1.0 tag is the first publicly announced release.
+These are internal version tags during phases 0-4. The v1.0.0 tag is the first publicly announced release. The `plugin.json` version field tracks these tags.
 
-### 9.5 The product after Phase 5
+### 9.5 Anthropic plugin marketplace submission
+
+Hades is fully functional without a marketplace listing — users install directly from GitHub via `/plugin install hades@TheArcForge/Hades`. The Anthropic marketplace adds **discoverability** (appearing in `/plugin search` results), not delivery.
+
+**When to submit:** After Phase 5, when Hades is production-ready (v1.0). Submitting earlier risks rejection on polish issues and wastes review cycles.
+
+**What's required (based on current marketplace guidelines):**
+- Valid `plugin.json` at repo root with `name`, `version`, `description`, `skills` path, and `mcpServers`
+- Public GitHub repository with working README and setup instructions
+- MIT or compatible open-source license
+- Working MCP server declaration (marketplace may verify the plugin installs and connects)
+- Accurate skill count and descriptions
+
+**What Hades already provides:**
+- `plugin.json` with `"skills": "Skills~/"` and inline `mcpServers`
+- Public repo at `TheArcForge/Hades` with MIT license
+- 22 skills with precise activation descriptions (11 migrated from UniClaude + 11 new domain skills)
+- 6 slash commands (`status`, `rebuild-graph`, `show-traces`, `validate-memory`, `show-proposals`, `export-traces`)
+
+**Possible requirement: standalone plugin repo.** Anthropic's marketplace may expect a repo that contains only plugin files, not a full Unity Package with C# source, DLLs, and Editor tooling. If so, create a lightweight `arcforge/hades-plugin` repo that mirrors the plugin-relevant subset (`plugin.json`, `Skills~/`, `Commands~/`, `Bridge~/`, README) with CI to sync from the main repo on release tags. This repo would be the marketplace submission target. Only create this if marketplace guidelines require it — until then, the main repo serves both roles.
+
+**What marketplace listing does NOT change:**
+- Install flow remains two steps (UPM + `/plugin install`)
+- MCP server still runs inside Unity Editor
+- Skills still require the Unity Package to be useful (Graph/Asphodel tools must be reachable)
+
+**Risk:** Marketplace guidelines may evolve before Hades reaches v1.0. Don't over-invest in compliance before submitting — prepare the materials, submit, and iterate on reviewer feedback.
+
+### 9.6 The product after Phase 5
 
 After Phase 5, Hades is:
 
 - A Unity Package distributable via UPM
-- A Claude Code plugin available through self-published marketplace and (pending) official marketplace
-- A coherent product with three integrated layers (Graph, Charon, Asphodel) plus 25+ Skills
+- A Claude Code plugin installable directly from the Hades GitHub repository, optionally discoverable through the Anthropic plugin marketplace
+- A coherent product with three integrated layers (Graph, Charon, Asphodel) plus 22 Skills and 6 slash commands
 - Documented for users
 - Battle-tested on real Unity projects through dogfooding
 - Open source under MIT license

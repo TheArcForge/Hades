@@ -1,12 +1,17 @@
 {
   "name": "arcforge-hades",
-  "version": "0.1.0",
-  "displayName": "Hades",
-  "description": "Unity-aware AI infrastructure: project knowledge graph, observability, memory, and skills for Claude Code.",
-  "author": "ArcForge",
+  "version": "0.5.0",
+  "description": "Unity-aware AI infrastructure for Claude Code: project knowledge graph, observability, memory, and 22 skills.",
+  "author": { "name": "ArcForge" },
   "license": "MIT",
-  "mcp": {
-    "command": "node",
-    "args": ["Bridge~/dist/index.js"]
+  "homepage": "https://github.com/TheArcForge/Hades",
+  "repository": "https://github.com/TheArcForge/Hades",
+  "keywords": ["unity", "game-development", "mcp", "knowledge-graph"],
+  "skills": "Skills~/",
+  "mcpServers": {
+    "hades": {
+      "command": "node",
+      "args": ["Bridge~/dist/index.js"]
+    }
   }
 }

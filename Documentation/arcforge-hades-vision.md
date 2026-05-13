@@ -261,7 +261,7 @@ Hades is architected to avoid this category of risk entirely.
 **Compliance footprint of each component:**
 
 - **Hades Graph and Charon (MCP server)** — the Model Context Protocol is an open standard that Anthropic specifically launched for third-party integration. Building MCP servers is the canonical "build on top of Claude Code" pattern. Zero ToS exposure.
-- **Hades Skills (Claude Code plugin)** — Anthropic ships an official plugin marketplace and submission process for community plugins. Skills are an officially supported extension format. Zero ToS exposure.
+- **Hades Skills (bundled in Unity Package repo)** — skills are markdown files in the same repository, installed as a Claude Code plugin via `/plugin install`. Skills are an officially supported extension format. Zero ToS exposure.
 - **Hades Unity Package (UPM)** — pure Unity ecosystem, no Anthropic surface area at all. Zero ToS exposure.
 - **Eval datasets accumulated by Charon** — local-first by design. Traces never leave the user's machine without explicit opt-in. No exposure to data-handling concerns.
 
@@ -427,54 +427,44 @@ This is a moderate moat. Not impossible to replicate; not trivial either. Defend
 
 ### 7.5 Distribution strategy
 
-Hades is delivered as **two artifacts** that together form one user experience. Each artifact lives in its native ecosystem rather than being shoehorned into a single distribution channel.
+Hades is delivered from a **single repository** that serves both Unity and Claude Code ecosystems. The repository is simultaneously a Unity Package (installable via UPM) and a Claude Code plugin (installable via `/plugin install`).
 
-**Artifact 1: Unity Package (UPM)**
+**Unity Package (UPM)**
 
-Distributed via git URL through Unity Package Manager — the standard Unity install pattern, identical to how UniClaude was distributed. Contents:
+Distributed via git URL through Unity Package Manager — the standard Unity install pattern. Contents:
 
 - The C# Editor Package (`com.arcforge.hades`) — Hades Scanner that builds the Graph using `AssetDatabase` and `SerializedObject`
-- The bundled Hades MCP server (Node.js executable, platform-specific binaries for Windows/macOS/Linux)
+- The bundled Hades MCP server (Node.js bridge script)
+- Charon observability infrastructure and dashboard
+- Asphodel memory system
 - Setup wizard that auto-registers the MCP server with the user's Claude Code config on first run
-- Documentation and example queries
 
-Why bundled rather than separate npm install: the MCP server is project-scoped (it reads `.arcforge/graph.db` for that specific project), the Unity Package is the natural per-project install vehicle, and bundling eliminates an external dependency on `npm` being installed and configured.
+The setup wizard runs on package installation and writes the MCP server configuration to the project's `.mcp.json`. This gives the agent access to all Hades MCP tools (graph queries, memory, traces) without any additional setup.
 
-**Artifact 2: Hades Plugin (Claude Code plugin format)**
+**Claude Code Plugin (same repository)**
 
-Distributed via a self-published plugin marketplace on GitHub (`arcforge/hades-marketplace`). Contents:
-
-- Skills directory — Unity-specific architectural decision frameworks
-- Slash commands (e.g., `/hades:rebuild-graph`, `/hades:show-traces`)
-- Optional subagents for specific Unity workflows
-- `.mcp.json` configuration that points the plugin at the Hades MCP server installed by the Unity Package
+The same repository contains Claude Code plugin structure at the root: `.claude-plugin/plugin.json`, `Skills~/` (skill definitions), and `Commands~/` (slash commands). These tilde-suffixed directories are ignored by Unity's asset pipeline but recognized by Claude Code when installed as a plugin.
 
 User installs with:
 
 ```
-/plugin marketplace add arcforge/hades-marketplace
-/plugin install hades
+/plugin install hades@TheArcForge/Hades
 ```
 
-Skills installed this way are global to the user's Claude Code config rather than per-project, which is the correct shape — a Unity developer working on three projects wants one shared skill library, not three duplicated copies.
+This gives the agent access to all Hades skills (architectural decision frameworks, domain guides, code review) and slash commands (`/hades:status`, `/hades:rebuild-graph`, etc.). Skills are installed at user scope — available across all Unity projects.
 
 **End-to-end install experience.** From the user's perspective, two actions:
 
 1. Add Hades Unity Package via UPM git URL → Hades Scanner runs in the project, MCP server is registered with Claude Code automatically
-2. Run `/plugin install hades@arcforge` in Claude Code → Skills and commands become available
+2. Run `/plugin install hades@TheArcForge/Hades` in Claude Code → Skills and commands become available
 
-This is two steps rather than one, but each step is canonical to its ecosystem and each component lives where it should architecturally. A unified one-command installer can be added later as convenience layer; it is not a prerequisite for shipping.
+Step 1 is per-project (each Unity project installs the package). Step 2 is per-user (once installed, skills are available across all projects). The setup wizard from step 1 prompts the user to complete step 2 if not already done.
 
-**Phased marketplace strategy.**
+**Anthropic marketplace strategy.**
 
-- **Phase 1: Self-published marketplace.** Hades plugin lives in `arcforge/hades-marketplace` GitHub repository from launch. Users can install immediately. No approval gate. No timeline dependency on Anthropic.
-- **Phase 2: Submission to the official Anthropic marketplace.** Once Hades has accumulated usage signals (cloners, stable release, documented use cases), submit through the official plugin directory submission form (`platform.claude.com/plugins/submit`). Approval gives default visibility in `/plugin discover` for every Claude Code user. Approval timeline is unpredictable but does not block product availability — the self-published path keeps Hades fully usable while submission is pending.
+The official Anthropic plugin marketplace (`platform.claude.com/plugins/submit`) is a discoverability channel, not a delivery mechanism. Submission gives visibility in `/plugin discover` for all Claude Code users. The actual plugin is always installed from the Hades GitHub repository.
 
-**Why two artifacts rather than one or three.**
-
-- Three artifacts (Unity Package + standalone MCP via npm + skills via marketplace) was considered. Rejected because the npm dependency adds friction without architectural benefit.
-- One artifact (everything bundled in the Unity Package) was considered. Rejected because skills should be globally shared across projects, not duplicated per project.
-- Two artifacts is the natural decomposition: the Unity-scoped components (Scanner, MCP server) ship via UPM, the user-scoped components (skills, commands) ship via the plugin marketplace.
+Marketplace submission is deferred until Hades has accumulated usage signals: stable releases, documented use cases, and ideally community contributions. Submission timing does not affect product availability — Hades is fully functional without marketplace listing.
 
 **Commercial model.** Both artifacts are MIT licensed and open source. No paid tier in the v1 vision. Future commercial considerations (managed eval dashboards, hosted shared memory for distributed teams, enterprise support) are deliberately out of scope for the initial vision and revisited only after product traction is established.
 
@@ -533,7 +523,7 @@ Issues that the vision does not resolve and that need to be answered in the Arch
 - Pricing/licensing. Currently set to MIT open source (see §7.5). Future commercial considerations are explicitly deferred until after product traction is established.
 - Asset Store distribution as supplementary channel beyond UPM git. Asset Store has discoverability benefits but adds review-and-approval overhead and may conflict with the dual-artifact (UPM + plugin marketplace) shape. Decision deferred.
 - Documentation strategy. Engineering docs vs user docs vs marketing — which is built first? Likely engineering and user docs prioritized over marketing. The Architecture document this Vision points to is engineering-internal; user-facing docs are a separate deliverable.
-- Anthropic marketplace submission timing. Self-published marketplace ships from day 1 (§7.5). When to formally submit for inclusion in the official Anthropic catalog depends on accumulated traction — too early risks rejection on insufficient maturity, too late forfeits months of default-discoverability.
+- Anthropic marketplace submission timing. Hades is fully usable without marketplace listing (§7.5). Submission to the official Anthropic catalog is a discoverability optimization — too early risks rejection on insufficient maturity, too late forfeits months of default-discoverability. Target: submit after 3+ months of stable usage.
 
 ### 9.3 Domain
 

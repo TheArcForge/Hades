@@ -1480,12 +1480,7 @@ A skill, in Claude Code's terminology, is a markdown file with a specific struct
 
 ```yaml
 ---
-name: unity-architect
-description: |
-  Use when the user asks architectural questions about Unity projects: 
-  "how should I structure X", "what's the best way to handle Y", 
-  decisions about MonoBehaviours vs ScriptableObjects vs static classes.
-allowed_tools: ["Bash", "Read", "Grep", "Glob"]
+description: "Use when the user asks architectural questions about Unity projects: how should I structure X, what's the best way to handle Y, decisions about MonoBehaviours vs ScriptableObjects vs static classes."
 ---
 
 # Unity Architect Skill
@@ -1493,7 +1488,7 @@ allowed_tools: ["Bash", "Read", "Grep", "Glob"]
 [markdown content with decision frameworks, examples, etc.]
 ```
 
-The frontmatter declares when the skill should activate (the description is matched against the agent's current task) and what tools the skill is allowed to invoke. The body is markdown content that the agent reads when the skill activates.
+The frontmatter declares when the skill should activate (the `description` is matched against the agent's current task). The skill name comes from the directory name, not the frontmatter. An optional `disable-model-invocation: true` field prevents automatic activation — useful for skills that should only run when the user explicitly invokes them. The body is markdown content that the agent reads when the skill activates.
 
 Skills are loaded into the agent's context when their description matches the current task. This is automatic — the agent client's plugin system handles activation based on the description match.
 
@@ -1613,65 +1608,62 @@ This versioning model is essential because skill behavior often depends on speci
 
 ### 5.6 Distribution
 
-Skills ship as a Claude Code plugin via the Hades self-published marketplace at `arcforge/hades-marketplace` (per Vision §7.5). Users install with:
+Skills, commands, and MCP server configuration are bundled in the Hades Unity Package repository — the same repository that contains the C# Editor Package. The repository serves as both a Unity Package (installable via UPM git URL) and a Claude Code plugin (installable via `/plugin install`).
+
+The plugin structure lives at the repository root:
 
 ```
-/plugin marketplace add arcforge/hades-marketplace
-/plugin install hades
-```
-
-The plugin contents:
-
-```
-hades-plugin/
+arcforge/hades (repository root)
 ├── .claude-plugin/
-│   └── plugin.json              # plugin metadata and compatibility info
-├── skills/
+│   └── plugin.json              # plugin metadata, skills path, MCP server config
+├── Skills~/                     # tilde-suffix: ignored by Unity, found by Claude Code
 │   ├── unity-architect/
-│   │   ├── SKILL.md            # main skill content
-│   │   └── references/         # supplementary materials
-│   │       ├── decision-tree.md
-│   │       └── examples.md
+│   │   └── SKILL.md
 │   ├── component-design/
 │   │   └── SKILL.md
 │   └── ... (other skills)
-├── commands/
-│   ├── hades-status.md         # /hades:status command
-│   ├── hades-rebuild.md        # /hades:rebuild-graph command
-│   └── hades-traces.md         # /hades:show-traces command  
-├── .mcp.json                    # MCP server config: connects to local Hades
-└── README.md
+├── Commands~/                   # tilde-suffix: ignored by Unity
+│   ├── hades-status.md
+│   ├── hades-rebuild-graph.md
+│   └── ... (other commands)
+├── Editor/                      # Unity C# code (scanners, MCP server, etc.)
+├── Bridge~/                     # Node.js MCP bridge
+├── package.json                 # Unity Package manifest
+└── ...
 ```
 
-The `.mcp.json` declares the connection to the Hades MCP server:
+The `Skills~/` and `Commands~/` directories use Unity's tilde-suffix convention — Unity's asset pipeline ignores them entirely, but they are tracked in git and accessible to Claude Code. The `plugin.json` declares the non-standard paths:
 
 ```json
 {
+  "name": "arcforge-hades",
+  "version": "0.4.0",
+  "description": "Unity-aware AI infrastructure for Claude Code.",
+  "author": { "name": "ArcForge" },
+  "license": "MIT",
+  "skills": "Skills~/",
   "mcpServers": {
     "hades": {
       "command": "node",
-      "args": ["${HADES_INSTALL_PATH}/dist/mcp-stdio-bridge.js"],
-      "env": {
-        "HADES_PROJECT_PATH": "${CWD}",
-        "HADES_DISCOVERY_FILE": "${CWD}/.arcforge/server.json"
-      }
+      "args": ["Bridge~/dist/index.js"]
     }
   }
 }
 ```
 
-The bridge process (Node.js) reads the discovery file, connects to the Unity-side HTTP MCP server, and proxies MCP messages over stdio to the agent client. This indirection allows the agent client to use stdio transport (which is its default) while the Unity Package uses HTTP (which fits its lifecycle better).
+Users install with two commands — one per ecosystem:
 
-#### 5.6.1 Repository strategy
+1. **Unity Package Manager:** Add `https://github.com/TheArcForge/Hades.git` as a UPM git URL. This installs the Scanner, MCP server, Graph, Charon, and Asphodel. The setup wizard auto-registers the MCP server in the project's `.mcp.json`.
 
-Development uses a single monorepo (`arcforge/hades`) which is the Unity Package itself — installable directly via UPM git URL. The Bridge (`Bridge~/`), plugin manifest (`.claude-plugin/`), fixtures (`Fixtures~/`), and CI all coexist here. The tilde-suffixed directories are ignored by Unity's asset pipeline but tracked in git.
+2. **Claude Code:** Run `/plugin install hades@TheArcForge/Hades`. This installs skills and commands at user scope (shared across all projects). Claude Code also connects the bundled MCP server declared in `plugin.json`.
 
-The second repository (`arcforge/hades-marketplace`) is introduced in two stages:
+The setup wizard (triggered on UPM install) detects whether the Hades plugin is already installed in Claude Code and prompts the user to run step 2 if not.
 
-- **Phase 1:** Create the marketplace repo as an empty skeleton — placeholder `plugin.json`, valid `.mcp.json` pointing at the bridge, no skills. This establishes the distribution channel and lets early adopters install the plugin even before skills exist.
-- **Phase 4:** Populate the marketplace repo with migrated UniClaude skills and new skill content. At this point the repo becomes a real distribution artifact with CI validation for manifest correctness and skill structure.
+#### 5.6.1 Anthropic marketplace
 
-During development, skill drafts may live in the monorepo for convenience (e.g., under a `skills~/` directory). The marketplace repo is the shipping vehicle, not the authoring environment.
+The official Anthropic plugin marketplace at `platform.claude.com/plugins/submit` is an optional discoverability channel. Submission gives visibility in `/plugin discover` for all Claude Code users, but is not required for Hades to function. The marketplace listing would point users to the same GitHub repository for installation.
+
+Marketplace submission is deferred until Hades has accumulated sufficient usage signals: stable releases, documented use cases, and ideally community contributions. The submission process requires a public GitHub repository with a valid `.claude-plugin/plugin.json` — which Hades already has.
 
 ### 5.7 Slash commands
 
@@ -2810,13 +2802,13 @@ Hades is designed for any MCP-compatible agent. In practice, the test target is 
 
 **Resolution path:** Test with each major client during development. Document compatibility status. Prioritize Claude Code, support others where reasonable.
 
-### 9.7 Plugin marketplace timing
+### 9.7 Anthropic marketplace submission
 
-Self-published marketplace ships from day 1. Submission to official Anthropic catalog requires accumulated traction.
+The official Anthropic plugin marketplace is a discoverability channel, not a delivery mechanism. Hades is fully functional without marketplace listing.
 
 **Open question:** When is the right moment to submit? Too early risks rejection on insufficient maturity; too late forfeits months of default-discoverability.
 
-**Resolution path:** Self-publish at v1 release. Submit when we have 3+ months of stable usage and at least one external community contribution.
+**Resolution path:** Submit after v1.0 release when we have 3+ months of stable usage and at least one external community contribution. Does not block any development phase.
 
 ### 9.8 Charon dashboard scope
 
