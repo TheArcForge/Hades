@@ -1061,10 +1061,10 @@ This is also the phase where Hades may optionally be submitted to the official A
 
 ### Done criteria
 
-- [ ] Tier 2 inferred memory generation works: pattern detection runs against trace database
-- [ ] Tier 2 → Tier 1 promotion proposals appear in queue when confidence/sample thresholds met
-- [ ] Inferred patterns are clearly labeled as inferred in agent context (per Architecture §4.6.1)
-- [ ] Cross-layer feedback loops work correctly per Architecture §6.4 (graph evolution → memory updates, traces → inference, memory invalidates graph assumptions)
+- [x] Tier 2 inferred memory generation works: pattern detection runs against trace database
+- [x] Tier 2 → Tier 1 promotion proposals appear in queue when confidence/sample thresholds met
+- [x] Inferred patterns are clearly labeled as inferred in agent context (per Architecture §4.6.1)
+- [x] Cross-layer feedback loops work correctly per Architecture §6.4 (graph evolution → memory updates, traces → inference, memory invalidates graph assumptions)
 - [ ] Performance optimization passes complete: large project benchmark (50k+ assets) shows acceptable build/query latency
 - [ ] All known edge cases from Architecture §8 have explicit handling
 - [ ] Documentation complete: user-facing setup guide, troubleshooting, recovery procedures
@@ -1201,6 +1201,24 @@ A scenario is deliberately introduced: graph database corruption, or scanner fai
 **Demonstrates:** robustness and recovery.
 **Implicitly verifies:** error handling, manual recovery commands, documentation accuracy.
 **Pass criteria:** the recovery procedure works exactly as documented.
+
+### Phase 5a implementation notes
+
+Issues and decisions from the Tier 2 inferred memory implementation, documented for future reference:
+
+1. **4 pluggable analyzers implemented.** The pattern detection engine ships with AcceptanceRate, TopicCluster, TimeOfDay, and FailureCorrelation analyzers. Each implements `IPatternAnalyzer` and is registered with `PatternInferenceEngine` at startup. New analyzers can be added without touching the engine — open/closed principle holds.
+
+2. **PatternInferenceEngine orchestrates analyzers against Charon trace data.** The engine queries the `traces` and `spans` tables directly (read-only) and fans out to registered analyzers. Each analyzer receives a windowed slice of trace data and returns zero or more `InferredPattern` candidates. The engine deduplicates and merges candidates from multiple analyzers before persisting to `.arcforge/memory/inferred/`.
+
+3. **PromotionEvaluator handles the full Pending→Proposed→Accepted/Dismissed/Deferred lifecycle.** Thresholds (90% confidence, 50 samples by default) are checked on each inference pass. When a candidate crosses both thresholds, `PromotionEvaluator` writes a promotion proposal to the existing proposal queue at `.arcforge/memory/proposals/`. The accept/reject/defer UI in the dashboard's "Proposals" view was reused without changes — the queue format is identical whether the proposal came from an agent or from Tier 2.
+
+4. **GraphBuilder.OnRebuildComplete event replaces direct calls for cross-layer feedback.** Previously, Asphodel's validation triggers were wired with direct method calls from `GraphBuilder`. Replacing these with a `static event Action OnRebuildComplete` broke the direct dependency and allowed Asphodel and the inference engine to subscribe independently. This also makes the feedback loop testable in isolation — tests can raise the event without running a real rebuild.
+
+5. **Dashboard API extended with /inferred endpoints.** Three new Express routes were added: `GET /api/inferred` (list inferred patterns with status), `GET /api/inferred/:id` (pattern detail with supporting trace evidence), and `GET /api/inferred/promotions` (patterns currently above threshold, awaiting review). The existing Proposals view was extended with a "From Tier 2" filter to distinguish agent-proposed entries from system-inferred ones.
+
+6. **7 test files + shared fixture factory.** Coverage: `AcceptanceRateAnalyzerTests` (5), `TopicClusterAnalyzerTests` (5), `TimeOfDayAnalyzerTests` (5), `FailureCorrelationAnalyzerTests` (6), `PromotionEvaluatorTests` (7), `PatternInferenceEngineTests` (5), and `InferenceIntegrationTests` (3) — 36 tests total. `SyntheticTraceFixtures` provides 5 reusable fixture factories (AcceptanceRate, TopicCluster, TimeOfDay, FailureCorrelation, Empty) shared across analyzer test files.
+
+7. **Fixed: MemoryFileWatcher → Validator infinite loop.** `ValidateFile()` writes updated frontmatter (validation_status, last_validated_against_graph) back to the memory file. `MemoryFileWatcher` detected this write and scheduled another `ValidateFile()` via `delayCall`, creating an infinite loop that pegged the CPU at 100% and froze the Editor on startup. Fix: added `Suppress()`/`Resume()` methods to `MemoryFileWatcher` that toggle `EnableRaisingEvents`. Both `OnGraphRebuild()` and `OnMemoryFileChanged()` in `AsphodeInitializer` now suppress the watcher around internal writes. External edits (user or MCP tools) still trigger validation normally.
 
 ### Regression coverage
 
@@ -1369,15 +1387,31 @@ It is ready to be used by developers who are not the original developer.
 
 Issues discovered during development that need resolution. Tracked here for visibility across phases.
 
-### Multi-instance MCP discovery broken
+### MCP server entry lost during compilation failures
 
-**Discovered:** Phase 3 happy path validation (2026-05-12)
-**Severity:** Medium — blocks multi-project workflows, does not affect single-project use
-**Ref:** Architecture §1.8
+**Discovered:** Phase 5a development (2026-05-13), supersedes the Phase 3 "multi-instance discovery" hypothesis
+**Severity:** High — makes MCP server invisible to Claude Code until manual intervention or successful recompile
+**Ref:** `Editor/MCP/MCPServer.cs`, `Editor/Core/MCPClientConfig.cs`
 
-Running two Unity projects simultaneously with Hades should produce two independent MCP servers on different ports, each discoverable by Claude Code. In practice, opening a second project does not register a second MCP server in the Claude Code tool list — only the first project's connection is visible.
+The server registry system (`~/.arcforge/servers/{name}-{hash}.json`) works correctly — per-project hashed filenames avoid collisions. The original "discovery file collision" hypothesis from Phase 3 was wrong.
 
-Likely cause: discovery file collision. Both projects write `.arcforge/server.json` to advertise their MCP endpoint, but Claude Code's stdio bridge discovers servers by scanning a fixed path or process name. Two instances overwrite the same discovery entry rather than registering separately. Needs investigation of the bridge's server enumeration logic and the `server.json` path resolution.
+The actual problem: `MCPServer.Stop()` calls `MCPClientConfig.OnServerStop()` which deletes the server entry file. When the previous Unity project closes (or domain reloads), the entry is removed. On restart, `MCPServer`'s `[InitializeOnLoad]` static constructor fires and re-creates the entry — but only if compilation succeeds. If any Hades assembly has compilation errors, the static constructor never runs, and the entry stays deleted. The MCP HTTP listener may still be running from before the reload, but the bridge can't find it.
+
+Observed sequence: (1) edit Hades C# source introducing a compilation error, (2) Unity attempts domain reload, (3) compilation fails, (4) `MCPServer` static constructor never fires, (5) server entry file remains deleted, (6) bridge polls `~/.arcforge/servers/` indefinitely, finding nothing.
+
+**Proposed fix:** Don't delete the server entry in `OnServerStop()` — only delete it during `EditorApplication.quitting`. The bridge already validates entries by checking PID liveness (`process.kill(pid, 0)`) and cleans stale entries automatically. This makes the entry survive domain reloads and temporary compilation failures. The entry file becomes a "last known good" record rather than a precise liveness signal.
+
+### MCP config scoped to Unity project, not package source
+
+**Discovered:** Phase 5a development (2026-05-13)
+**Severity:** Medium — blocks development workflow when Claude Code is started from the package source directory
+**Ref:** `Editor/Core/MCPClientConfig.cs:WriteClaudeCodeConfig()`
+
+`MCPClientConfig.WriteClaudeCodeConfig()` writes `.mcp.json` to `PathSandbox.ProjectRoot`, which resolves to the Unity project directory (e.g., `/Users/mike/Documents/alpha`). When developing the Hades package from its source directory (e.g., `/Users/mike/Projects/Hades`) via a `file:` reference in the Unity project's `manifest.json`, Claude Code sessions started from the package source never see the `.mcp.json` and cannot connect to the MCP server.
+
+This also explains the Phase 3 "only the first project's connection is visible" observation — it wasn't a multi-instance issue, but a path-scoping issue. Claude Code only discovers MCP servers configured in the working directory's `.mcp.json` or in `~/.claude/settings.json`.
+
+**Possible fixes:** (A) Detect `file:` package references in the Unity project's manifest and write `.mcp.json` into those source directories too. (B) Write a global MCP config entry to `~/.claude/settings.json` so the bridge is discoverable from any directory. (C) Document that Claude Code must be started from the Unity project directory, not the package source.
 
 ### Validation warnings duplicate on repeated runs
 
@@ -1388,6 +1422,20 @@ Likely cause: discovery file collision. Both projects write `.arcforge/server.js
 When `validate_memory` is called multiple times on a file with failing rules (or when the FileWatcher re-triggers validation after the validator itself writes back to the file), identical `<!-- HADES VALIDATION WARNING -->` HTML comment blocks are appended each time. Observed: a single failing rule produced 3 duplicate warning blocks after 3 validation passes.
 
 The warning-writing logic in `MemoryValidator` needs to be idempotent — either strip existing warning comments before writing new ones, or check for duplicates before appending. The former is cleaner: on each validation pass, remove all `<!-- HADES VALIDATION WARNING ... -->` blocks, then write current warnings fresh. This also correctly handles the case where a previously failing rule now passes (the stale warning gets removed).
+
+### MCP config not discovered when Claude Code launched from repo root
+
+**Discovered:** Phase 5a development (2026-05-13)
+**Severity:** Medium — MCP server invisible to Claude Code until user relaunches from correct directory
+**Ref:** `Editor/Core/MCPClientConfig.cs:WriteClaudeCodeConfig()`
+
+When a Unity project lives in a subdirectory of the git repo (e.g., `MyRepo/MyUnityProject/`), `MCPClientConfig.WriteClaudeCodeConfig()` writes `.mcp.json` to the Unity project directory. Claude Code discovers MCP servers by looking for `.mcp.json` in the working directory where it was launched. If the user launches Claude Code from the repo root (the natural place to open a terminal), the `.mcp.json` one level down is never found and the Hades MCP server is invisible.
+
+This is a sibling of the "MCP config scoped to Unity project, not package source" issue — same root cause (`.mcp.json` written to `PathSandbox.ProjectRoot` only), different manifestation (consumer project with nested Unity directory vs. package development from source directory).
+
+Observed sequence: (1) repo at `/Users/mike/Projects/aurora-borealis`, Unity project at `aurora-borealis/AuroraBorealis/`, (2) `.mcp.json` written to `AuroraBorealis/.mcp.json`, (3) user opens Claude Code from repo root, (4) Claude Code finds no `.mcp.json` in working directory, (5) Hades MCP tools absent from session.
+
+**Possible fixes:** (A) Walk up from `PathSandbox.ProjectRoot` looking for a `.git` directory; if found, write `.mcp.json` there too. (B) Write a global MCP config entry to `~/.claude/settings.json` so the bridge is discoverable from any directory. (C) Document that Claude Code must be started from the Unity project directory. Option (A) handles the common case without global side effects. Option (B) solves both this issue and the package-source issue but risks config pollution across unrelated projects.
 
 ---
 

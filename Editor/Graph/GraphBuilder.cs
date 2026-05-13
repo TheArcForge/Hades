@@ -15,6 +15,8 @@ namespace ArcForge.Hades.Editor.Graph
 
     public class GraphBuilder
     {
+        public static event Action OnRebuildComplete;
+
         readonly GraphDatabase _db;
         readonly ScannerRegistry _scannerRegistry;
         BuildStatus _status = BuildStatus.Idle;
@@ -88,7 +90,7 @@ namespace ArcForge.Hades.Editor.Graph
                     _db.SetMetadata("last_full_rebuild_at",
                         DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
                     _status = BuildStatus.Idle;
-                    Asphodel.AsphodeInitializer.OnGraphRebuildComplete();
+                    OnRebuildComplete?.Invoke();
                 }
             }
         }
@@ -145,7 +147,7 @@ namespace ArcForge.Hades.Editor.Graph
                     _db.SetMetadata("last_incremental_at",
                         DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
                     _status = BuildStatus.Idle;
-                    Asphodel.AsphodeInitializer.OnGraphRebuildComplete();
+                    OnRebuildComplete?.Invoke();
                 }
             }
         }

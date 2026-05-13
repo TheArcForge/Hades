@@ -111,5 +111,55 @@ export class MemoryDB {
         unlinkSync(proposalPath);
         return true;
     }
+    listInferredFiles() {
+        const dir = join(this.memoryDir, "inferred");
+        if (!existsSync(dir))
+            return [];
+        const files = readdirSync(dir).filter((f) => f.endsWith(".md"));
+        return files.map((f) => {
+            const raw = readFileSync(join(dir, f), "utf-8");
+            const { frontmatter, body } = parseFrontmatter(raw);
+            // Extract description: lines between "INFERRED PATTERN..." header and "Observed in..." footer
+            const lines = body.split("\n");
+            const descLines = [];
+            let pastHeader = false;
+            for (const line of lines) {
+                if (!pastHeader) {
+                    if (line.trim().startsWith("INFERRED PATTERN")) {
+                        pastHeader = true;
+                    }
+                    continue;
+                }
+                const trimmed = line.trim();
+                if (trimmed.startsWith("Observed in ") && trimmed.includes("traces with"))
+                    continue;
+                if (trimmed)
+                    descLines.push(trimmed);
+            }
+            return {
+                filename: f,
+                analyzer: frontmatter.analyzer || "unknown",
+                confidence: frontmatter.confidence || "0",
+                sample_size: frontmatter.sample_size || "0",
+                first_observed: frontmatter.first_observed || null,
+                last_confirmed: frontmatter.last_confirmed || null,
+                promotion_status: frontmatter.promotion_status || "pending",
+                conflicts_with: frontmatter.conflicts_with || null,
+                description: descLines.join(" "),
+            };
+        });
+    }
+    getInferredFile(filename) {
+        const name = filename.endsWith(".md") ? filename : filename + ".md";
+        const filePath = join(this.memoryDir, "inferred", name);
+        if (!existsSync(filePath))
+            return null;
+        const raw = readFileSync(filePath, "utf-8");
+        const { frontmatter, body } = parseFrontmatter(raw);
+        const meta = this.listInferredFiles().find((f) => f.filename === name);
+        if (!meta)
+            return null;
+        return { ...meta, content: raw, body };
+    }
 }
 //# sourceMappingURL=memory-db.js.map

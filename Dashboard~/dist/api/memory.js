@@ -34,6 +34,18 @@ export function createMemoryRouter(db) {
         }
         res.json({ status: "rejected" });
     });
+    router.get("/inferred", (_req, res) => {
+        const files = db.listInferredFiles();
+        res.json({ files });
+    });
+    router.get("/inferred/:filename", (req, res) => {
+        const file = db.getInferredFile(req.params.filename);
+        if (!file) {
+            res.status(404).json({ error: "Inferred file not found" });
+            return;
+        }
+        res.json(file);
+    });
     return router;
 }
 //# sourceMappingURL=memory.js.map

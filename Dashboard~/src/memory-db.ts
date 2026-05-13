@@ -24,6 +24,18 @@ export interface ProposalMeta {
   content: string;
 }
 
+export interface InferredFileMeta {
+  filename: string;
+  analyzer: string;
+  confidence: string;
+  sample_size: string;
+  first_observed: string | null;
+  last_confirmed: string | null;
+  promotion_status: string;
+  conflicts_with: string | null;
+  description: string;
+}
+
 interface Frontmatter {
   [key: string]: string;
 }
@@ -152,5 +164,58 @@ export class MemoryDB {
     if (!existsSync(proposalPath)) return false;
     unlinkSync(proposalPath);
     return true;
+  }
+
+  listInferredFiles(): InferredFileMeta[] {
+    const dir = join(this.memoryDir, "inferred");
+    if (!existsSync(dir)) return [];
+
+    const files = readdirSync(dir).filter((f) => f.endsWith(".md"));
+    return files.map((f) => {
+      const raw = readFileSync(join(dir, f), "utf-8");
+      const { frontmatter, body } = parseFrontmatter(raw);
+
+      // Extract description: lines between "INFERRED PATTERN..." header and "Observed in..." footer
+      const lines = body.split("\n");
+      const descLines: string[] = [];
+      let pastHeader = false;
+      for (const line of lines) {
+        if (!pastHeader) {
+          if (line.trim().startsWith("INFERRED PATTERN")) {
+            pastHeader = true;
+          }
+          continue;
+        }
+        const trimmed = line.trim();
+        if (trimmed.startsWith("Observed in ") && trimmed.includes("traces with")) continue;
+        if (trimmed) descLines.push(trimmed);
+      }
+
+      return {
+        filename: f,
+        analyzer: frontmatter.analyzer || "unknown",
+        confidence: frontmatter.confidence || "0",
+        sample_size: frontmatter.sample_size || "0",
+        first_observed: frontmatter.first_observed || null,
+        last_confirmed: frontmatter.last_confirmed || null,
+        promotion_status: frontmatter.promotion_status || "pending",
+        conflicts_with: frontmatter.conflicts_with || null,
+        description: descLines.join(" "),
+      };
+    });
+  }
+
+  getInferredFile(filename: string): (InferredFileMeta & { content: string; body: string }) | null {
+    const name = filename.endsWith(".md") ? filename : filename + ".md";
+    const filePath = join(this.memoryDir, "inferred", name);
+    if (!existsSync(filePath)) return null;
+
+    const raw = readFileSync(filePath, "utf-8");
+    const { frontmatter, body } = parseFrontmatter(raw);
+
+    const meta = this.listInferredFiles().find((f) => f.filename === name);
+    if (!meta) return null;
+
+    return { ...meta, content: raw, body };
   }
 }

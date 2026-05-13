@@ -17,6 +17,17 @@ export interface ProposalMeta {
     status: string;
     content: string;
 }
+export interface InferredFileMeta {
+    filename: string;
+    analyzer: string;
+    confidence: string;
+    sample_size: string;
+    first_observed: string | null;
+    last_confirmed: string | null;
+    promotion_status: string;
+    conflicts_with: string | null;
+    description: string;
+}
 export declare class MemoryDB {
     private memoryDir;
     constructor(memoryDir: string);
@@ -25,4 +36,9 @@ export declare class MemoryDB {
     listProposals(): ProposalMeta[];
     acceptProposal(id: string): boolean;
     rejectProposal(id: string): boolean;
+    listInferredFiles(): InferredFileMeta[];
+    getInferredFile(filename: string): (InferredFileMeta & {
+        content: string;
+        body: string;
+    }) | null;
 }

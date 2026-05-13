@@ -16,6 +16,7 @@ namespace ArcForge.Hades.Editor.Asphodel
 
         public static MemoryManager Manager => _manager;
         public static MemoryValidator Validator => _validator;
+        public static Inference.PatternInferenceEngine InferenceEngine { get; private set; }
 
         static AsphodeInitializer()
         {
@@ -41,6 +42,17 @@ namespace ArcForge.Hades.Editor.Asphodel
                     EditorApplication.delayCall += RunStartupValidation;
                 }
 
+                var arcforgeDir = Path.Combine(projectRoot, ".arcforge");
+                var inferenceConfig = Inference.InferenceConfig.LoadFromDirectory(arcforgeDir);
+                var charonDb = Charon.CharonEmitter.Database;
+                if (charonDb != null)
+                {
+                    InferenceEngine = new Inference.PatternInferenceEngine(Manager, charonDb, inferenceConfig);
+                }
+
+                GraphBuilder.OnRebuildComplete -= OnGraphRebuild;
+                GraphBuilder.OnRebuildComplete += OnGraphRebuild;
+
                 _watcher = new MemoryFileWatcher(memoryDir, OnMemoryFileChanged);
                 _watcher.Start();
 
@@ -62,13 +74,28 @@ namespace ArcForge.Hades.Editor.Asphodel
         static void OnMemoryFileChanged(string filename)
         {
             if (_validator == null) return;
-            EditorApplication.delayCall += () => _validator.ValidateFile(filename);
+            EditorApplication.delayCall += () =>
+            {
+                _watcher?.Suppress();
+                _validator.ValidateFile(filename);
+                _watcher?.Resume();
+            };
         }
 
         public static void OnGraphRebuildComplete()
         {
-            if (_validator == null) return;
-            EditorApplication.delayCall += () => _validator.ValidateAll();
+            OnGraphRebuild();
+        }
+
+        static void OnGraphRebuild()
+        {
+            UnityEditor.EditorApplication.delayCall += () =>
+            {
+                _watcher?.Suppress();
+                Validator?.ValidateAll();
+                InferenceEngine?.RunInference();
+                _watcher?.Resume();
+            };
         }
 
         static void OnBeforeReload()
@@ -79,6 +106,7 @@ namespace ArcForge.Hades.Editor.Asphodel
         static void OnQuit()
         {
             _watcher?.Dispose();
+            GraphBuilder.OnRebuildComplete -= OnGraphRebuild;
             AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeReload;
             EditorApplication.quitting -= OnQuit;
         }

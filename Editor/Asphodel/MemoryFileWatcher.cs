@@ -72,6 +72,16 @@ namespace ArcForge.Hades.Editor.Asphodel
             _onFileChanged?.Invoke(file);
         }
 
+        public void Suppress()
+        {
+            if (_watcher != null) _watcher.EnableRaisingEvents = false;
+        }
+
+        public void Resume()
+        {
+            if (_watcher != null) _watcher.EnableRaisingEvents = true;
+        }
+
         public void Dispose()
         {
             _watcher?.Dispose();

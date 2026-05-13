@@ -64,6 +64,31 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                     summaries.Add(entry);
                 }
 
+                var inferredDir = System.IO.Path.Combine(manager.MemoryDir, "inferred");
+                if (System.IO.Directory.Exists(inferredDir))
+                {
+                    foreach (var filePath in System.IO.Directory.GetFiles(inferredDir, "*.md"))
+                    {
+                        var content = System.IO.File.ReadAllText(filePath);
+                        var memFile = FrontmatterParser.Parse(content);
+                        var confidence = memFile.Frontmatter.ContainsKey("confidence") ? memFile.Frontmatter["confidence"] : "?";
+                        var sampleSize = memFile.Frontmatter.ContainsKey("sample_size") ? memFile.Frontmatter["sample_size"] : "?";
+                        var analyzer = memFile.Frontmatter.ContainsKey("analyzer") ? memFile.Frontmatter["analyzer"] : "unknown";
+                        var preview = memFile.Body.Length > 100 ? memFile.Body.Substring(0, 100) + "..." : memFile.Body;
+
+                        var inferredEntry = new Newtonsoft.Json.Linq.JObject
+                        {
+                            ["filename"] = System.IO.Path.GetFileName(filePath),
+                            ["tier"] = "inferred",
+                            ["analyzer"] = analyzer,
+                            ["confidence"] = confidence,
+                            ["sample_size"] = sampleSize,
+                            ["preview"] = preview.Trim()
+                        };
+                        summaries.Add(inferredEntry);
+                    }
+                }
+
                 span.SetAttribute("content_size", totalSize);
 
                 var result = new JObject
@@ -124,6 +149,31 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                             ["validation_status"] = file.ValidationStatus,
                             ["sections"] = new JArray(matchedSections.ToArray())
                         });
+                    }
+                }
+
+                var inferredDir = System.IO.Path.Combine(manager.MemoryDir, "inferred");
+                if (System.IO.Directory.Exists(inferredDir))
+                {
+                    foreach (var filePath in System.IO.Directory.GetFiles(inferredDir, "*.md"))
+                    {
+                        var content = System.IO.File.ReadAllText(filePath);
+                        if (content.IndexOf(query, System.StringComparison.OrdinalIgnoreCase) < 0) continue;
+
+                        var memFile = FrontmatterParser.Parse(content);
+                        var confidence = memFile.Frontmatter.ContainsKey("confidence") ? memFile.Frontmatter["confidence"] : "?";
+                        var analyzer = memFile.Frontmatter.ContainsKey("analyzer") ? memFile.Frontmatter["analyzer"] : "unknown";
+
+                        var matchEntry = new Newtonsoft.Json.Linq.JObject
+                        {
+                            ["filename"] = System.IO.Path.GetFileName(filePath),
+                            ["tier"] = "inferred",
+                            ["analyzer"] = analyzer,
+                            ["confidence"] = confidence,
+                            ["validation_status"] = "inferred",
+                            ["sections"] = new Newtonsoft.Json.Linq.JArray { memFile.Body.Trim() }
+                        };
+                        matches.Add(matchEntry);
                     }
                 }
 
