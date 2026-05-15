@@ -31,6 +31,9 @@ namespace ArcForge.Hades.Editor.MCP
 
         public event Action<string, string, MCPToolResult> OnToolExecuted;
 
+        const double HeartbeatIntervalSeconds = 30.0;
+        double _lastHeartbeat;
+
         static MCPServer()
         {
             AssemblyReloadEvents.beforeAssemblyReload += OnBeforeReload;
@@ -59,6 +62,7 @@ namespace ArcForge.Hades.Editor.MCP
                     var uri = new Uri(_instance._transport.Endpoint);
                     SessionState.SetInt("Hades_MCP_Port", uri.Port);
                 }
+                HubClient.Deregister(Core.PathSandbox.ProjectRoot, true);
             }
             else
             {
@@ -81,16 +85,19 @@ namespace ArcForge.Hades.Editor.MCP
             _transport.Start(settings.Port);
 
             var port = (_transport as HttpTransport)?.Port ?? 0;
-            DiscoveryFile.Write(
-                DiscoveryFile.DefaultPath,
-                port,
-                Process.GetCurrentProcess().Id);
-            MCPClientConfig.OnServerStart(port);
+            var pid = Process.GetCurrentProcess().Id;
+            var projectName = System.IO.Path.GetFileName(Core.PathSandbox.ProjectRoot);
+
+            var manifestPackages = HubClient.ReadManifestPackages(Core.PathSandbox.ProjectRoot);
+            HubClient.Register(projectName, Core.PathSandbox.ProjectRoot, port, pid, manifestPackages);
+            Core.MCPClientConfig.OnServerStart(port);
 
             EditorApplication.update += ProcessMainThreadQueue;
+            EditorApplication.update += HeartbeatTick;
             EditorApplication.quitting += Stop;
 
             _instance = this;
+            _lastHeartbeat = EditorApplication.timeSinceStartup;
 
             if (_settings.LogLevel >= 1)
                 Debug.Log($"[Hades MCP] Server running on {_transport.Endpoint}");
@@ -101,14 +108,14 @@ namespace ArcForge.Hades.Editor.MCP
             if (!IsRunning && _transport == null) return;
 
             EditorApplication.update -= ProcessMainThreadQueue;
+            EditorApplication.update -= HeartbeatTick;
             EditorApplication.quitting -= Stop;
 
             _transport?.Stop();
             _reloadStrategy?.Dispose();
             _reloadStrategy = null;
 
-            DiscoveryFile.Delete(DiscoveryFile.DefaultPath);
-            MCPClientConfig.OnServerStop();
+            HubClient.Deregister(Core.PathSandbox.ProjectRoot, false);
 
             while (_workQueue != null && _workQueue.TryDequeue(out var item))
                 item.Completion.TrySetCanceled();
@@ -129,6 +136,17 @@ namespace ArcForge.Hades.Editor.MCP
             Stop();
             _transport?.Dispose();
             if (_instance == this) _instance = null;
+        }
+
+        void HeartbeatTick()
+        {
+            if (!IsRunning) return;
+            if (EditorApplication.timeSinceStartup - _lastHeartbeat < HeartbeatIntervalSeconds) return;
+
+            _lastHeartbeat = EditorApplication.timeSinceStartup;
+            var port = (_transport as HttpTransport)?.Port ?? 0;
+            var pid = Process.GetCurrentProcess().Id;
+            HubClient.Heartbeat(Core.PathSandbox.ProjectRoot, port, pid);
         }
 
         Task<string> EnqueueAndWait(string json, string traceId)

@@ -1,11 +1,12 @@
 {
   "name": "hades-bridge",
-  "version": "0.1.0",
-  "description": "MCP stdio-to-HTTP bridge for Hades",
+  "version": "0.2.0",
+  "description": "MCP Hub and Launcher for Hades Unity integration",
   "type": "module",
-  "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "cd hub && npx tsc && cd ../launcher && npx tsc",
+    "build:hub": "cd hub && npx tsc",
+    "build:launcher": "cd launcher && npx tsc",
     "test": "vitest run",
     "test:watch": "vitest"
   },

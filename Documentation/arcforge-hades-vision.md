@@ -429,42 +429,14 @@ This is a moderate moat. Not impossible to replicate; not trivial either. Defend
 
 Hades is delivered from a **single repository** that serves both Unity and Claude Code ecosystems. The repository is simultaneously a Unity Package (installable via UPM) and a Claude Code plugin (installable via `/plugin install`).
 
-**Unity Package (UPM)**
+The full plugin architecture — what the plugin contains (22 skills, 6 commands, MCP Hub connectivity), directory layout, installation flow, Anthropic marketplace compliance, and versioning — is documented in the **Plugin document** (`Documentation/arcforge-hades-plugin.md`). That document is the authoritative source for all plugin packaging and distribution concerns.
 
-Distributed via git URL through Unity Package Manager — the standard Unity install pattern. Contents:
+**Summary of the install experience.** From the user's perspective, two actions:
 
-- The C# Editor Package (`com.arcforge.hades`) — Hades Scanner that builds the Graph using `AssetDatabase` and `SerializedObject`
-- The bundled Hades MCP server (Node.js bridge script)
-- Charon observability infrastructure and dashboard
-- Asphodel memory system
-- Setup wizard that auto-registers the MCP server with the user's Claude Code config on first run
+1. Add Hades Unity Package via UPM git URL → Hades Scanner runs in the project, MCP server starts inside Unity
+2. Run `/plugin install hades@TheArcForge/Hades` in Claude Code → Skills, commands, and MCP launcher become available
 
-The setup wizard runs on package installation and writes the MCP server configuration to the project's `.mcp.json`. This gives the agent access to all Hades MCP tools (graph queries, memory, traces) without any additional setup.
-
-**Claude Code Plugin (same repository)**
-
-The same repository contains Claude Code plugin structure at the root: `.claude-plugin/plugin.json`, `Skills~/` (skill definitions), and `Commands~/` (slash commands). These tilde-suffixed directories are ignored by Unity's asset pipeline but recognized by Claude Code when installed as a plugin.
-
-User installs with:
-
-```
-/plugin install hades@TheArcForge/Hades
-```
-
-This gives the agent access to all Hades skills (architectural decision frameworks, domain guides, code review) and slash commands (`/hades:status`, `/hades:rebuild-graph`, etc.). Skills are installed at user scope — available across all Unity projects.
-
-**End-to-end install experience.** From the user's perspective, two actions:
-
-1. Add Hades Unity Package via UPM git URL → Hades Scanner runs in the project, MCP server is registered with Claude Code automatically
-2. Run `/plugin install hades@TheArcForge/Hades` in Claude Code → Skills and commands become available
-
-Step 1 is per-project (each Unity project installs the package). Step 2 is per-user (once installed, skills are available across all projects). The setup wizard from step 1 prompts the user to complete step 2 if not already done.
-
-**Anthropic marketplace strategy.**
-
-The official Anthropic plugin marketplace (`platform.claude.com/plugins/submit`) is a discoverability channel, not a delivery mechanism. Submission gives visibility in `/plugin discover` for all Claude Code users. The actual plugin is always installed from the Hades GitHub repository.
-
-Marketplace submission is deferred until Hades has accumulated usage signals: stable releases, documented use cases, and ideally community contributions. Submission timing does not affect product availability — Hades is fully functional without marketplace listing.
+Step 1 is per-project. Step 2 is per-user. Both are needed for the full experience.
 
 **Commercial model.** Both artifacts are MIT licensed and open source. No paid tier in the v1 vision. Future commercial considerations (managed eval dashboards, hosted shared memory for distributed teams, enterprise support) are deliberately out of scope for the initial vision and revisited only after product traction is established.
 

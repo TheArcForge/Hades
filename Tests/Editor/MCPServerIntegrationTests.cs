@@ -23,9 +23,6 @@ namespace ArcForge.Hades.Editor.Tests
         public void TearDown()
         {
             _server?.Dispose();
-            var discoveryPath = DiscoveryFile.DefaultPath;
-            if (File.Exists(discoveryPath))
-                File.Delete(discoveryPath);
         }
 
         [Test]
@@ -36,26 +33,11 @@ namespace ArcForge.Hades.Editor.Tests
         }
 
         [Test]
-        public void Start_WritesDiscoveryFile()
-        {
-            _server.Start(new HadesSettings());
-            Assert.IsTrue(File.Exists(DiscoveryFile.DefaultPath));
-        }
-
-        [Test]
         public void Stop_SetsIsRunningFalse()
         {
             _server.Start(new HadesSettings());
             _server.Stop();
             Assert.IsFalse(_server.IsRunning);
-        }
-
-        [Test]
-        public void Stop_DeletesDiscoveryFile()
-        {
-            _server.Start(new HadesSettings());
-            _server.Stop();
-            Assert.IsFalse(File.Exists(DiscoveryFile.DefaultPath));
         }
 
         [Test]

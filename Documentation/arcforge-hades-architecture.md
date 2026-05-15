@@ -108,7 +108,7 @@ A substantial portion of Hades's runtime infrastructure is reused from UniClaude
 
 What changes from UniClaude:
 
-- **No Node.js Sidecar (but a thin bridge).** UniClaude had a separate Node.js process running the Anthropic Agent SDK, which called the MCP server's `/rpc` endpoint via custom JSON-RPC. Hades does not embed the Agent SDK and therefore does not need a sidecar. The agent client is external (Claude Code or Claude Desktop), and it speaks the standard MCP protocol directly to Hades's MCP server. However, Claude Desktop (and some other MCP clients) only support stdio-based MCP servers, not HTTP. For these clients, Hades deploys a lightweight Node.js bridge script (`~/.arcforge/mcp-bridge.js`) that translates between stdio and Hades's HTTP/SSE transport via `npx mcp-remote`. This bridge is not an agent — it performs no reasoning, holds no state, and simply pipes messages. **Node.js is therefore a runtime dependency for Claude Desktop support.** Claude Code connects directly over HTTP and does not require Node.js.
+- **No Node.js Sidecar (but an MCP Hub).** UniClaude had a separate Node.js process running the Anthropic Agent SDK, which called the MCP server's `/rpc` endpoint via custom JSON-RPC. Hades does not embed the Agent SDK and therefore does not need a sidecar. The agent client is external (Claude Code or Claude Desktop), and it speaks the standard MCP protocol. Hades uses a three-component connectivity model — Launcher (thin stdio process) → Hub (long-running HTTP router) → Unity Instance(s) — described in the **Plugin document** §3. The Hub and Launcher have zero npm runtime dependencies (Node.js built-ins only). **Node.js is a runtime dependency for MCP connectivity** (both Claude Code and Claude Desktop route through the Hub).
 - **No chat UI.** UniClaude exposed a chat window in the Unity Editor as the user's primary interaction surface. Hades has no chat UI; the user interacts through their agent client.
 - **MCP-compliant transport.** UniClaude used custom JSON-RPC over HTTP. Hades uses the MCP protocol's official transport (HTTP/SSE per the spec). The `MCPServer.cs` infrastructure is upgraded to expose MCP-compliant endpoints, but the underlying threading model and lifecycle handling stay identical.
 
@@ -116,30 +116,31 @@ The reuse is significant. We estimate approximately 60% of Hades's runtime infra
 
 ### 1.5 The communication backbone
 
-Communication between the agent client and the Unity Package happens over **HTTP/SSE on localhost**. This is the same transport pattern UniClaude proved out, adapted to MCP-compliant message format.
+Communication between the agent client and the Unity Package happens over **HTTP on localhost**, routed through the **MCP Hub** — a long-running Node.js process that acts as the stable connection point between Claude Code and Unity.
 
-Specifically:
+The full MCP Hub architecture — launcher, hub, registration, heartbeat, project-path routing, lifecycle scenarios — is documented in the **Plugin document** (`Documentation/arcforge-hades-plugin.md`, §3) and the **MCP Hub design spec** (`docs/superpowers/specs/2026-05-13-mcp-hub-design.md`). Those documents are authoritative for connectivity detail.
 
-- The Unity Package's MCP server listens on `http://localhost:<port>` where `<port>` is dynamically chosen at startup (if the requested port is busy, a random ephemeral port is used).
-- On startup, `MCPClientConfig` performs three registration steps automatically:
-  1. **Server registry entry** — writes `~/.arcforge/servers/{ProjectName}-{hash}.json` containing port, PID, project path, and start timestamp. This central registry supports multiple simultaneous Unity instances.
-  2. **Claude Code config** — writes or updates `{project}/.mcp.json` with a stdio entry pointing at the bridge script (`~/.arcforge/mcp-bridge.js --project {projectPath}`). This file is gitignored.
-  3. **Claude Desktop config** — updates `claude_desktop_config.json` (platform-specific path) with a `hades-{projectName}` entry using the same bridge script and `--project` argument.
-- The bridge script (`~/.arcforge/mcp-bridge.js`) is a cross-platform Node.js script that polls the server registry for the specified project, waits in standby mode if the server isn't running yet, and connects via `npx mcp-remote` when available. It reconnects automatically if Unity restarts.
-- Claude Code reads `.mcp.json` and launches the bridge, which discovers the running server and proxies stdio ↔ HTTP/SSE. Claude Desktop reads its own config and does the same.
+**Summary of the connection model:**
+
+```
+Claude Code ←(stdio)→ Launcher ←(HTTP)→ Hub ←(HTTP)→ Unity Instance(s)
+```
+
+- The Unity Package's MCP server listens on `http://127.0.0.1:<port>` and registers with the Hub.
+- The Hub maintains a registry of connected Unity instances, routes tool calls by matching the Claude Code session's working directory to the correct instance.
+- The Launcher is a thin stdio process declared in the plugin's `.mcp.json`. Claude Code spawns it automatically. It ensures the Hub is running and bridges stdio to HTTP.
 - Standard MCP protocol messages flow over the connection: `initialize`, `tools/list`, `tools/call`, etc.
-- For long-running operations or streamed responses, Server-Sent Events (SSE) is used. The transport supports both legacy SSE (`GET /sse`) and Streamable HTTP (`GET /rpc`) endpoints.
 
-This pattern was chosen over alternatives (file-based handoff, named pipes, Unix sockets) for the following reasons:
+**Why HTTP on localhost:**
 
-- HTTP/SSE is platform-portable. It works identically on Windows, macOS, and Linux without conditional code.
-- The MCP protocol specifies HTTP and SSE as primary transports. Using them aligns Hades with the broader MCP ecosystem and ensures compatibility with all MCP clients, not just Claude Code.
-- HTTP infrastructure (request handling, error codes, content negotiation) is mature and well-understood. Custom IPC primitives would require reinventing this.
-- The localhost-only constraint provides enough security for the threat model (other processes on the same machine are not adversaries; the user owns the machine).
+- HTTP/SSE is platform-portable — identical on Windows, macOS, and Linux.
+- The MCP protocol specifies HTTP and SSE as primary transports, ensuring compatibility with all MCP clients.
+- HTTP infrastructure (request handling, error codes, content negotiation) is mature and well-understood.
+- The localhost-only constraint provides sufficient security for the threat model (same-machine, same-user processes).
 
-Performance is sufficient. The overhead of HTTP/SSE on localhost is on the order of 1-2ms per request, which is negligible compared to the time the agent itself takes to reason about responses (hundreds of milliseconds to multiple seconds). Even for high-frequency tool calls, the transport is not the bottleneck.
+Performance is sufficient. The overhead of HTTP on localhost is 1-2ms per request, negligible compared to agent reasoning time (hundreds of milliseconds to seconds).
 
-The trade-off is that running a Unity-internal HTTP server adds a small lifecycle complexity: it needs to start with the editor, survive domain reloads, and shut down cleanly. UniClaude's `MCPServer.cs` already handles all three correctly, so this complexity is absorbed.
+The Hub architecture resolves three known MCP connectivity issues from earlier phases (server entry lost during compilation failures, `.mcp.json` scoped to wrong directory, `.mcp.json` not found from repo root) by making connectivity directory-independent and resilient to Unity lifecycle disruptions.
 
 ### 1.6 The threading model
 
@@ -169,8 +170,8 @@ A typical day in the life of Hades:
 1. User opens the Unity Editor. `[InitializeOnLoad]` triggers Hades startup. The MCP server begins listening on a chosen port. The graph is loaded from disk (or rebuilt if the disk version is missing or outdated).
 2. The graph is brought up to date with any project changes that happened while Unity was closed. This can take seconds to a minute on a large project.
 3. The Charon emitter starts logging events.
-4. The user opens their agent client (Claude Code or Claude Desktop). Hades auto-configured the MCP client during step 1 — `.mcp.json` for Claude Code, `claude_desktop_config.json` for Claude Desktop. Both point at the bridge script with `--project` targeting.
-5. The bridge script reads the server registry at `~/.arcforge/servers/`, finds the running server entry for this project, and connects via `npx mcp-remote`. Standard MCP `initialize` handshake completes. If the agent client starts before Unity, the bridge enters standby mode — polling the registry every 3 seconds until the server appears.
+4. The user opens their agent client (Claude Code or Claude Desktop). For Claude Code, the plugin's `.mcp.json` declares the launcher; for Claude Desktop, Unity configured `claude_desktop_config.json` to point at the stable launcher copy.
+5. The launcher starts the Hub (if not already running), registers as a connected session, and bridges stdio to HTTP. The Hub routes tool calls to the correct Unity instance by matching the session's working directory. If the agent client starts before Unity, the tools list is empty until Unity registers. See **Plugin document** §3 for the full connectivity architecture.
 6. The user starts a session with the agent. The agent makes Hades tool calls as needed.
 7. While the user works, Unity Editor lifecycle events (asset save, scene save, prefab apply) trigger graph updates. These happen in the background, fast enough that the user doesn't notice.
 8. Trace events accumulate in `traces.db`. The user can inspect them at any time via the Charon dashboard.
@@ -187,8 +188,8 @@ The design property that makes this work: **Hades is fully project-scoped. Each 
 What this looks like concretely:
 
 - **Per-project storage.** Each project has its own `.arcforge/graph.db`, `.arcforge/traces.db`, `.arcforge/memory/`. Project A's data lives in Project A's directory; Project B's lives in Project B's. No cross-contamination.
-- **Independent MCP servers.** Each Unity instance starts its own MCP server on its own port. If the requested port is busy, an ephemeral port is used. Two instances of Hades never conflict because each writes its own server registry entry at `~/.arcforge/servers/{ProjectName}-{hash}.json`.
-- **Central registry with project targeting.** The server registry lives at `~/.arcforge/servers/` and contains one JSON file per running Hades instance. Each agent client's MCP config includes `--project {projectPath}`, so the bridge script matches exactly the right server entry. Claude Code resolves this via its working directory (`.mcp.json`); Claude Desktop uses per-project entries (`hades-{projectName}`) in its global config. Stale entries (where the PID is no longer alive) are cleaned up automatically by the bridge script.
+- **Independent MCP servers.** Each Unity instance starts its own MCP server on its own port. If the requested port is busy, an ephemeral port is used. Each instance registers independently with the MCP Hub, keyed by project path.
+- **Hub-based routing.** The MCP Hub maintains a registry of all connected Unity instances. When Claude Code makes a tool call, the Hub routes it to the correct instance by matching the session's working directory to registered project paths. See **Plugin document** §3.5 for the matching algorithm.
 - **Independent dashboards.** When the user launches the Charon dashboard from Unity instance A, the dashboard process is scoped to Project A's traces database and binds to an OS-assigned ephemeral port. If the user launches a dashboard from Unity instance B, it gets its own OS-assigned port and reads Project B's traces. The two dashboards run simultaneously without interference. The user can have multiple browser tabs open, one per project.
 - **Independent skills config.** Skills are installed globally in the Claude Code config (per Vision §7.5), not per project. Both instances of the agent client read from the same global skill library. This is the correct shape — skills are meant to be shared across projects.
 
@@ -1165,28 +1166,28 @@ GraphDatabase.cs uses [gilzoide/unity-sqlite-net](https://github.com/gilzoide/un
 
 **Maintenance:** The vendored source lives in `ThirdParty/unity-sqlite-net/`. To update, clone the upstream repo, copy updated files, and verify license compliance. `ATTRIBUTION.md` in the vendored directory documents the source commit and licenses (MIT for sqlite-net, public domain for sqlite3).
 
-### MCP Auto-Discovery with Standby Bridge
+### MCP Hub Architecture
 
-**Date:** 2026-05-11
+**Date:** 2026-05-13 (supersedes "MCP Auto-Discovery with Standby Bridge" from 2026-05-11)
 **Status:** Active
 **Scope:** MCP Transport (Section 1.5)
 
-Agent clients (Claude Code, Claude Desktop) automatically discover and connect to Hades's MCP server without manual configuration. The system consists of three components:
+Agent clients (Claude Code, Claude Desktop) connect to Unity's MCP server through a three-component architecture: Launcher → Hub → Unity Instance(s). This replaced the earlier bridge-based discovery model which had three known failure modes (server entry lost during compilation, `.mcp.json` scoped to wrong directory, `.mcp.json` not found from repo root).
 
-1. **Central server registry** (`~/.arcforge/servers/`) — one JSON file per running Unity instance, containing port, PID, project path, and timestamp. Written on server start, deleted on server stop.
-2. **Bridge script** (`~/.arcforge/mcp-bridge.js`) — a cross-platform Node.js script that translates stdio ↔ HTTP/SSE via `npx mcp-remote`. Supports standby mode (polls the registry every 3 seconds until the server appears) and automatic reconnection if Unity restarts.
-3. **Auto-configured client entries** — `.mcp.json` for Claude Code (per-project, gitignored), `claude_desktop_config.json` for Claude Desktop (per-platform global config). Both use `--project` argument for exact project targeting.
+The full architecture is documented in the **Plugin document** (`Documentation/arcforge-hades-plugin.md`, §3) and the **MCP Hub design spec** (`docs/superpowers/specs/2026-05-13-mcp-hub-design.md`). Key properties:
 
-**Key property: order-independent startup.** The agent client can start before Unity. The bridge enters standby mode and connects as soon as the server appears. No restart required on either side.
+1. **Hub** — long-running Node.js HTTP server, one per machine. Maintains a registry of Unity instances, routes tool calls by project path matching, monitors instance health via heartbeats, buffers requests during domain reloads.
+2. **Launcher** — thin stdio process declared in the plugin's `.mcp.json`. Starts the Hub on demand, bridges stdio to HTTP. Zero npm dependencies.
+3. **Unity registration** — Unity instances register/deregister with the Hub via HTTP instead of writing discovery files. Heartbeat every 30s. Breadcrumb files for when the Hub is offline.
 
-**Alternatives considered:**
-- Direct HTTP URL in client config (rejected: port changes across Unity restarts; requires manual reconfiguration)
-- Project-local discovery file only (rejected: Claude Desktop doesn't support per-project configs; needs global config with per-project entries)
-- Shell script bridge (rejected: not cross-platform; Node.js is more portable across macOS/Windows/Linux)
+**Key properties:**
+- Order-independent startup (Claude Code before Unity: tools appear when Unity registers)
+- Directory-independent (Hub routes by path matching, not by where `.mcp.json` lives)
+- Resilient to compilation failures (Hub probes Unity's HTTP endpoint before marking stale)
+- Zero npm runtime dependencies (both Hub and Launcher use only Node.js built-ins)
+- Claude Desktop support via stable launcher copy at `~/.arcforge/hades-hub/launcher.js` with `hub-path.json` pointer to hub entry point
 
-**Runtime dependency:** Node.js is required for Claude Desktop support (the bridge script and `npx mcp-remote`). Claude Code's direct HTTP connection does not require Node.js, but the current implementation routes all clients through the bridge for consistency. This may be optimized in future to use Claude Code's native `type: http` config when available.
-
-**Maintenance:** The bridge script is embedded as a string in `MCPClientConfig.cs` and versioned (`BridgeVersion` constant). On server start, `EnsureBridgeScript()` checks the version marker and rewrites the script only if outdated.
+**Runtime dependency:** Node.js is required for MCP connectivity (both Claude Code and Claude Desktop route through the Hub).
 
 ### SO Event Channels for Inter-System Communication
 
@@ -1608,75 +1609,13 @@ This versioning model is essential because skill behavior often depends on speci
 
 ### 5.6 Distribution
 
-Skills, commands, and MCP server configuration are bundled in the Hades Unity Package repository — the same repository that contains the C# Editor Package. The repository serves as both a Unity Package (installable via UPM git URL) and a Claude Code plugin (installable via `/plugin install`).
+Skills, commands, and MCP connectivity are bundled in the Hades repository, which serves as both a Unity Package and a Claude Code plugin. The full plugin structure — directory layout, manifest, `.mcp.json`, tilde-suffix convention, installation flow, marketplace compliance, and versioning — is documented in the **Plugin document** (`Documentation/arcforge-hades-plugin.md`). That document is the authoritative source for plugin packaging and distribution.
 
-The plugin structure lives at the repository root:
-
-```
-arcforge/hades (repository root)
-├── .claude-plugin/
-│   └── plugin.json              # plugin metadata, skills path, MCP server config
-├── Skills~/                     # tilde-suffix: ignored by Unity, found by Claude Code
-│   ├── unity-architect/
-│   │   └── SKILL.md
-│   ├── component-design/
-│   │   └── SKILL.md
-│   └── ... (other skills)
-├── Commands~/                   # tilde-suffix: ignored by Unity
-│   ├── hades-status.md
-│   ├── hades-rebuild-graph.md
-│   └── ... (other commands)
-├── Editor/                      # Unity C# code (scanners, MCP server, etc.)
-├── Bridge~/                     # Node.js MCP bridge
-├── package.json                 # Unity Package manifest
-└── ...
-```
-
-The `Skills~/` and `Commands~/` directories use Unity's tilde-suffix convention — Unity's asset pipeline ignores them entirely, but they are tracked in git and accessible to Claude Code. The `plugin.json` declares the non-standard paths:
-
-```json
-{
-  "name": "arcforge-hades",
-  "version": "0.4.0",
-  "description": "Unity-aware AI infrastructure for Claude Code.",
-  "author": { "name": "ArcForge" },
-  "license": "MIT",
-  "skills": "Skills~/",
-  "mcpServers": {
-    "hades": {
-      "command": "node",
-      "args": ["Bridge~/dist/index.js"]
-    }
-  }
-}
-```
-
-Users install with two commands — one per ecosystem:
-
-1. **Unity Package Manager:** Add `https://github.com/TheArcForge/Hades.git` as a UPM git URL. This installs the Scanner, MCP server, Graph, Charon, and Asphodel. The setup wizard auto-registers the MCP server in the project's `.mcp.json`.
-
-2. **Claude Code:** Run `/plugin install hades@TheArcForge/Hades`. This installs skills and commands at user scope (shared across all projects). Claude Code also connects the bundled MCP server declared in `plugin.json`.
-
-The setup wizard (triggered on UPM install) detects whether the Hades plugin is already installed in Claude Code and prompts the user to run step 2 if not.
-
-#### 5.6.1 Anthropic marketplace
-
-The official Anthropic plugin marketplace at `platform.claude.com/plugins/submit` is an optional discoverability channel. Submission gives visibility in `/plugin discover` for all Claude Code users, but is not required for Hades to function. The marketplace listing would point users to the same GitHub repository for installation.
-
-Marketplace submission is deferred until Hades has accumulated sufficient usage signals: stable releases, documented use cases, and ideally community contributions. The submission process requires a public GitHub repository with a valid `.claude-plugin/plugin.json` — which Hades already has.
+**Summary:** Users install with two commands (UPM git URL for Unity, `/plugin install` for Claude Code). Skills and commands are installed at user scope, shared across all Unity projects. The MCP launcher starts automatically when the plugin is enabled.
 
 ### 5.7 Slash commands
 
-In addition to skills (which activate based on context matching), the plugin includes slash commands that the user can invoke explicitly:
-
-- `/hades:status` — shows current Hades state: graph version, last build time, trace count, memory file count.
-- `/hades:rebuild-graph` — triggers a full graph rebuild. Used when the user suspects the graph is stale.
-- `/hades:show-traces` — opens the Charon dashboard.
-- `/hades:validate-memory` — runs validation across all memory files.
-- `/hades:propose-memory <file> <content>` — explicit way to propose a memory update.
-- `/hades:export-traces` — exports traces in the configured format.
-
-These provide explicit user control over Hades behavior, complementing the implicit behavior driven by skill activation.
+The plugin includes six slash commands for explicit user control. See **Plugin document** §1.2 for the full catalog.
 
 
 ---
@@ -2597,8 +2536,8 @@ Charon continues operating during play mode — observability of agent actions d
 **Mitigation:**
 
 - Falls back to a random ephemeral port if the requested port is unavailable.
-- Selected port is written to the server registry at `~/.arcforge/servers/` so the bridge script discovers it automatically.
-- The bridge abstracts port changes entirely — clients never need to know the port.
+- Selected port is registered with the Hub via `POST /api/register`, so the Hub always knows the current port.
+- The Hub abstracts port changes entirely — clients never need to know Unity's port.
 
 #### 8.5.2 Port changes across Unity restarts
 
@@ -2608,11 +2547,11 @@ Charon continues operating during play mode — observability of agent actions d
 
 **Mitigation:**
 
-- Clients never connect directly to a port. They connect via the bridge script (`~/.arcforge/mcp-bridge.js`), which reads the server registry to discover the current port.
-- On server start, `MCPClientConfig.OnServerStart()` writes the new port to the server registry. The bridge detects the change on its next poll cycle (3-second interval).
-- On server stop, `MCPClientConfig.OnServerStop()` removes the registry entry. The bridge enters standby mode and waits for the server to reappear.
+- Clients never connect directly to Unity's port. They connect through the Launcher → Hub chain. The Hub maintains the current port for each registered Unity instance.
+- On server start, Unity registers with the Hub via `POST /api/register` with the new port. The Hub immediately routes subsequent requests to the updated port.
+- On server stop, Unity deregisters from the Hub. The Hub returns an appropriate error to clients until Unity re-registers.
 
-**Phase 1 lesson:** This was discovered during real-project testing when Unity recompiled mid-session, changed port from 57171 to 57846, and broke the manually-configured Claude Desktop connection. It motivated the entire auto-discovery system.
+**Phase 1 lesson:** This was discovered during real-project testing when Unity recompiled mid-session, changed port from 57171 to 57846, and broke the manually-configured Claude Desktop connection. It motivated the auto-discovery system, which evolved into the current Hub architecture.
 
 #### 8.5.3 Client starts before Unity
 
@@ -2622,9 +2561,9 @@ Charon continues operating during play mode — observability of agent actions d
 
 **Mitigation:**
 
-- The bridge script enters **standby mode** — it polls the server registry every 3 seconds, waiting for a server entry to appear. When Unity starts and writes the registry entry, the bridge auto-connects.
-- Claude Code and Claude Desktop do not need to be restarted. The bridge handles the wait internally.
-- **First-run limitation:** The bridge script and client configs are deployed by Unity's `OnServerStart()`. On the very first run, Unity must start first to bootstrap these files. After that, standby mode works for all subsequent sessions.
+- The Launcher starts the Hub on demand. The Hub has no registered Unity instances, so `tools/list` returns an empty list — no errors, just no tools available.
+- When Unity starts and registers with the Hub, the Hub sends a `tools/list_changed` notification. Claude Code refreshes its tool catalog — Hades tools appear automatically.
+- Claude Code and Claude Desktop do not need to be restarted. The Hub handles the wait transparently.
 
 #### 8.5.4 Claude Desktop vs Claude Code transport differences
 
@@ -2634,25 +2573,25 @@ Charon continues operating during play mode — observability of agent actions d
 
 **Mitigation:**
 
-- Both clients are configured to use the stdio bridge script (`~/.arcforge/mcp-bridge.js`), which translates stdio ↔ HTTP via `npx mcp-remote`.
-- The bridge connects to Hades's `/rpc` endpoint, which supports both Streamable HTTP (`POST /rpc` for JSON-RPC) and SSE (`GET /rpc` for event stream).
-- Node.js is a runtime dependency for this bridge. Without Node.js, Claude Desktop cannot connect to Hades.
+- Both clients connect through the Launcher (stdio process), which bridges to the Hub over HTTP. The Launcher is declared in the plugin's `.mcp.json` for Claude Code, and in `claude_desktop_config.json` for Claude Desktop (via stable copy at `~/.arcforge/hades-hub/launcher.js`).
+- The Launcher has zero npm dependencies — uses only Node.js built-ins. No `npx` or external tool required.
+- Node.js is a runtime dependency for MCP connectivity. Without Node.js, neither Claude Code nor Claude Desktop can connect to Hades.
 
-**Phase 1 lesson:** Claude Desktop's stdio-only constraint was discovered during integration testing. The initial assumption was that both clients could connect directly via HTTP URL — only Claude Code can. The bridge architecture was designed specifically to solve this gap.
+**Phase 1 lesson:** Claude Desktop's stdio-only constraint was discovered during integration testing. The initial assumption was that both clients could connect directly via HTTP URL — only Claude Code can. This led to the bridge architecture, which evolved into the current Hub model.
 
 #### 8.5.5 Streamable HTTP endpoint compatibility
 
-**What happens:** `mcp-remote` uses an "http-first" strategy — it POSTs to the given URL before falling back to SSE. If the POST endpoint returns 404, the fallback to SSE-only transport is unreliable and causes rapid connect/disconnect cycles.
+**What happens:** MCP clients may use different transport strategies (POST-first vs SSE-first) when connecting to HTTP endpoints.
 
-**Risk to Hades:** Bridge connects briefly then disconnects repeatedly, making the MCP server appear flaky.
+**Risk to Hades:** Incompatible transport negotiation causes connection failures or rapid connect/disconnect cycles.
 
 **Mitigation:**
 
-- The Hades MCP server handles both `POST /rpc` (JSON-RPC) and `GET /rpc` (SSE) on the same `/rpc` endpoint, conforming to the MCP Streamable HTTP specification.
-- The bridge script connects to `/rpc` (not `/sse`), so `mcp-remote`'s http-first strategy succeeds on the first attempt.
-- Legacy `/sse` endpoint is still supported for backward compatibility with older clients.
+- The Hades MCP server handles `POST /rpc` (JSON-RPC) on its endpoint, conforming to the MCP Streamable HTTP specification.
+- The Hub forwards requests as `POST` to Unity's `/rpc` endpoint — no transport negotiation ambiguity.
+- Direct HTTP clients can also connect to Unity's `/rpc` endpoint, which handles both `POST` (JSON-RPC) and `GET` (SSE).
 
-**Phase 1 lesson:** The initial bridge URL pointed to `/sse`. `mcp-remote` POSTed to `/sse` (404), fell back to SSE (connected), then disconnected immediately — repeating in a tight loop. Changing the URL to `/rpc` and ensuring both HTTP methods are handled on the same endpoint resolved the issue.
+**Phase 1 lesson:** The initial bridge used `mcp-remote` which POSTed to `/sse` (404), causing rapid connect/disconnect cycles. This was resolved by standardizing on `/rpc` for both methods, and later superseded entirely by the Hub architecture which eliminates `mcp-remote` from the stack.
 
 #### 8.5.6 Agent client doesn't speak MCP correctly
 

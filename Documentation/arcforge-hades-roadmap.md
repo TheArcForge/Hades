@@ -1098,9 +1098,57 @@ This is also the phase where Hades may optionally be submitted to the official A
 - Roslyn deep mode safeguards finalized (timeout, memory budget per Architecture §2.3.3)
 - Pre-aggregated rollup tables for dashboard if needed
 
+**UniClaude MCP tool migration (75 → Hades):**
+
+UniClaude shipped 75 MCP tools providing direct editor actions (scene manipulation, component management, prefab operations, etc.). Phase 0 migrated the *infrastructure* (MCPServer, MCPDispatcher, HttpTransport) but not the tool implementations. Hades currently has 21 tools (Graph, Charon, Asphodel, Core). The remaining ~54 editor-action tools must be migrated to restore full parity.
+
+Source: `/Users/mike/Projects/ArcForge/Packages/com.arcforge.uniclaude/Editor/MCP/Tools/`
+
+Migration is mechanical — same `[MCPTool]`/`[MCPToolParam]` attribute pattern, same `MCPToolResult` return type. Each tool file copies to `Editor/MCP/Tools/`, namespace changes to `ArcForge.Hades.Editor.MCP.Tools`, compiles against Hades's existing infrastructure.
+
+**Tier 1 — Direct port (48 tools, 10 files).** Copy, update namespace, verify compilation. No design changes needed:
+
+| Category | Tools | Source file |
+|----------|-------|-------------|
+| Scene Hierarchy (7) | `scene_get_hierarchy`, `scene_create_gameobject`, `scene_create_primitive`, `scene_delete_gameobject`, `scene_reparent_gameobject`, `scene_rename_gameobject`, `scene_setup` | SceneTools.cs |
+| Scene Management (6) | `scene_save`, `scene_create`, `scene_open`, `scene_duplicate`, `scene_list_build`, `scene_set_build` | SceneManagementTools.cs |
+| Inspector (2) | `inspector_select`, `inspector_inspect` | InspectorTools.cs |
+| Component (8) | `component_add`, `component_find`, `component_remove`, `component_get_all`, `component_get_property`, `component_set_property`, `component_set_properties`, `component_list_properties` | ComponentTools.cs |
+| Prefab (8) | `prefab_create`, `prefab_instantiate`, `prefab_apply_overrides`, `prefab_get_contents`, `prefab_edit_property`, `prefab_open_editing`, `prefab_save_editing`, `prefab_create_variant` | PrefabTools.cs |
+| Material (6) | `material_create`, `material_set_property`, `material_get_properties`, `material_assign`, `material_duplicate`, `material_swap_shader` | MaterialTools.cs |
+| Tag & Layer (5) | `tag_create`, `tag_delete`, `tag_list`, `layer_create`, `layer_list` | TagLayerTools.cs |
+| Animation (5) | `animation_assign_controller`, `animation_assign_clip`, `animation_get_controller`, `animation_create_controller`, `animation_edit_controller` | AnimationTools.cs |
+| Reference (3) | `reference_set`, `reference_get`, `reference_find_unset` | ReferenceTools.cs |
+
+**Tier 2 — Port with adaptation (12 tools, 4 files).** Need minor adjustments for Hades context:
+
+| Category | Tools | Adaptation needed |
+|----------|-------|-------------------|
+| Event (4) | `event_add_listener`, `event_remove_listener`, `event_list_listeners`, `event_find_all` | EventTools.cs — port as-is, verify UnityEventTools API compatibility with Unity 6 |
+| Asset (4) | `asset_get_info`, `asset_find`, `asset_move`, `asset_import` | AssetTools.cs — port as-is, consider enriching `asset_get_info` with Graph data |
+| Asset Import (3) | `asset_get_import_settings`, `asset_set_import_settings`, `asset_set_clip_import_settings` | AssetImportTools.cs — port as-is |
+| Domain Reload (3) | `BeginScriptEditing`, `EndScriptEditing`, `project_recompile_scripts` | DomainReloadTools.cs — adapt to Hades's `IDomainReloadStrategy` (ManualReloadStrategy already exists) |
+
+**Tier 3 — Port selectively (9 tools, 2 files).** Some overlap with Claude Code or Hades capabilities:
+
+| Category | Tools | Decision |
+|----------|-------|----------|
+| File (6) | `file_read`, `file_write`, `file_create_script`, `file_modify_script`, `file_delete`, `file_find` | **Port `file_create_script` only** — it generates Unity-specific templates (MonoBehaviour, ScriptableObject) with correct namespaces and AssetDatabase.Refresh. The other 5 are redundant with Claude Code's native file tools. For Claude Desktop users (no native file tools), port all 6. |
+| Project (4) | `project_run_tests`, `project_get_console_log`, `project_get_settings`, `project_refresh_assets` | **Port all 4** — these are Unity Editor actions that Claude Code cannot do natively. `project_run_tests` is especially valuable. `project_get_console_log` requires porting the console log ring buffer from UniClaude. |
+
+**Tier 4 — Skip (1 tool):**
+
+| Category | Tools | Reason |
+|----------|-------|--------|
+| Project Search (1) | `project_search` | Superseded by Hades Graph tools (`query_graph`, `search_by_name`). Graph provides richer results with dependency information. |
+
+**Post-migration: reconnect workflow skills.** Phase 4 rewrote workflow skills (scene-authoring, prefab-workflow, animation-workflow) to teach C# Editor scripting patterns because the editor-action tools didn't exist in Hades. After migration, update these skills to reference the tools as an *alternative* approach — the agent can choose between direct tool calls and C# scripting based on context. Skills remain pattern-focused but now mention tool availability.
+
+**Testing approach:** Each migrated tool file gets a corresponding NUnit test that verifies the tool is discoverable by `MCPDispatcher` and returns a valid `MCPToolResult`. Integration tests use the same pattern as `MCPServerIntegrationTests.cs` — start the server, call tools via HTTP, verify response shape. Editor-action tools (scene manipulation, prefab creation) need a test scene fixture.
+
 **Deferred from Phase 4:**
 - Skill/MCP version compatibility range in `plugin.json` (tool version negotiation)
-- Bridge-side compatibility check warning on version mismatch
+- Hub-side compatibility check warning on version mismatch
 
 **Edge cases:**
 - All §8 failure modes have explicit handling
@@ -1341,31 +1389,9 @@ These are internal version tags during phases 0-4. The v1.0.0 tag is the first p
 
 ### 9.5 Anthropic plugin marketplace submission
 
-Hades is fully functional without a marketplace listing — users install directly from GitHub via `/plugin install hades@TheArcForge/Hades`. The Anthropic marketplace adds **discoverability** (appearing in `/plugin search` results), not delivery.
+Marketplace submission is deferred until after Phase 5 (v1.0). The full marketplace strategy, compliance checklist, and standalone plugin repo considerations are documented in the **Plugin document** (`Documentation/arcforge-hades-plugin.md`, §5). That document is the authoritative source.
 
-**When to submit:** After Phase 5, when Hades is production-ready (v1.0). Submitting earlier risks rejection on polish issues and wastes review cycles.
-
-**What's required (based on current marketplace guidelines):**
-- Valid `plugin.json` at repo root with `name`, `version`, `description`, `skills` path, and `mcpServers`
-- Public GitHub repository with working README and setup instructions
-- MIT or compatible open-source license
-- Working MCP server declaration (marketplace may verify the plugin installs and connects)
-- Accurate skill count and descriptions
-
-**What Hades already provides:**
-- `plugin.json` with `"skills": "Skills~/"` and inline `mcpServers`
-- Public repo at `TheArcForge/Hades` with MIT license
-- 22 skills with precise activation descriptions (11 migrated from UniClaude + 11 new domain skills)
-- 6 slash commands (`status`, `rebuild-graph`, `show-traces`, `validate-memory`, `show-proposals`, `export-traces`)
-
-**Possible requirement: standalone plugin repo.** Anthropic's marketplace may expect a repo that contains only plugin files, not a full Unity Package with C# source, DLLs, and Editor tooling. If so, create a lightweight `arcforge/hades-plugin` repo that mirrors the plugin-relevant subset (`plugin.json`, `Skills~/`, `Commands~/`, `Bridge~/`, README) with CI to sync from the main repo on release tags. This repo would be the marketplace submission target. Only create this if marketplace guidelines require it — until then, the main repo serves both roles.
-
-**What marketplace listing does NOT change:**
-- Install flow remains two steps (UPM + `/plugin install`)
-- MCP server still runs inside Unity Editor
-- Skills still require the Unity Package to be useful (Graph/Asphodel tools must be reachable)
-
-**Risk:** Marketplace guidelines may evolve before Hades reaches v1.0. Don't over-invest in compliance before submitting — prepare the materials, submit, and iterate on reviewer feedback.
+**Summary:** Hades is fully functional without a marketplace listing. The marketplace adds discoverability only. Current plugin structure passes all known marketplace compliance requirements (no fixed ports, no orphan processes, no config file manipulation).
 
 ### 9.6 The product after Phase 5
 
@@ -1391,32 +1417,29 @@ Issues discovered during development that need resolution. Tracked here for visi
 
 **Discovered:** Phase 5a development (2026-05-13), supersedes the Phase 3 "multi-instance discovery" hypothesis
 **Severity:** High — makes MCP server invisible to Claude Code until manual intervention or successful recompile
+**Status:** Resolved by MCP Hub architecture
 **Ref:** `Editor/MCP/MCPServer.cs`, `Editor/Core/MCPClientConfig.cs`
 
-The server registry system (`~/.arcforge/servers/{name}-{hash}.json`) works correctly — per-project hashed filenames avoid collisions. The original "discovery file collision" hypothesis from Phase 3 was wrong.
+The actual problem: `MCPServer.Stop()` calls `MCPClientConfig.OnServerStop()` which deletes the server entry file. During domain reload, if compilation fails, `MCPServer`'s `[InitializeOnLoad]` static constructor never fires to recreate the entry. The bridge polls indefinitely, finding nothing — even though the HTTP listener may still be alive on a background thread.
 
-The actual problem: `MCPServer.Stop()` calls `MCPClientConfig.OnServerStop()` which deletes the server entry file. When the previous Unity project closes (or domain reloads), the entry is removed. On restart, `MCPServer`'s `[InitializeOnLoad]` static constructor fires and re-creates the entry — but only if compilation succeeds. If any Hades assembly has compilation errors, the static constructor never runs, and the entry stays deleted. The MCP HTTP listener may still be running from before the reload, but the bridge can't find it.
-
-Observed sequence: (1) edit Hades C# source introducing a compilation error, (2) Unity attempts domain reload, (3) compilation fails, (4) `MCPServer` static constructor never fires, (5) server entry file remains deleted, (6) bridge polls `~/.arcforge/servers/` indefinitely, finding nothing.
-
-**Proposed fix:** Don't delete the server entry in `OnServerStop()` — only delete it during `EditorApplication.quitting`. The bridge already validates entries by checking PID liveness (`process.kill(pid, 0)`) and cleans stale entries automatically. This makes the entry survive domain reloads and temporary compilation failures. The entry file becomes a "last known good" record rather than a precise liveness signal.
+**Resolution:** The MCP Hub architecture (`Documentation/arcforge-hades-plugin.md`, §3) eliminates file-based discovery entirely. Unity registers with the Hub via HTTP. The Hub's heartbeat monitor probes Unity's HTTP endpoint directly before marking an instance stale, keeping the connection alive even during compilation failures. See also the MCP Hub design spec (`docs/superpowers/specs/2026-05-13-mcp-hub-design.md`).
 
 ### MCP config scoped to Unity project, not package source
 
 **Discovered:** Phase 5a development (2026-05-13)
 **Severity:** Medium — blocks development workflow when Claude Code is started from the package source directory
+**Status:** Resolved by MCP Hub architecture
 **Ref:** `Editor/Core/MCPClientConfig.cs:WriteClaudeCodeConfig()`
 
-`MCPClientConfig.WriteClaudeCodeConfig()` writes `.mcp.json` to `PathSandbox.ProjectRoot`, which resolves to the Unity project directory (e.g., `/Users/mike/Documents/alpha`). When developing the Hades package from its source directory (e.g., `/Users/mike/Projects/Hades`) via a `file:` reference in the Unity project's `manifest.json`, Claude Code sessions started from the package source never see the `.mcp.json` and cannot connect to the MCP server.
+`MCPClientConfig.WriteClaudeCodeConfig()` writes `.mcp.json` to `PathSandbox.ProjectRoot` (the Unity project directory). Claude Code sessions started from the package source directory never see the config.
 
-This also explains the Phase 3 "only the first project's connection is visible" observation — it wasn't a multi-instance issue, but a path-scoping issue. Claude Code only discovers MCP servers configured in the working directory's `.mcp.json` or in `~/.claude/settings.json`.
-
-**Possible fixes:** (A) Detect `file:` package references in the Unity project's manifest and write `.mcp.json` into those source directories too. (B) Write a global MCP config entry to `~/.claude/settings.json` so the bridge is discoverable from any directory. (C) Document that Claude Code must be started from the Unity project directory, not the package source.
+**Resolution:** The MCP Hub architecture makes connectivity directory-independent. The plugin's `.mcp.json` is discovered by Claude Code's plugin system (not by working directory). The Hub routes tool calls to the correct Unity instance via project path matching, which includes matching the CWD as a child of a registered project or via `manifest.json` `file:` references. See **Plugin document** §3.5.
 
 ### Validation warnings duplicate on repeated runs
 
 **Discovered:** Phase 3 happy path validation (2026-05-12)
 **Severity:** Low — cosmetic, does not affect validation correctness
+**Status:** Open
 **Ref:** `Editor/Asphodel/MemoryValidator.cs`
 
 When `validate_memory` is called multiple times on a file with failing rules (or when the FileWatcher re-triggers validation after the validator itself writes back to the file), identical `<!-- HADES VALIDATION WARNING -->` HTML comment blocks are appended each time. Observed: a single failing rule produced 3 duplicate warning blocks after 3 validation passes.
@@ -1427,15 +1450,12 @@ The warning-writing logic in `MemoryValidator` needs to be idempotent — either
 
 **Discovered:** Phase 5a development (2026-05-13)
 **Severity:** Medium — MCP server invisible to Claude Code until user relaunches from correct directory
+**Status:** Resolved by MCP Hub architecture
 **Ref:** `Editor/Core/MCPClientConfig.cs:WriteClaudeCodeConfig()`
 
-When a Unity project lives in a subdirectory of the git repo (e.g., `MyRepo/MyUnityProject/`), `MCPClientConfig.WriteClaudeCodeConfig()` writes `.mcp.json` to the Unity project directory. Claude Code discovers MCP servers by looking for `.mcp.json` in the working directory where it was launched. If the user launches Claude Code from the repo root (the natural place to open a terminal), the `.mcp.json` one level down is never found and the Hades MCP server is invisible.
+When a Unity project lives in a subdirectory of the git repo (e.g., `MyRepo/MyUnityProject/`), `.mcp.json` written to the Unity project directory is not found by Claude Code launched from the repo root.
 
-This is a sibling of the "MCP config scoped to Unity project, not package source" issue — same root cause (`.mcp.json` written to `PathSandbox.ProjectRoot` only), different manifestation (consumer project with nested Unity directory vs. package development from source directory).
-
-Observed sequence: (1) repo at `/Users/mike/Projects/aurora-borealis`, Unity project at `aurora-borealis/AuroraBorealis/`, (2) `.mcp.json` written to `AuroraBorealis/.mcp.json`, (3) user opens Claude Code from repo root, (4) Claude Code finds no `.mcp.json` in working directory, (5) Hades MCP tools absent from session.
-
-**Possible fixes:** (A) Walk up from `PathSandbox.ProjectRoot` looking for a `.git` directory; if found, write `.mcp.json` there too. (B) Write a global MCP config entry to `~/.claude/settings.json` so the bridge is discoverable from any directory. (C) Document that Claude Code must be started from the Unity project directory. Option (A) handles the common case without global side effects. Option (B) solves both this issue and the package-source issue but risks config pollution across unrelated projects.
+**Resolution:** Same as "MCP config scoped to Unity project" above — the Hub's project path matching resolves this. The Hub matches the CWD as a parent of a registered project path (the "parent match" strategy). See **Plugin document** §3.5.
 
 ---
 
