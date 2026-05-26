@@ -25,17 +25,21 @@ The document is organized as a hybrid of layer-by-layer detail and cross-cutting
 
 ### 1.1 The composition
 
-Hades is composed of three runtime processes and one passive artifact set:
+Hades is composed of five runtime processes and one passive artifact set:
 
-1. **The Unity Editor process**, augmented by the Hades Unity Package. The Unity Package adds C# code that runs inside the editor and is responsible for: building and maintaining the project knowledge graph; emitting observability events; handling memory file I/O; and serving as the in-process MCP server that exposes Hades capabilities.
+1. **The Unity Editor process**, augmented by the Hades Unity Package. The Unity Package adds C# code that runs inside the editor and is responsible for: building and maintaining the project knowledge graph; emitting observability events; handling memory file I/O; and serving as the in-process MCP server that exposes Hades capabilities. The MCP server registers with the Hub on startup.
 
-2. **The agent client process**. This is Claude Code, Cursor, Cline, Continue, or another MCP-compatible coding agent. Hades does not provide this process; it consumes whichever agent the user already runs. The agent client is a separate process from Unity and connects to the Hades MCP server over HTTP/SSE on localhost.
+2. **The MCP Hub process** (Node.js). A long-running HTTP server, one per machine, shared across all Claude Code sessions and Unity instances. Maintains a registry of connected Unity instances, routes tool calls by matching the Claude Code session's working directory to the correct Unity project, and monitors instance health via heartbeats. Auto-exits after 60 seconds of no connected launchers or Unity instances. Source lives in `Bridge~/hub/`. Zero npm runtime dependencies.
 
-3. **The Charon dashboard process**. A small Node.js web server that reads the trace database and renders a local web UI. Started and stopped on demand by the user. Optional in the strict sense; without it, traces still accumulate, but they are not human-inspectable.
+3. **The MCP Launcher process** (Node.js). A thin stdio process spawned by Claude Code as declared in `.mcp.json`. Ensures the Hub is running (spawns it if not), registers as a connected session, and bridges stdio ↔ HTTP. One per Claude Code session; exits when the session ends. Source lives in `Bridge~/launcher/`. Zero npm runtime dependencies.
 
-4. **The artifact set**. A collection of files within the Unity project's directory that persist Hades state across sessions. These include the graph database (`.arcforge/graph.db`), the trace database (`.arcforge/traces.db`), and the memory directory (`.arcforge/memory/`). Some are gitignored by default (graph and traces, since they are machine-specific or potentially noisy), others are git-tracked (Tier 1 memory, since it is project knowledge meant to travel with the project).
+4. **The agent client process**. This is Claude Code, Cursor, Cline, Continue, or another MCP-compatible coding agent. Hades does not provide this process; it consumes whichever agent the user already runs. The agent client connects to Hades through the Launcher's stdio interface.
 
-There is no fourth runtime process for an "ArcForge backend." Hades is local-first by design. There are no servers Anthropic or ArcForge operate on behalf of the user. There is no telemetry transmitted to a vendor. The architecture is entirely client-side.
+5. **The Charon dashboard process** (Node.js). A small web server that reads the trace database and renders a local web UI. Started and stopped on demand by the user via Unity menu. Optional; without it, traces still accumulate but are not human-inspectable.
+
+6. **The artifact set**. A collection of files within the Unity project's directory that persist Hades state across sessions. These include the graph database (`.arcforge/graph.db`), the trace database (`.arcforge/traces.db`), and the memory directory (`.arcforge/memory/`). Some are gitignored by default (graph and traces, since they are machine-specific or potentially noisy), others are git-tracked (Tier 1 memory, since it is project knowledge meant to travel with the project).
+
+There is no "ArcForge backend." Hades is local-first by design. There are no servers Anthropic or ArcForge operate on behalf of the user. There is no telemetry transmitted to a vendor. The architecture is entirely client-side. Node.js is a runtime dependency for MCP connectivity (Hub and Launcher).
 
 ### 1.2 The system as a layered model
 
@@ -54,13 +58,24 @@ Conceptually, the system stacks like this from bottom to top:
 │  │ Scanners → build & update Graph                        │ │
 │  │ Memory File I/O → read & write Asphodel                │ │
 │  │ Charon Emitter → write trace events                    │ │
-│  │ MCP Server (HTTP/SSE on localhost) ←── tools exposed   │ │
+│  │ MCP Server (HTTP on localhost) → registers with Hub    │ │
 │  └────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
-                              │
-                    HTTP/SSE on localhost
-                              │
-                              ▼
+              │ HTTP (register, heartbeat, tool responses)
+              ▼
+┌─────────────────────────────────────────────────────────────┐
+│            MCP Hub (Node.js, long-running, one per machine) │
+│  Registry of Unity instances ← routes by project path       │
+│  Heartbeat monitoring ← buffers during domain reloads       │
+└─────────────────────────────────────────────────────────────┘
+              │ HTTP (tool calls, tools/list)
+              ▼
+┌─────────────────────────────────────────────────────────────┐
+│      MCP Launcher (Node.js, stdio, one per CC session)      │
+│         Starts Hub if needed ← bridges stdio ↔ HTTP         │
+└─────────────────────────────────────────────────────────────┘
+              │ stdio (JSON-RPC)
+              ▼
 ┌─────────────────────────────────────────────────────────────┐
 │             Agent Client (Claude Code, etc.)                │
 │         Loads Hades plugin: skills + MCP config             │
@@ -68,15 +83,16 @@ Conceptually, the system stacks like this from bottom to top:
 └─────────────────────────────────────────────────────────────┘
 
                     ────── separately ──────
-                              │
-                              ▼
+
 ┌─────────────────────────────────────────────────────────────┐
-│             Charon Dashboard (Node.js, on demand)           │
-│       Reads trace database → renders local web UI           │
+│       Charon Dashboard (Node.js, on demand, per project)    │
+│   Reads trace database → renders local web UI on localhost  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-The Unity Package is the heart of the system. It owns the data, it owns the introspection, it owns the integration with the Unity Editor's lifecycle. The agent client is the consumer of capabilities. The Charon dashboard is a side-channel viewer for accumulated data.
+The Unity Package is the heart of the system. It owns the data, the introspection, and the integration with the Unity Editor's lifecycle. The Hub is the stable routing layer that makes connectivity resilient across Unity restarts, domain reloads, and directory changes. The Launcher is the ephemeral bridge that Claude Code spawns. The agent client is the consumer of capabilities. The Charon dashboard is a side-channel viewer for accumulated trace data.
+
+The full MCP Hub architecture is documented in the **Plugin document** (`Documentation/arcforge-hades-plugin.md`, §3).
 
 The data flow is asymmetric. Most reads come from the agent client into the Unity Package via MCP. Most writes happen inside the Unity Package as it reacts to project changes. Memory is the exception: the agent can propose memory updates, but those are written through the Unity Package after explicit acceptance.
 
@@ -1522,18 +1538,22 @@ These activate for procedural tasks:
 
 #### 5.2.3 Domain skills (planned expansion)
 
-The new skills the Vision identified as gaps in UniClaude:
+The domain skills covering the gaps UniClaude lacked (implemented in Phase 4):
 
 - `unity-ui` — UI Toolkit, uGUI, responsive layouts, dialog systems.
 - `unity-networking` — Netcode for GameObjects, Mirror, Fishnet decision frameworks.
 - `unity-ai-behavior` — state machines, behavior trees, GOAP, NavMesh.
 - `unity-audio` — audio manager patterns, mixers, spatial audio.
 - `unity-input` — new Input System, action maps, multi-device.
-- `unity-shaders` — Shader Graph, VFX Graph, particle systems, render features.
+- `unity-shaders-urp` — URP-specific Shader Graph, render features.
+- `unity-shaders-hdrp` — HDRP-specific Shader Graph, custom passes.
+- `unity-vfx` — VFX Graph, particle systems.
 - `unity-addressables` — Addressables vs Resources vs AssetBundles, async loading.
-- `unity-recipes` — common gameplay patterns: health, inventory, save, spawn waves.
 - `unity-ecs` — when to use ECS, Burst, hybrid approaches.
 - `unity-testing` — EditMode vs PlayMode tests, what to test, mocking.
+
+**Deferred to Phase 8+ (recipe skills — added based on user demand):**
+- `unity-recipes` — common gameplay patterns: health, inventory, save, spawn waves.
 
 #### 5.2.4 Review skills
 
@@ -1774,14 +1794,13 @@ Hades has user-configurable options. These live in `.arcforge/config.yaml`:
 ```yaml
 graph:
   scanner_versions: auto    # or pin to specific versions
-  deep_script_analysis: false  # enable Roslyn-based call graphs
+  deep_script_analysis: false  # enable Roslyn-based call graphs (Phase 8+)
   rebuild_threshold_ms: 30000  # max acceptable rebuild time before falling back
 
 charon:
   retention_days: 30
   redact_paths: false
   redact_user_input: false  # whether to scrub user prompts from traces
-  dashboard_port: 7878
 
 asphodel:
   tier2_enabled: true
@@ -1791,9 +1810,10 @@ asphodel:
   validation_query_budget_ms: 1000
 
 mcp:
-  port_range: [7780, 7790]
   request_timeout_ms: 30000
 ```
+
+**Removed fields:** `charon.dashboard_port` was removed when the dashboard switched to OS-assigned ephemeral ports (Phase 2 ADR). `mcp.port_range` was removed when the MCP Hub architecture replaced direct port management (Phase 5a). Both port concerns are now handled automatically — the OS assigns ports and the Hub routes connections.
 
 This file is git-tracked. Teams can share configuration. Per-developer overrides go to `.arcforge/config.local.yaml`, which is gitignored.
 
@@ -2686,7 +2706,7 @@ When something goes wrong, the user should have clear paths forward. Documented 
 | "Dashboard won't load" | Trace database large | Run pruning; check disk space |
 | "Memory file won't save" | Frontmatter syntax error | Check parser warnings in dashboard |
 | "Agent ignores my memory entries" | Frontmatter not loaded | Restart Unity, check parse logs |
-| "Random port keeps changing" | PID validation failing | Check `.arcforge/server.json` PID alive |
+| "MCP tools disappear after Unity restart" | Hub lost Unity registration | Check `~/.arcforge/hades-hub/hub.json` PID is alive; Unity re-registers on next heartbeat. If Hub PID is dead, delete `hub.json` and restart Claude Code session |
 | "Database integrity error" | Corruption | Backup `.arcforge/`, then rebuild |
 
 These recovery procedures are part of user documentation, not buried in this technical document.

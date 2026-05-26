@@ -1,6 +1,6 @@
 {
   "name": "com.arcforge.hades",
-  "version": "0.1.0",
+  "version": "0.9.0",
   "displayName": "Hades",
   "description": "Unity-aware AI infrastructure: project knowledge graph, observability, memory, and skills for Claude Code.",
   "unity": "6000.0",

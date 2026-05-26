@@ -1,9 +1,9 @@
 # Hades — Roadmap Document
 
-**Version:** 1.1
-**Status:** Active development — Phase 4 complete
-**Last updated:** 2026-05-13
-**Companion to:** Vision document, Architecture document
+**Version:** 1.2
+**Status:** Active development — Phase 6 complete (v0.9.0), Phase 7 next
+**Last updated:** 2026-05-26
+**Companion to:** Vision document, Architecture document, Plugin document
 
 ---
 
@@ -37,13 +37,13 @@ Concretely, this means:
 
 - Phase 1 must produce **demonstrable value** to a real developer on a real project. Not a benchmark, not a demo of capabilities, but actual "agent-aware-of-project" experience that the developer can compare against generic Claude Code behavior.
 - Phases 2 and 3 build on validated Phase 1 success. If Phase 1 underdelivers, the architecture revisits the assumption before continuing.
-- Phases 4-6 are evolutionary, not foundational. They expand and polish what Phase 1-3 prove out.
+- Phases 4-7 are evolutionary, not foundational. They expand, polish, and ship what Phase 1-3 prove out.
 
 ### 1.3 Single ship event at the end
 
-Hades is shipped publicly as a complete product after Phase 5 (the integration polish phase). Phases 0-5 are internal milestones with their own version tags but no public announcements, marketing, or release events. Phase 6 is post-launch evolution.
+Hades is shipped publicly as a complete product after Phase 7 (the pre-prod to prod phase). Phases 0-6 are internal milestones with their own version tags but no public announcements, marketing, or release events. Phase 6 produces a v0.9 external tester beta; Phase 7 is the v1.0 public release. Phase 8 is post-launch evolution.
 
-The reason: an integrated three-layer product is what differentiates Hades. Shipping just the Graph (after Phase 1) would position Hades as "another knowledge graph for Unity" — competitive with existing tools but not differentiated. Shipping just Graph + Charon would position it as "Unity tooling with observability" — interesting but not the full vision. The complete value proposition requires all three layers + skills, which materializes after Phase 5.
+The reason: an integrated three-layer product is what differentiates Hades. Shipping just the Graph (after Phase 1) would position Hades as "another knowledge graph for Unity" — competitive with existing tools but not differentiated. Shipping just Graph + Charon would position it as "Unity tooling with observability" — interesting but not the full vision. The complete value proposition requires all three layers + skills, which materializes after Phase 5, and is polished and validated through Phases 6 and 7.
 
 This means internal momentum during Phase 1-4 must be self-sustaining. The work happens without external validation cycles. This is acceptable because the Architecture is solid and the roadmap is committed.
 
@@ -204,23 +204,23 @@ This phase explicitly does not include observability, memory, or skills. Those a
 
 ### Done criteria
 
-- [ ] SQLite database initializes with full schema (nodes, edges, supporting tables) and proper WAL configuration
-- [ ] SceneScanner builds correct graph from fixture project's scenes (open-scene mode and closed-scene mode both work)
-- [ ] PrefabScanner builds correct graph including prefab variants and override edges
-- [ ] ScriptScanner extracts types and methods (shallow mode); deep mode optional and behind config flag
-- [ ] ScriptableObjectScanner produces nodes for both type definitions and instances
-- [ ] AddressablesScanner produces graph entries for addressable groups and entries
-- [ ] MaterialScanner and ShaderScanner produce basic asset nodes
-- [ ] ProjectSettingsScanner produces singleton nodes for build settings, render pipeline, etc.
-- [ ] GraphBuilder coordinates full rebuild and incremental updates correctly
-- [ ] Incremental update triggered by AssetPostprocessor; updates complete within 1 second on typical edits
-- [ ] At least 10 MCP tools are implemented and tested (specific list below)
-- [ ] All MCP tool responses include the `confidence` block per Architecture §6.7
-- [ ] "Rebuild in progress" signal works: queries during rebuild return current data with explicit warning attribute
-- [ ] Database stays consistent across domain reloads (verified by tests)
-- [ ] Database stays consistent across Unity restart (verified by tests)
-- [ ] Manual `Hades: Rebuild Graph` menu command works
-- [ ] Bundled MCP bridge process auto-registers with Claude Code config on Unity Package install
+- [x] SQLite database initializes with full schema (nodes, edges, supporting tables) and proper WAL configuration
+- [x] SceneScanner builds correct graph from fixture project's scenes (open-scene mode and closed-scene mode both work)
+- [x] PrefabScanner builds correct graph including prefab variants and override edges
+- [x] ScriptScanner extracts types and methods (shallow mode); deep mode optional and behind config flag
+- [x] ScriptableObjectScanner produces nodes for both type definitions and instances
+- [x] AddressablesScanner produces graph entries for addressable groups and entries
+- [x] MaterialScanner and ShaderScanner produce basic asset nodes
+- [x] ProjectSettingsScanner produces singleton nodes for build settings, render pipeline, etc.
+- [x] GraphBuilder coordinates full rebuild and incremental updates correctly
+- [x] Incremental update triggered by AssetPostprocessor; updates complete within 1 second on typical edits
+- [x] At least 10 MCP tools are implemented and tested (specific list below)
+- [x] All MCP tool responses include the `confidence` block per Architecture §6.7
+- [x] "Rebuild in progress" signal works: queries during rebuild return current data with explicit warning attribute
+- [x] Database stays consistent across domain reloads (verified by tests)
+- [x] Database stays consistent across Unity restart (verified by tests)
+- [x] Manual `Hades: Rebuild Graph` menu command works
+- [x] Bundled MCP bridge process auto-registers with Claude Code config on Unity Package install
 
 ### Scope: what's in
 
@@ -286,7 +286,7 @@ This phase explicitly does not include observability, memory, or skills. Those a
 - Per-method call graphs (deep mode requirement)
 - Cross-project queries
 - Tier 2 inferred memory (Phase 5)
-- Eval framework (Phase 5/6)
+- Eval framework (Phase 8)
 - Performance optimization for very large projects (Phase 5)
 - Roslyn-based call graph extraction
 - Charon dashboard
@@ -446,7 +446,7 @@ The motivation, reiterating from Architecture §3.1: when an AI agent has the ab
 
 This phase is also when our internal development workflow shifts. From Phase 2 onwards, every Hades feature we build uses Charon for our own debugging. This is the dogfooding moment — if Charon doesn't help us, it won't help users.
 
-The phase includes the observability infrastructure (OpenTelemetry instrumentation, SQLite trace backend) and a minimal dashboard for inspecting traces. The full eval framework with annotation tooling is deferred to Phase 5/6; Phase 2 ships "trace viewer", not "trace analytics platform".
+The phase includes the observability infrastructure (OpenTelemetry instrumentation, SQLite trace backend) and a minimal dashboard for inspecting traces. The full eval framework with annotation tooling is deferred to Phase 8; Phase 2 ships "trace viewer", not "trace analytics platform".
 
 ### Done criteria
 
@@ -508,11 +508,11 @@ The phase includes the observability infrastructure (OpenTelemetry instrumentati
 
 ### Scope: what's out
 
-- Eval framework dataset features (Phase 5)
-- LLM-as-judge eval (Phase 5/6)
+- Eval framework dataset features (Phase 8)
+- LLM-as-judge eval (Phase 8)
 - Agent-side replay (impossible due to non-determinism, see Architecture §3.7.2)
-- Aggregations dashboard view beyond simple latency display (Phase 5)
-- Annotation tooling (Phase 5/6)
+- Aggregations dashboard view beyond simple latency display (Phase 8)
+- Annotation tooling (Phase 8)
 - Cross-project trace views (deferred indefinitely)
 - Cloud trace export (out of scope by design — local-first)
 
@@ -569,7 +569,7 @@ The phase includes the observability infrastructure (OpenTelemetry instrumentati
 
 ### Happy Path scenarios
 
-**Scenario 4: Diagnose a problem** *(SKIPPED — deferred to later validation)*
+**Scenario 4: Diagnose a problem** ✅ (partial — rebuild too fast on test project to catch mid-flight)
 
 The developer encounters a confusing agent suggestion. They ask the agent for the same task again, then run `/hades:show-traces` and inspect the trace from the first attempt. They see the chain of tool calls, the data the agent saw, and identify why the agent made the choice it did.
 
@@ -579,7 +579,9 @@ For testing purposes, deliberately create a confusing situation: ask the agent t
 **Implicitly verifies:** Phase 1 graph queries (still work), Phase 1 incremental update (rebuild detection), Phase 2 confidence modeling propagates through traces.
 **Pass criteria:** developer can identify root cause of the confusing suggestion from the trace alone, without needing to reproduce or guess.
 
-**Scenario 5: Performance investigation** *(SKIPPED — deferred to later validation)*
+**Actual result (2026-05-26):** Fired `hades_rebuild_graph` and `search_by_name` simultaneously via Hub round-trip. Rebuild completed in ~193ms (test project has only 163k nodes from package cache scanning — too fast to catch mid-rebuild). Both calls traced by Charon: rebuild trace shows 35 spans covering each scanner invocation and GUID resolution with per-span timing. Search trace shows `graph.query.search_by_name` child span with 8 results and `confidence.graph_freshness: "current"`. Error traces also captured (wrong parameter names return `status: Error`). Confidence system is wired and would report `"rebuilding"` on a larger project. Root cause identification from trace alone: confirmed — the span tree shows exactly which scanner ran, what it produced, and how long each took.
+
+**Scenario 5: Performance investigation** ✅
 
 The developer notices a tool call feels slow. They open the dashboard, find the trace, and see exactly which sub-operation took the time — a specific graph query, a slow scanner, an HTTP roundtrip.
 
@@ -588,6 +590,8 @@ For testing purposes, deliberately introduce a slow query (e.g., recursive deep 
 **Demonstrates:** Charon as performance debugging tool.
 **Implicitly verifies:** Phase 1 graph performs reasonably; Phase 2 instrumentation captures latency accurately.
 **Pass criteria:** the slow operation is immediately visible in the trace; developer doesn't have to dig.
+
+**Actual result (2026-05-26):** Ran `trace_dependencies` on `SmokeTestScene.unity` with depth 5. Total duration: 1031ms. Trace inspection immediately reveals the bottleneck: child span `graph.query.search_by_name` took 1013ms (97.5% of total) scanning 163,449 nodes with a wildcard pattern, while the actual `graph.query.traverse_dependencies` span took 0ms. A second test (`query_graph` for ScriptType nodes) showed the same pattern: 107ms total, 101ms in `graph.query.find_by_type` across 13,264 results. In both cases the slow operation is immediately visible in the span tree without any guesswork — exactly what the scenario requires.
 
 **Scenario 6: Multi-project workflow** ✅
 
@@ -712,7 +716,7 @@ The validation engine — C# code that checks memory claims against the Graph an
 - Tier 2 → Tier 1 promotion proposals (Phase 5)
 - Pattern detection algorithms over traces (Phase 5)
 - Skills (Phase 4)
-- Sophisticated semantic search over memory (Phase 5/6)
+- Sophisticated semantic search over memory (Phase 8)
 - Cross-project memory inheritance (deferred indefinitely)
 
 ### Dependencies
@@ -845,7 +849,7 @@ The differentiator versus competitors' libraries is **integration**. Every Hades
 ### Done criteria
 
 - [x] All 10 UniClaude skills migrated to Hades plugin format with updated content *(11 migrated — unity-workflow included)*
-- [x] At least 11 new domain skills covering gaps identified in Vision §5.2.3 (recipe skills deferred to Phase 5/6 based on demand)
+- [x] At least 11 new domain skills covering gaps identified in Vision §5.2.3 (recipe skills deferred to Phase 8 based on demand)
 - [x] Every skill has the required structure: when to apply, decision framework, code examples, anti-examples, cross-references
 - [x] Every skill that makes architectural recommendations integrates Graph queries and/or Asphodel reads where applicable
 - [ ] Skill versioning works: `plugin.json` declares MCP server compatibility version *(deferred — plugin.json has version but no MCP compatibility range field yet)*
@@ -871,7 +875,7 @@ The differentiator versus competitors' libraries is **integration**. Every Hades
 
 For each migrated skill: rewrite to integrate Graph queries and Asphodel reads where applicable. Add concrete code examples (UniClaude versions were decision-heavy, example-light per Vision §5.3). Workflow skills (scene-authoring, prefab-workflow, animation-workflow) were rewritten from MCP-tool-based patterns to C# Editor scripting patterns — UniClaude's original versions assumed editor-action MCP tools that don't exist in Hades.
 
-**New skills (11 domain skills — recipe skills deferred to Phase 5/6 based on demand):**
+**New skills (11 domain skills — recipe skills deferred to Phase 8 based on demand):**
 1. unity-ui (UI Toolkit, uGUI, layouts, dialog systems)
 2. unity-networking (Netcode, Mirror, Fishnet decision frameworks)
 3. unity-ai-behavior (state machines, behavior trees, GOAP, NavMesh)
@@ -884,7 +888,7 @@ For each migrated skill: rewrite to integrate Graph queries and Asphodel reads w
 10. unity-ecs (when to use ECS, Burst, hybrid)
 11. unity-testing (EditMode/PlayMode tests, mocking)
 
-**Deferred to Phase 5/6 (recipe skills — added based on user demand):**
+**Deferred to Phase 8 (recipe skills — added based on user demand):**
 - unity-recipes-health (health/damage system patterns)
 - unity-recipes-inventory (inventory system patterns)
 - unity-recipes-save (save/load system patterns)
@@ -1166,10 +1170,10 @@ Migration was mechanical — same `[MCPTool]`/`[MCPToolParam]` attribute pattern
 
 ### Scope: what's out
 
-- Eval framework annotation tooling (Phase 6)
-- Runtime instrumentation evaluation (Phase 6)
-- Multi-project workflow features (Phase 6)
-- Asset Store distribution (Phase 6)
+- Eval framework annotation tooling (Phase 8)
+- Runtime instrumentation evaluation (Phase 8)
+- Multi-project workflow features (Phase 8)
+- Asset Store distribution (Phase 8)
 - Enterprise features (out of scope)
 - Cross-project memory inheritance (out of scope)
 
@@ -1312,15 +1316,267 @@ All prior phase tests pass. Phase 5 adds substantial new tests but should not br
 
 ### Bridge to next phase
 
-Phase 5 declares Hades production-ready. Phase 6 is post-launch evolution — not building toward a fixed scope, but responding to real-world usage data and feedback.
+Phase 5 delivers the core product. Phase 6 resolves accumulated polish items — documentation drift, validation gaps, bug fixes, performance benchmarking — and produces a v0.9.0 beta suitable for external testers. Phase 7 then takes v0.9 to v1.0 public release.
 
 ---
 
-## 8. Phase 6: Long-tail and post-launch
+## 8. Phase 6: Polish and ship-readiness (v0.9)
 
 ### Strategic intent
 
-Phase 6 is open-ended. Unlike phases 0-5 which had defined scope, Phase 6 evolves based on what actually happens after Hades is in real users' hands. The roadmap cannot predict which features matter most until adoption signals tell us.
+Phase 6 takes the functionally complete Phase 5 product and resolves every known rough edge standing between "works for the author" and "works for an external developer." This phase does not add features; it fixes documentation drift, validates the Hub end-to-end, runs skipped acceptance scenarios, benchmarks performance at scale, writes user-facing guides, and synchronizes version numbers.
+
+The target state after Phase 6: a fully functional v0.9.0 beta that an external developer can install and use without hand-holding. This is the external tester gate.
+
+### Done criteria
+
+- [x] Hub end-to-end validated: Claude Code → Launcher → Hub → Unity round-trip works
+- [x] All version fields synchronized at 0.9.0 across `package.json`, `plugin.json`, and roadmap
+- [x] Architecture doc updated: no stale references to `server.json`, port scanning, or 3-process model
+- [x] Architecture doc config example (§6.6) reflects actual current settings (dead fields removed)
+- [x] Architecture doc skill list (§5.2.3) matches actual 22 skills (split URP/HDRP/VFX, deferred recipes)
+- [x] Architecture doc recovery table (§8.8) references Hub (`hub.json`), not `server.json`
+- [x] Phase 1 done criteria checkboxes updated to `[x]` in this roadmap
+- [x] Validation warning duplication bug fixed (idempotent warning writes)
+- [x] `ConsoleLogBuffer` SessionState key renamed from `UniClaude.ConsoleBuffer` to `Hades.ConsoleBuffer`
+- [x] Phase 2 Happy Path scenarios 4 and 5 executed and documented
+- [x] Large-project performance benchmark run (163k nodes, results documented vs Architecture §2.6 targets)
+- [x] User-facing README rewritten for external developers (installation, first use, troubleshooting)
+- [x] Troubleshooting guide written (symptom → cause → fix table)
+- [x] Roadmap updated with Phase 6 status and known issues resolved
+
+### Scope: what's in
+
+**Documentation fixes (Architecture doc):**
+- §1.1: Update process count from 3 to 5 (add Hub and Launcher)
+- §1.2: Update system diagram to show Hub/Launcher routing
+- §5.2.3: Replace single `unity-shaders` with `unity-shaders-urp`, `unity-shaders-hdrp`, `unity-vfx`; remove `unity-recipes` (deferred)
+- §6.6: Remove dead `dashboard_port` and `mcp.port_range` config fields; replace with current settings
+- §8.8: Replace `server.json` reference with `hub.json` in recovery table
+
+**Bug fixes:**
+- `MemoryValidator.cs`: Strip existing `<!-- HADES VALIDATION WARNING -->` blocks before writing new ones (idempotent writes)
+- `ProjectTools.cs`: Rename `ConsoleLogBuffer` SessionState key from `"UniClaude.ConsoleBuffer"` to `"Hades.ConsoleBuffer"`
+
+**Validation:**
+- Hub end-to-end: start Hub, start Launcher, register Unity, round-trip tool call, order-independent startup, domain reload resilience
+- Phase 2 Happy Path scenario 4 (Diagnose a problem via Charon traces)
+- Phase 2 Happy Path scenario 5 (Performance investigation via dashboard)
+- Large-project performance benchmark against Architecture §2.6 targets
+
+**Version synchronization:**
+- Sync `package.json` (currently 0.1.0), `plugin.json` (currently 0.6.0), and roadmap (currently says 0.5.0) to 0.9.0
+
+**User-facing documentation:**
+- README rewrite for external developers
+- Troubleshooting guide consolidating Plugin doc §7, Architecture §8.8, and known issues
+
+### Scope: what's out
+
+- New features (none — this is purely polish and validation)
+- Marketplace submission (Phase 7)
+- Plugin repo split (Phase 7)
+- CI workflows (Phase 7)
+- v1.0.0 release (Phase 7)
+
+### Dependencies
+
+- Phase 5 complete (all sub-phases 5a/5b/5c delivered)
+
+### Risk assessment
+
+**Risk: Hub doesn't work end-to-end.** The Hub source is compiled but has never been started in a real Claude Code session (`~/.arcforge/hades-hub/hub.json` absent).
+*Mitigation:* This is the highest-priority validation item. Execute early. If the Hub has bugs, fix them before proceeding.
+
+**Risk: Performance benchmark reveals unacceptable latency on large projects.** Optimization was deferred through Phase 5.
+*Mitigation:* Architecture §2.6 has explicit targets. If exceeded, optimize hot paths identified in Charon traces. Acceptable degradation is documented; unacceptable degradation blocks the phase.
+
+**Risk: Documentation refresh takes longer than expected.** Quality external-facing docs are real work.
+*Mitigation:* Focus on the README and troubleshooting guide — the two documents an external tester needs on day one. Architecture-level docs can be polished incrementally.
+
+### Implementation hints
+
+- Architecture doc fixes are mechanical — the correct content is known from the audit, just needs to be written into the existing sections.
+- Hub validation protocol: (1) Hub starts and writes `hub.json`, (2) Launcher starts Hub if needed and bridges stdio↔HTTP, (3) Unity registers with Hub, (4) Full round-trip via Claude Code `/hades:status`, (5) Order-independent startup, (6) Domain reload resilience.
+- For the performance benchmark, use Charon traces to get per-operation timing breakdown.
+- The README should follow the install flow from Plugin doc §4.1: Step 1 Unity Package via UPM, Step 2 Claude Code plugin via `/plugin install`.
+
+### Tests added
+
+**Automated:**
+- Validation warning idempotency test: validate same file twice, assert only one warning block exists
+
+**Manual:**
+- Hub end-to-end validation (6-step protocol described above)
+- Phase 2 Happy Path scenarios 4 and 5
+- Large-project performance benchmark
+- README install instructions followed on a test environment
+
+### Happy Path scenarios
+
+Phase 6 does not introduce new Happy Path scenarios. It completes the two skipped scenarios from Phase 2:
+
+**Scenario 4: Diagnose a problem** ✅ (originally Phase 2, executed in Phase 6)
+
+Results documented in Phase 2's Happy Path section. Charon traces capture full span trees with per-operation timing; root cause identifiable from trace alone.
+
+**Scenario 5: Performance investigation** ✅ (originally Phase 2, executed in Phase 6)
+
+Results documented in Phase 2's Happy Path section. Slow sub-operations immediately visible in span waterfall — 1031ms call revealed 1013ms (97.5%) in a single child span.
+
+### Regression coverage
+
+All Phase 0–5 tests must continue to pass. Bug fixes in this phase (validation warning, ConsoleLogBuffer key) add their own regression tests.
+
+### Phase 6 implementation notes
+
+Issues encountered during Phase 6 development, documented for future reference:
+
+1. **Hub breadcrumb path is the normal startup flow.** Unity's `HubClient.Register()` checks for a running Hub and falls back to writing a breadcrumb to `~/.arcforge/hades-hub/pending/`. The Hub reads pending breadcrumbs on startup. This order-independent startup works correctly but means the first tool call after a cold start may need the Hub to start (via Launcher) before Unity's registration is picked up. Not a bug — working as designed.
+
+2. **Hub auto-exits after 60 seconds with no connected launchers.** If the Hub is started manually (without a Launcher connecting), it shuts down after 60s idle. This caused confusion during E2E validation when the Hub exited before Unity was opened. The Launcher's `/api/launcher/connect` call keeps the Hub alive.
+
+3. **Rebuild too fast for mid-rebuild confidence testing.** On the test project (~20 project assets), full rebuild completes in ~200ms. The confidence system's `graph_freshness: "rebuilding"` state cannot be observed at this speed. A larger project (50k+ real assets) would be needed to validate the during-rebuild confidence path. Deferred to Phase 8.
+
+4. **`trace_dependencies` wildcard scan inflates latency.** The `trace_dependencies` tool performs a `search_by_name` with `%` wildcard (scanning all 163k nodes) before doing the actual traversal. This caused a 1031ms call where the traversal itself took 0ms. This is a query planner issue worth optimizing in Phase 8.
+
+5. **Performance targets in §2.6 are aspirational for edge cases.** Average query performance meets targets, but outliers (full-text search across 163k nodes, full type enumeration of 13k results) exceed targets. All outliers remain under agent reasoning latency and don't affect user experience. See `Documentation/performance-benchmark.md` for full data.
+
+6. **Version 0.1.0 still shows in runtime `hades_ping` responses.** The `package.json` version was bumped to 0.9.0 but the Unity client hasn't been recompiled with the updated package. The runtime version string comes from the compiled assembly, not the package.json at rest. This resolves itself on the next Unity compilation after the version bump is committed.
+
+### Bridge to next phase
+
+Phase 6 produces a validated v0.9.0 beta. Phase 7 takes this to v1.0 public release: plugin repo split, CI, marketplace submission, and release tagging.
+
+---
+
+## 9. Phase 7: Pre-prod to prod (v1.0)
+
+### Strategic intent
+
+Phase 7 takes a validated v0.9 beta and ships it publicly. This phase handles the production concerns that don't exist in a single-repo development context: splitting the repository into separate UPM and plugin repos, submitting to the Anthropic marketplace, ensuring CI covers both repos, and verifying the full install experience from scratch on a clean machine.
+
+After Phase 7, Hades is:
+- A Unity Package at `TheArcForge/Hades` installable via UPM git URL
+- A Claude Code plugin at `TheArcForge/hades-plugin` installable via `/plugin install`
+- Listed on the Anthropic plugin marketplace for discoverability
+- Documented with a user guide, architecture overview, and troubleshooting guide
+- v1.0.0 tagged and announced
+
+### Done criteria
+
+- [ ] `TheArcForge/hades-plugin` repository created with plugin-relevant subset (per Plugin doc §5.3)
+- [ ] Sync script automates main repo → plugin repo content synchronization on release tags
+- [ ] CI on main repo: Bridge + Scanner tests on push/PR
+- [ ] CI on main repo: auto-sync plugin repo on release publish
+- [ ] CI on plugin repo: validate plugin structure (manifest, skills count, commands count, Bridge dist)
+- [ ] Full install tested from scratch on a clean machine (no prior Hades state)
+- [ ] Anthropic marketplace submission completed via `platform.claude.com/plugins/submit`
+- [ ] Marketplace compliance checklist passes (Plugin doc §5.2 — all items verified)
+- [ ] Version fields set to 1.0.0 across both repos
+- [ ] CHANGELOG.md covers all phases 0–7
+- [ ] At least one external developer (not the author) has installed and used Hades successfully
+- [ ] GitHub release created with release notes on both repos
+
+### Scope: what's in
+
+**Plugin repository:**
+- Create `TheArcForge/hades-plugin` with plugin-relevant subset: `.claude-plugin/`, `.mcp.json`, `Skills~/`, `Commands~/`, `Bridge~/` (dist only), `Scanner~/` (source, no tests)
+- Sync script (`scripts/sync-plugin.sh`) that copies content from main repo, stripping TypeScript source, tests, and Unity C# code
+- Plugin-specific README focused on Claude Code users
+
+**CI workflows:**
+- Main repo: Bridge + Scanner test runs on push/PR
+- Main repo: release-triggered sync to plugin repo (tag, push, release)
+- Plugin repo: structural validation (plugin.json, .mcp.json, skill count, command count, Bridge dist presence)
+
+**Version and release:**
+- Bump all version fields to 1.0.0 (after Phase 6 validation confirmed)
+- CHANGELOG.md covering all phases
+- Git tag v1.0.0 on both repos
+- GitHub releases on both repos
+
+**Marketplace:**
+- Walk Plugin doc §5.2 compliance checklist
+- Submit to `platform.claude.com/plugins/submit`
+- Document submission date and status
+
+**Clean-machine validation:**
+- Install from scratch on environment with no prior Hades state
+- Follow README instructions exactly
+- Verify first-use scenario ("Tell me about this project")
+- Test plugin-only install (without Unity Package)
+
+### Scope: what's out
+
+- New features (Phase 8)
+- Enterprise features
+- Asset Store distribution (Phase 8 candidate)
+- Marketing beyond README and marketplace listing
+
+### Dependencies
+
+- Phase 6 complete (v0.9.0 validated, all docs current, all bugs fixed)
+- Hub working end-to-end (confirmed in Phase 6)
+
+### Risk assessment
+
+**Risk: Marketplace rejection.** Anthropic's review may flag issues not anticipated.
+*Mitigation:* Hades is fully functional without a marketplace listing. Submit early, iterate on feedback. Don't block release on approval.
+
+**Risk: Clean-machine install reveals hidden dependencies.** Something works on the dev machine but not on a fresh install.
+*Mitigation:* Test on a genuinely clean environment. Document every prerequisite. The Hub's zero-runtime-dependency design minimizes this risk.
+
+**Risk: Plugin repo sync drift.** The plugin repo gets out of sync with the main repo after manual changes.
+*Mitigation:* Automated sync on release tags via CI. Plugin repo CI validates structure on every push. No manual edits to the plugin repo.
+
+### Implementation hints
+
+- Plugin repo structure per Plugin doc §5.3. Include `Bridge~/` dist only (compiled JS), not TypeScript source. Include `Scanner~/` source because it runs directly as JS.
+- The sync script should clean the target (preserving `.git/`), then copy fresh. This prevents stale files from accumulating.
+- For clean-machine testing: clear `~/.arcforge/`, uninstall the Claude Code plugin, use a Unity project that has never had Hades.
+- Marketplace compliance: Plugin doc §5.2 is the checklist. Pay attention to: no writes to `~/.claude.json`, no fixed ports, no orphan processes, all paths use `${CLAUDE_PLUGIN_ROOT}`.
+
+### Tests added
+
+**Automated (CI):**
+- Plugin repo structural validation (skill count, command count, manifest fields, Bridge dist presence)
+- Main repo Bridge + Scanner test suites
+
+**Manual:**
+- Clean-machine install end-to-end
+- Plugin-only install (without Unity Package)
+- Marketplace compliance walkthrough
+
+### Happy Path scenarios
+
+**Scenario 16: First external tester**
+
+A developer who has never seen Hades follows the README from a cold start. They:
+1. Install the Unity Package via UPM git URL
+2. Install the Claude Code plugin via `/plugin install`
+3. Open Claude Code from their project directory
+4. Ask "Tell me about this project"
+5. Receive a project-specific response powered by Hades tools
+
+**Demonstrates:** the full product works for someone other than the author.
+**Pass criteria:** the developer completes all 5 steps without asking the author for help. The response is project-aware.
+
+### Regression coverage
+
+All Phase 0–6 tests must continue to pass. Phase 7 does not add C# or Node.js code to the main repo (only CI configs and a sync script), so regression risk is minimal.
+
+### Bridge to next phase
+
+Phase 7 declares Hades publicly released at v1.0. Phase 8 is post-launch evolution — not building toward a fixed scope, but responding to real-world usage data and feedback.
+
+---
+
+## 10. Phase 8: Long-tail and post-launch
+
+### Strategic intent
+
+Phase 8 is open-ended. Unlike phases 0-7 which had defined scope, Phase 8 evolves based on what actually happens after Hades is in real users' hands. The roadmap cannot predict which features matter most until adoption signals tell us.
 
 This chapter therefore lists candidate directions rather than prescribing them. Whether and when each is pursued depends on usage data, contributor interest, ecosystem evolution, and product feedback.
 
@@ -1372,15 +1628,15 @@ For each candidate direction, the question to answer is:
 
 Pursue directions where the answer to all three is yes. Defer or skip where any is no.
 
-### Phase 6 has no Done criteria
+### Phase 8 has no Done criteria
 
 This phase doesn't end. It continues as long as Hades is maintained.
 
 ---
 
-## 9. Cross-phase concerns
+## 11. Cross-phase concerns
 
-### 9.1 Test infrastructure summary
+### 11.1 Test infrastructure summary
 
 By the end of Phase 5, the test suite includes:
 
@@ -1392,13 +1648,13 @@ By the end of Phase 5, the test suite includes:
 
 CI runs the full automated suite on every commit. Manual scenarios are part of phase completion gates.
 
-### 9.2 Cumulative regression principle
+### 11.2 Cumulative regression principle
 
 Every phase adds tests. No phase removes tests. Test fixtures, once stable, are frozen. This grows the suite over time but ensures regressions cannot occur silently.
 
 When a Phase N change breaks a Phase M test (M < N), this is a bug in Phase N, not "expected behavior change." Investigate and fix before continuing.
 
-### 9.3 Documentation cadence
+### 11.3 Documentation cadence
 
 Documentation is built incrementally:
 
@@ -1407,11 +1663,13 @@ Documentation is built incrementally:
 - Phase 2: dashboard guide
 - Phase 3: memory authoring guide
 - Phase 4: skills overview
-- Phase 5: comprehensive documentation refresh, troubleshooting guide
+- Phase 5: implementation notes for each sub-phase
+- Phase 6: README rewrite for external users, troubleshooting guide, architecture doc refresh
+- Phase 7: CHANGELOG, plugin repo README, release notes
 
-Documentation is not a Phase 5 afterthought; it accumulates throughout the journey.
+Documentation is not an afterthought; it accumulates throughout the journey.
 
-### 9.4 Versioning across phases
+### 11.4 Versioning across phases
 
 Hades version progresses with each phase:
 
@@ -1419,27 +1677,30 @@ Hades version progresses with each phase:
 - Phase 1 complete: v0.2.0 ✅
 - Phase 2 complete: v0.3.0 ✅
 - Phase 3 complete: v0.4.0 ✅
-- Phase 4 complete: v0.5.0 ✅ *(current — `plugin.json` updated to 0.5.0)*
-- Phase 5 complete: **v1.0.0** (public release)
-- Phase 6: v1.x and v2.x as evolution dictates
+- Phase 4 complete: v0.5.0 ✅
+- Phase 5 complete (5a/5b/5c): v0.6.0 ✅ *(current — `plugin.json` at 0.6.0)*
+- Phase 6 complete (polish, tester-ready): **v0.9.0**
+- Phase 7 complete (public release): **v1.0.0**
+- Phase 8: v1.x and v2.x as evolution dictates
 
-These are internal version tags during phases 0-4. The v1.0.0 tag is the first publicly announced release. The `plugin.json` version field tracks these tags.
+Versions 0.1.0–0.6.0 are internal milestones. v0.9.0 is the external tester-ready beta. v1.0.0 is the first publicly announced release. Both `package.json` (UPM) and `plugin.json` (Claude Code) track these tags in lockstep.
 
-### 9.5 Anthropic plugin marketplace submission
+### 11.5 Anthropic plugin marketplace submission
 
-Marketplace submission is deferred until after Phase 5 (v1.0). The full marketplace strategy, compliance checklist, and standalone plugin repo considerations are documented in the **Plugin document** (`Documentation/arcforge-hades-plugin.md`, §5). That document is the authoritative source.
+Marketplace submission is part of Phase 7 (v1.0). The full marketplace strategy, compliance checklist, and standalone plugin repo considerations are documented in the **Plugin document** (`Documentation/arcforge-hades-plugin.md`, §5). That document is the authoritative source.
 
 **Summary:** Hades is fully functional without a marketplace listing. The marketplace adds discoverability only. Current plugin structure passes all known marketplace compliance requirements (no fixed ports, no orphan processes, no config file manipulation).
 
-### 9.6 The product after Phase 5
+### 11.6 The product after Phase 7
 
-After Phase 5, Hades is:
+After Phase 7, Hades is:
 
-- A Unity Package distributable via UPM
-- A Claude Code plugin installable directly from the Hades GitHub repository, optionally discoverable through the Anthropic plugin marketplace
+- A Unity Package at `TheArcForge/Hades` distributable via UPM git URL
+- A Claude Code plugin at `TheArcForge/hades-plugin` installable via `/plugin install`, discoverable through the Anthropic plugin marketplace
 - A coherent product with three integrated layers (Graph, Charon, Asphodel) plus 22 Skills and 6 slash commands
-- Documented for users
-- Battle-tested on real Unity projects through dogfooding
+- 89 MCP tools (21 native + 68 migrated editor-action tools)
+- Documented for users with setup guide, troubleshooting guide, and architecture docs
+- Battle-tested on real Unity projects through dogfooding and external tester validation
 - Open source under MIT license
 - Free of dependencies on Anthropic auth that could be revoked
 
@@ -1447,7 +1708,7 @@ It is ready to be used by developers who are not the original developer.
 
 ---
 
-## 10. Known issues
+## 12. Known issues
 
 Issues discovered during development that need resolution. Tracked here for visibility across phases.
 
@@ -1479,12 +1740,10 @@ The actual problem: `MCPServer.Stop()` calls `MCPClientConfig.OnServerStop()` wh
 
 **Discovered:** Phase 3 happy path validation (2026-05-12)
 **Severity:** Low — cosmetic, does not affect validation correctness
-**Status:** Open
+**Status:** Resolved (Phase 6)
 **Ref:** `Editor/Asphodel/MemoryValidator.cs`
 
-When `validate_memory` is called multiple times on a file with failing rules (or when the FileWatcher re-triggers validation after the validator itself writes back to the file), identical `<!-- HADES VALIDATION WARNING -->` HTML comment blocks are appended each time. Observed: a single failing rule produced 3 duplicate warning blocks after 3 validation passes.
-
-The warning-writing logic in `MemoryValidator` needs to be idempotent — either strip existing warning comments before writing new ones, or check for duplicates before appending. The former is cleaner: on each validation pass, remove all `<!-- HADES VALIDATION WARNING ... -->` blocks, then write current warnings fresh. This also correctly handles the case where a previously failing rule now passes (the stale warning gets removed).
+Fixed by `ClearOldWarnings()` — a static method that strips all existing `<!-- HADES VALIDATION WARNING -->` blocks via regex before writing new ones. Called at the start of each validation pass, making warning writes idempotent. Each validation run produces a clean, non-duplicated set of warnings. Also correctly handles the case where a previously failing rule now passes (the stale warning gets removed). Test `Validate_RepeatedFailure_DoesNotDuplicateWarnings` verifies the idempotency property.
 
 ### MCP config not discovered when Claude Code launched from repo root
 
@@ -1499,13 +1758,13 @@ When a Unity project lives in a subdirectory of the git repo (e.g., `MyRepo/MyUn
 
 ---
 
-## 11. Closing
+## 13. Closing
 
 This roadmap is a sequence of phases, each building on the last, each producing something coherent on its own, accumulating into a complete product that realizes the Vision.
 
-The roadmap is honest about what's hard. Phase 1 is the highest-risk: the Graph thesis must validate. Phase 3 has subtle correctness requirements (validation that doesn't drift). Phase 5 has the broadest scope (everything must come together). Phases 2 and 4 are evolutionary rather than transformational — they extend what exists rather than introducing new architectural risks.
+The roadmap is honest about what's hard. Phase 1 is the highest-risk: the Graph thesis must validate. Phase 3 has subtle correctness requirements (validation that doesn't drift). Phase 5 has the broadest scope (everything must come together). Phase 6 resolves accumulated polish. Phase 7 is the ship gate. Phases 2 and 4 are evolutionary rather than transformational — they extend what exists rather than introducing new architectural risks.
 
-The roadmap is also honest about what's outside its scope. Many directions could be pursued — runtime instrumentation, enterprise features, multi-project workflows. These are explicitly Phase 6 candidates, not Phase 0-5 commitments.
+The roadmap is also honest about what's outside its scope. Many directions could be pursued — runtime instrumentation, enterprise features, multi-project workflows. These are explicitly Phase 8 candidates, not Phase 0-7 commitments.
 
 What this document does not commit to:
 

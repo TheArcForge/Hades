@@ -138,6 +138,24 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel
         }
 
         [Test]
+        public void Validate_RepeatedFailure_DoesNotDuplicateWarnings()
+        {
+            // No matching nodes in DB — rule will fail every time
+            var content = "---\nvalidation_status: ok\n---\n# Patterns\n\n### SO Channels\n\n<!-- hades-validation\nquery_type: exists\nquery: search_by_name(%Channel, ScriptableObject)\nmin_count: 3\nfailure_message: Expected at least 3 SO channels.\n-->\n\nWe use SO event channels.\n";
+            _memManager.WriteFile("patterns", content);
+
+            // Run validation twice
+            _validator.ValidateFile("patterns");
+            _validator.ValidateFile("patterns");
+
+            // Should have exactly one warning block, not two
+            var updated = _memManager.ReadFile("patterns");
+            var warningCount = System.Text.RegularExpressions.Regex.Matches(
+                updated.Body, "HADES VALIDATION WARNING").Count;
+            Assert.AreEqual(1, warningCount, "Expected exactly 1 warning block after 2 validation passes, but found " + warningCount);
+        }
+
+        [Test]
         public void ValidateAll_ValidatesAllFiles()
         {
             _memManager.EnsureDefaults();

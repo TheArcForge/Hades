@@ -269,7 +269,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
     public static class ConsoleLogBuffer
     {
         const int BufferSize = 200;
-        const string SessionStateKey = "UniClaude.ConsoleBuffer";
+        const string SessionStateKey = "Hades.ConsoleBuffer";
 
         static (LogType type, string message, string stackTrace)[] _buffer
             = new (LogType, string, string)[BufferSize];
