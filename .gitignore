@@ -35,7 +35,9 @@ Thumbs.db
 
 # Node
 Bridge~/node_modules/
+Bridge~/hub/node_modules/
 Bridge~/dist/
+Scanner~/node_modules/
 
 # Hades runtime artifacts (machine-specific)
 .arcforge/graph.db

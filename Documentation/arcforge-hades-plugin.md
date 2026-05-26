@@ -161,7 +161,8 @@ Hades/                          (repository root = Unity Package root)
   "homepage": "https://github.com/TheArcForge/Hades",
   "repository": "https://github.com/TheArcForge/Hades",
   "keywords": ["unity", "game-development", "mcp", "knowledge-graph"],
-  "skills": "./Skills~/"
+  "skills": "./Skills~/",
+  "commands": "./Commands~/"
 }
 ```
 
@@ -266,6 +267,12 @@ This routing solves the `.mcp.json` scoping problems (Known Issues #2 and #4 in 
 
 When no Unity instances are connected, `tools/list` returns an empty list. Tools appear when Unity connects and disappear when it disconnects, via MCP `tools/list_changed` notifications.
 
+### 3.6a Initialize response and agent instructions
+
+The MCP `initialize` response includes an `instructions` field containing agent guidance — a short prose description of the Hades server and how to use its tools. This field is part of the MCP spec and is surfaced to the agent at session start, before any tool calls. It tells the agent which tools exist, what the server does, and any conventions it should follow.
+
+This matters for the plugin because it is the agent's first signal that Hades tools are available and how to use them. When no Unity instance is connected (empty tools list), the instructions still describe what the server is — the agent knows to wait or prompt the user to open Unity.
+
 ### 3.7 Runtime state
 
 ```
@@ -324,9 +331,18 @@ This installs the C# Editor Package: Graph scanner, Charon observability, Asphod
 
 **Step 2: Claude Code Plugin (per-user)**
 
-```
-/plugin install hades@TheArcForge/Hades
-```
+Two install methods:
+
+- **From GitHub (future/marketplace):**
+  ```
+  /plugin install hades@TheArcForge/Hades
+  ```
+
+- **From local folder:**
+  ```
+  claude --plugin-dir /path/to/hades-plugin
+  ```
+  `--plugin-dir` is per-session — it must be passed each time Claude Code starts. Skills and commands are available for that session only.
 
 This installs skills, commands, and the MCP launcher at user scope. Skills are available across all Unity projects. The MCP server declared in `.mcp.json` starts automatically on each Claude Code session.
 
@@ -348,6 +364,17 @@ Step 1 is per-project (each Unity project installs the package). Step 2 is per-u
 Both steps are needed for the full experience. Skills alone (Step 2 only) provide general Unity guidance without project-specific context. The Unity Package alone (Step 1 only) provides project-scoped MCP access only — tools work when Claude Code is launched from the Unity project directory.
 
 **Note on MCP access:** Installing the Unity Package (Step 1) writes `.mcp.json` to the Unity project root, so Claude Code auto-discovers MCP tools when launched from that directory. The plugin (Step 2) adds skills and enables MCP access from **any** directory — not just the project root. If you need MCP tools to work from unrelated directories (e.g., a separate repo or home directory), install the plugin. Claude Desktop is unaffected (it uses `claude_desktop_config.json` written by Unity directly).
+
+**Note on `--plugin-dir` (local install):** When Step 2 is done via `claude --plugin-dir`, skills and commands are only available for that session. They must be re-passed on every Claude Code start and do not appear in `/plugin list`.
+
+**Auto-generated files on MCP server start:** `MCPClientConfig.OnServerStart` now performs two additional distribution steps automatically:
+
+- **CLAUDE.md** — written to the Unity project root on every server start. This file provides Claude Code with project-specific context (Hades version, available tools, and project conventions) without requiring the plugin to be installed.
+- **Skills copy** — 22 skills are copied to `~/.claude/skills/hades-*/` on every server start. This makes skills available to Claude Desktop users who cannot use the plugin system. Skills are refreshed automatically on each Unity MCP server start.
+
+These mechanisms allow partial capability even without `/plugin install` or `--plugin-dir`: a Claude Code session launched from the Unity project directory gets CLAUDE.md context, and Claude Desktop users get skills via the copy path.
+
+For a step-by-step guide covering both install paths, see [`Documentation/getting-started.md`](getting-started.md).
 
 ### 4.3 Claude Desktop
 
@@ -417,15 +444,18 @@ arcforge/hades-plugin/
 ├── Commands~/
 ├── Bridge~/
 ├── Scanner~/
+├── CLAUDE.md
 ├── LICENSE
 └── README.md
 ```
+
+`scripts/sync-plugin.sh` in the main repo produces this directory structure. The source templates for `README.md` and `CLAUDE.md` live at `scripts/plugin-README.md` and `scripts/plugin-CLAUDE.md` respectively.
 
 CI syncs from the main repo on release tags. Only create this if marketplace guidelines require it — until then, the main repo serves both roles.
 
 ### 5.4 What marketplace listing does not change
 
-- Install flow remains two steps (UPM + `/plugin install`)
+- Install flow remains two steps (UPM + `/plugin install` or `--plugin-dir` for local installs)
 - MCP server still runs inside Unity Editor
 - Skills still benefit from the Unity Package being installed (Graph/Asphodel tools)
 - The launcher/hub architecture is invisible to the marketplace — it's an implementation detail of the MCP server
@@ -506,7 +536,7 @@ Future consideration: `plugin.json` could declare a `"minMcpVersion"` field. The
 This document consolidates all plugin-related concerns that were previously scattered across the Vision (§7.5), Architecture (§1.5, §5.6), and Roadmap (§9.5) documents. Those sections now cross-reference this document as the authoritative source.
 
 The plugin design serves two goals simultaneously:
-1. **For users:** two-step install, automatic MCP connectivity, 22 skills available everywhere
+1. **For users:** two-step install (or per-session via `--plugin-dir`), automatic MCP connectivity, 22 skills available everywhere
 2. **For Anthropic marketplace:** compliant packaging, no fixed ports, no orphan processes, no config file manipulation
 
 The Hub architecture (detailed in the MCP Hub design spec) resolves the three known MCP connectivity issues while supporting the full range of real-world scenarios: Claude Code before Unity, Unity compilation errors, sleep/wake, multiple instances, nested project directories, and package source development.

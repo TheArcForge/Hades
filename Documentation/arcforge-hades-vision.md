@@ -434,7 +434,9 @@ The full plugin architecture — what the plugin contains (22 skills, 6 commands
 **Summary of the install experience.** From the user's perspective, two actions:
 
 1. Add Hades Unity Package via UPM git URL → Hades Scanner runs in the project, MCP server starts inside Unity
-2. Run `/plugin install hades@TheArcForge/Hades` in Claude Code → Skills, commands, and MCP launcher become available
+2. Install the Claude Code plugin — two options:
+   - **Marketplace:** `/plugin install hades@TheArcForge/Hades` (persists across sessions)
+   - **Local:** `claude --plugin-dir /path/to/hades-plugin` (per-session only)
 
 Step 1 is per-project. Step 2 is per-user. Both are needed for the full experience.
 
@@ -491,7 +493,7 @@ Issues that the vision does not resolve and that need to be answered in the Arch
 
 ### 9.2 Product
 
-- Onboarding flow. The value of Hades is largely invisible until used. How do we make first-session experience demonstrate it within 5 minutes? Possibilities include: a sample project bundled with the package, a guided tour command (`/hades:tour`), pre-recorded demonstration videos.
+- Onboarding flow. The value of Hades is largely invisible until used. How do we make first-session experience demonstrate it within 5 minutes? Possibilities include: a sample project bundled with the package, a guided tour command (`/hades:tour`), pre-recorded demonstration videos. The step-by-step first-time user guide is maintained separately in `Documentation/getting-started.md`.
 - Pricing/licensing. Currently set to MIT open source (see §7.5). Future commercial considerations are explicitly deferred until after product traction is established.
 - Asset Store distribution as supplementary channel beyond UPM git. Asset Store has discoverability benefits but adds review-and-approval overhead and may conflict with the dual-artifact (UPM + plugin marketplace) shape. Decision deferred.
 - Documentation strategy. Engineering docs vs user docs vs marketing — which is built first? Likely engineering and user docs prioritized over marketing. The Architecture document this Vision points to is engineering-internal; user-facing docs are a separate deliverable.

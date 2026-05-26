@@ -145,7 +145,7 @@ Claude Code ←(stdio)→ Launcher ←(HTTP)→ Hub ←(HTTP)→ Unity Instance(
 - The Unity Package's MCP server listens on `http://127.0.0.1:<port>` and registers with the Hub.
 - The Hub maintains a registry of connected Unity instances, routes tool calls by matching the Claude Code session's working directory to the correct instance.
 - The Launcher is a thin stdio process declared in the plugin's `.mcp.json`. Claude Code spawns it automatically. It ensures the Hub is running and bridges stdio to HTTP.
-- Standard MCP protocol messages flow over the connection: `initialize`, `tools/list`, `tools/call`, etc.
+- Standard MCP protocol messages flow over the connection: `initialize`, `tools/list`, `tools/call`, etc. The `initialize` response includes an `instructions` field containing agent guidance text (which tools to prefer, how to interpret results, behavioral notes). Both Claude Code and Claude Desktop read this field and use it to guide tool selection behavior for the session.
 
 **Why HTTP on localhost:**
 
@@ -183,7 +183,7 @@ The threading model is robust but adds latency. Worst-case, a request waits up t
 
 A typical day in the life of Hades:
 
-1. User opens the Unity Editor. `[InitializeOnLoad]` triggers Hades startup. The MCP server begins listening on a chosen port. The graph is loaded from disk (or rebuilt if the disk version is missing or outdated).
+1. User opens the Unity Editor. `[InitializeOnLoad]` triggers Hades startup. The MCP server begins listening on a chosen port. The graph is loaded from disk (or rebuilt if the disk version is missing or outdated). Server startup also writes a `CLAUDE.md` to the Unity project root for Claude Code agent guidance (non-destructive: if `CLAUDE.md` already exists, Hades content is appended inside clearly marked fenced markers rather than overwriting the file).
 2. The graph is brought up to date with any project changes that happened while Unity was closed. This can take seconds to a minute on a large project.
 3. The Charon emitter starts logging events.
 4. The user opens their agent client (Claude Code or Claude Desktop). For Claude Code, the plugin's `.mcp.json` declares the launcher; for Claude Desktop, Unity configured `claude_desktop_config.json` to point at the stable launcher copy.
@@ -1194,7 +1194,7 @@ The full architecture is documented in the **Plugin document** (`Documentation/a
 
 1. **Hub** — long-running Node.js HTTP server, one per machine. Maintains a registry of Unity instances, routes tool calls by project path matching, monitors instance health via heartbeats, buffers requests during domain reloads.
 2. **Launcher** — thin stdio process that starts the Hub on demand and bridges stdio to HTTP. Zero npm dependencies. Two connectivity paths reach it:
-   - **Plugin mode** (`--plugin-dir` or `/plugin install`): the plugin's `.mcp.json` uses `${CLAUDE_PLUGIN_ROOT}/Bridge~/launcher/dist/index.js`
+   - **Plugin mode** (`--plugin-dir` for local installs; `/plugin install` for marketplace installs): the plugin's `.mcp.json` uses `${CLAUDE_PLUGIN_ROOT}/Bridge~/launcher/dist/index.js`
    - **Project auto-discovery**: `MCPClientConfig` writes a `.mcp.json` to the Unity project root pointing to `~/.arcforge/hades-hub/launcher.js` (the stable installed copy)
 
    Both paths launch the same launcher binary, which connects to the shared Hub.
@@ -1635,7 +1635,9 @@ This versioning model is essential because skill behavior often depends on speci
 
 Skills, commands, and MCP connectivity are bundled in the Hades repository, which serves as both a Unity Package and a Claude Code plugin. The full plugin structure — directory layout, manifest, `.mcp.json`, tilde-suffix convention, installation flow, marketplace compliance, and versioning — is documented in the **Plugin document** (`Documentation/arcforge-hades-plugin.md`). That document is the authoritative source for plugin packaging and distribution.
 
-**Summary:** Users install with two commands (UPM git URL for Unity, `/plugin install` for Claude Code). Skills and commands are installed at user scope, shared across all Unity projects. The MCP launcher starts automatically when the plugin is enabled.
+**Summary:** Users install with two commands (UPM git URL for Unity, `--plugin-dir` for local installs or `/plugin install` for marketplace installs in Claude Code). Skills and commands are installed at user scope, shared across all Unity projects. The MCP launcher starts automatically when the plugin is enabled.
+
+On server start, Hades also copies skills to `~/.claude/skills/hades-*/` for Claude Desktop discovery. Claude Desktop does not use the plugin system; this copy step is its distribution path for skills.
 
 ### 5.7 Slash commands
 
@@ -2597,7 +2599,7 @@ Charon continues operating during play mode — observability of agent actions d
 
 **Mitigation:**
 
-- Both clients connect through the Launcher (stdio process), which bridges to the Hub over HTTP. For Claude Code, the Launcher is reached via two paths: (1) the plugin's `.mcp.json` (using `${CLAUDE_PLUGIN_ROOT}/Bridge~/launcher/dist/index.js`) when the plugin is installed via `--plugin-dir` or `/plugin install`, or (2) a project-level `.mcp.json` written by `MCPClientConfig` to the Unity project root, pointing to the stable installed copy at `~/.arcforge/hades-hub/launcher.js`. For Claude Desktop, Unity writes `claude_desktop_config.json` pointing to the same stable launcher path.
+- Both clients connect through the Launcher (stdio process), which bridges to the Hub over HTTP. For Claude Code, the Launcher is reached via two paths: (1) the plugin's `.mcp.json` (using `${CLAUDE_PLUGIN_ROOT}/Bridge~/launcher/dist/index.js`) when the plugin is installed via `--plugin-dir` (local installs) or `/plugin install` (marketplace installs), or (2) a project-level `.mcp.json` written by `MCPClientConfig` to the Unity project root, pointing to the stable installed copy at `~/.arcforge/hades-hub/launcher.js`. For Claude Desktop, Unity writes `claude_desktop_config.json` pointing to the same stable launcher path.
 - The Launcher has zero npm dependencies — uses only Node.js built-ins. No `npx` or external tool required.
 - Node.js is a runtime dependency for MCP connectivity. Without Node.js, neither Claude Code nor Claude Desktop can connect to Hades.
 

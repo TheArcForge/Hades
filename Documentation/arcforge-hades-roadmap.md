@@ -1,7 +1,7 @@
 # Hades — Roadmap Document
 
 **Version:** 1.2
-**Status:** Active development — Phase 6 complete (v0.9.0), Phase 7 next
+**Status:** Active development — Phase 7 in progress (v0.9.0 → v1.0.0)
 **Last updated:** 2026-05-26
 **Companion to:** Vision document, Architecture document, Plugin document
 
@@ -275,7 +275,7 @@ This phase explicitly does not include observability, memory, or skills. Those a
 - Unity Package installable via UPM git URL
 - Plugin manifest (`plugin.json`) with no skills yet (placeholder)
 - Setup wizard in Unity Package that auto-registers MCP server with Claude Code config
-- Setup wizard prompts user to install Claude Code plugin via `/plugin install hades@TheArcForge/Hades`
+- Setup wizard prompts user to install Claude Code plugin; eventual public method is `/plugin install hades@TheArcForge/Hades` via the Anthropic marketplace, but local installs use `claude --plugin-dir <path>` during development and testing
 
 ### Scope: what's out
 
@@ -1399,7 +1399,7 @@ The target state after Phase 6: a fully functional v0.9.0 beta that an external 
 - Architecture doc fixes are mechanical — the correct content is known from the audit, just needs to be written into the existing sections.
 - Hub validation protocol: (1) Hub starts and writes `hub.json`, (2) Launcher starts Hub if needed and bridges stdio↔HTTP, (3) Unity registers with Hub, (4) Full round-trip via Claude Code `/hades:status`, (5) Order-independent startup, (6) Domain reload resilience.
 - For the performance benchmark, use Charon traces to get per-operation timing breakdown.
-- The README should follow the install flow from Plugin doc §4.1: Step 1 Unity Package via UPM, Step 2 Claude Code plugin via `/plugin install`.
+- The README should follow the install flow from Plugin doc §4.1: Step 1 Unity Package via UPM, Step 2 Claude Code plugin. Local installs use `claude --plugin-dir <path>`; the marketplace `/plugin install` flow is the eventual public method. The README has been updated to reflect both paths.
 
 ### Tests added
 
@@ -1458,15 +1458,29 @@ Phase 7 takes a validated v0.9 beta and ships it publicly. This phase handles th
 
 After Phase 7, Hades is:
 - A Unity Package at `TheArcForge/Hades` installable via UPM git URL
-- A Claude Code plugin at `TheArcForge/hades-plugin` installable via `/plugin install`
+- A Claude Code plugin at `TheArcForge/hades-plugin` installable via `/plugin install` (marketplace) or `claude --plugin-dir <path>` (local)
 - Listed on the Anthropic plugin marketplace for discoverability
 - Documented with a user guide, architecture overview, and troubleshooting guide
 - v1.0.0 tagged and announced
 
 ### Done criteria
 
+**Friends-and-family prep (completed):**
+- [x] Sync script (`scripts/sync-plugin.sh`) implemented — produces plugin repo content (872KB, 62 files) from main repo, copies `plugin-README.md` and `plugin-CLAUDE.md` as the plugin repo's `README.md` and `CLAUDE.md`
+- [x] Plugin manifest fix: added `"commands": "./Commands~/"` to `plugin.json` (commands weren't being discovered)
+- [x] Agent routing — three-layer guidance so agents use Hades MCP tools instead of defaulting to bash:
+  - MCP `instructions` field in initialize response (universal, both Claude Code and Desktop)
+  - `CLAUDE.md` auto-generated to Unity project root on server start (Claude Code)
+  - 22 skills copied to `~/.claude/skills/hades-*/` on server start (Claude Desktop)
+- [x] Tester documentation: `Documentation/getting-started.md` (full walkthrough), `scripts/plugin-README.md`, `scripts/plugin-CLAUDE.md`
+- [x] Main `README.md` updated with local install instructions (`--plugin-dir`)
+- [x] Repo cleanup: removed 49MB stale `Bridge~/hub/node_modules/` and 61MB `Scanner~/node_modules/` from git tracking, updated `.gitignore`
+- [x] Dry-run validation: plugin install via `--plugin-dir`, MCP tools working, agent routing confirmed (agent says "I'll query the Hades knowledge graph" instead of using bash)
+- [x] All four documentation docs refreshed (Architecture, Roadmap, Plugin, Vision) to reflect current state
+
+**Public release (remaining):**
 - [ ] `TheArcForge/hades-plugin` repository created with plugin-relevant subset (per Plugin doc §5.3)
-- [ ] Sync script automates main repo → plugin repo content synchronization on release tags
+- [ ] Sync script wired to CI: auto-sync plugin repo on release tags
 - [ ] CI on main repo: Bridge + Scanner tests on push/PR
 - [ ] CI on main repo: auto-sync plugin repo on release publish
 - [ ] CI on plugin repo: validate plugin structure (manifest, skills count, commands count, Bridge dist)
@@ -1480,10 +1494,24 @@ After Phase 7, Hades is:
 
 ### Scope: what's in
 
-**Plugin repository:**
+**Plugin repository (implemented):**
 - Create `TheArcForge/hades-plugin` with plugin-relevant subset: `.claude-plugin/`, `.mcp.json`, `Skills~/`, `Commands~/`, `Bridge~/` (dist only), `Scanner~/` (source, no tests)
-- Sync script (`scripts/sync-plugin.sh`) that copies content from main repo, stripping TypeScript source, tests, and Unity C# code
-- Plugin-specific README focused on Claude Code users
+- Sync script (`scripts/sync-plugin.sh`) — **done**: copies content from main repo, strips TypeScript source, tests, and Unity C# code; copies `scripts/plugin-README.md` → `README.md` and `scripts/plugin-CLAUDE.md` → `CLAUDE.md` in the plugin repo
+- Plugin-specific README (`scripts/plugin-README.md`) focused on Claude Code users; covers both `claude --plugin-dir` (local) and `/plugin install` (marketplace) install paths
+
+**Agent routing (implemented):**
+- MCP `instructions` field added to `MCPDispatcher.HandleInitialize()` — read by both Claude Code and Claude Desktop on connection, guides the agent to prefer Hades MCP tools over bash/grep/find for project understanding
+- `CLAUDE.md` auto-generated at Unity project root by `MCPClientConfig.WriteProjectClaudeMd()` — non-destructive append/update with `<!-- HADES:START -->` / `<!-- HADES:END -->` markers; provides routing table, common question patterns, tool guidance
+- Skills copied to `~/.claude/skills/hades-*/` by `MCPClientConfig.InstallSkillsForDesktop()` — runs on every server start, keeps skills in sync with installed package version; this is Claude Desktop's distribution path since it doesn't use the plugin system
+
+**Tester documentation (implemented):**
+- `Documentation/getting-started.md` — full first-time user walkthrough: prerequisites, zip-based install for both Unity package and plugin, verification steps, first-use prompts, troubleshooting
+- `scripts/plugin-CLAUDE.md` — agent guidance template shipped in plugin zip, "structural context first" principle with routing table and common question patterns
+
+**Repo cleanup (implemented):**
+- Removed 49MB stale `Bridge~/hub/node_modules/` from git (hub has zero runtime npm dependencies — devDependencies only for TypeScript compilation)
+- Removed 61MB `Scanner~/node_modules/` from git tracking (Scanner needs `npm install` at runtime for native `better-sqlite3`)
+- Updated `.gitignore` for both directories
 
 **CI workflows:**
 - Main repo: Bridge + Scanner test runs on push/PR
@@ -1552,19 +1580,19 @@ After Phase 7, Hades is:
 
 **Scenario 16: First external tester**
 
-A developer who has never seen Hades follows the README from a cold start. They:
-1. Install the Unity Package via UPM git URL
-2. Install the Claude Code plugin via `/plugin install`
+A developer who has never seen Hades follows the getting-started guide (`Documentation/getting-started.md`) from a cold start. They:
+1. Install the Unity Package via UPM (git URL or local path)
+2. Install the Claude Code plugin via `claude --plugin-dir <path>` (local) or `/plugin install` (marketplace)
 3. Open Claude Code from their project directory
 4. Ask "Tell me about this project"
-5. Receive a project-specific response powered by Hades tools
+5. Receive a project-specific response powered by Hades MCP tools (agent queries the graph, not bash)
 
-**Demonstrates:** the full product works for someone other than the author.
-**Pass criteria:** the developer completes all 5 steps without asking the author for help. The response is project-aware.
+**Demonstrates:** the full product works for someone other than the author, and agent routing guides the agent to use Hades tools by default.
+**Pass criteria:** the developer completes all 5 steps without asking the author for help. The response is project-aware and uses Hades MCP tools rather than falling back to grep/find.
 
 ### Regression coverage
 
-All Phase 0–6 tests must continue to pass. Phase 7 does not add C# or Node.js code to the main repo (only CI configs and a sync script), so regression risk is minimal.
+All Phase 0–6 tests must continue to pass. Phase 7 added C# changes to the main repo (MCP `instructions` field in `MCPDispatcher.cs`, `CLAUDE.md` auto-generation and skills copy in `MCPClientConfig.cs`) and a bash sync script. Regression risk is low — the C# additions are additive (new fields, new methods on startup) and do not modify existing tool behavior.
 
 ### Bridge to next phase
 
@@ -1665,7 +1693,7 @@ Documentation is built incrementally:
 - Phase 4: skills overview
 - Phase 5: implementation notes for each sub-phase
 - Phase 6: README rewrite for external users, troubleshooting guide, architecture doc refresh
-- Phase 7: CHANGELOG, plugin repo README, release notes
+- Phase 7: CHANGELOG, plugin repo README, release notes; also `Documentation/getting-started.md`, `scripts/plugin-README.md` (plugin repo README), and `scripts/plugin-CLAUDE.md` (plugin repo CLAUDE.md)
 
 Documentation is not an afterthought; it accumulates throughout the journey.
 
@@ -1696,7 +1724,7 @@ Marketplace submission is part of Phase 7 (v1.0). The full marketplace strategy,
 After Phase 7, Hades is:
 
 - A Unity Package at `TheArcForge/Hades` distributable via UPM git URL
-- A Claude Code plugin at `TheArcForge/hades-plugin` installable via `/plugin install`, discoverable through the Anthropic plugin marketplace
+- A Claude Code plugin at `TheArcForge/hades-plugin` installable via `/plugin install` (marketplace) or `claude --plugin-dir <path>` (local), discoverable through the Anthropic plugin marketplace
 - A coherent product with three integrated layers (Graph, Charon, Asphodel) plus 22 Skills and 6 slash commands
 - 89 MCP tools (21 native + 68 migrated editor-action tools)
 - Documented for users with setup guide, troubleshooting guide, and architecture docs

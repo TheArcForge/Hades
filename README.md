@@ -12,23 +12,37 @@ Unity-aware AI infrastructure for Claude Code. Hades gives your AI agent a deep,
 
 ### Step 1: Unity Package
 
+**From git URL:**
+
 In Unity's Package Manager, click **Add package from git URL** and enter:
 
 ```
 https://github.com/TheArcForge/Hades.git
 ```
 
+**From local folder (for testing or offline use):**
+
+In Unity's Package Manager, click **Add package from disk...** and select the `package.json` inside your local Hades folder.
+
 > On first open after install, Hades automatically builds the project knowledge graph. This takes 10–45 seconds depending on project size.
 
 ### Step 2: Claude Code Plugin
 
-In your terminal, run:
+**From GitHub:**
 
 ```bash
 /plugin install hades@TheArcForge/Hades
 ```
 
+**From local folder:**
+
+```bash
+claude --plugin-dir /path/to/hades-plugin
+```
+
 That's it. Open Claude Code from your Unity project directory and the tools are available immediately.
+
+> **First time?** See the full [Getting Started](Documentation/getting-started.md) guide for a step-by-step walkthrough with verification at each step.
 
 ## What You Get
 

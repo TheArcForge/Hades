@@ -7,5 +7,6 @@
   "homepage": "https://github.com/TheArcForge/Hades",
   "repository": "https://github.com/TheArcForge/Hades",
   "keywords": ["unity", "game-development", "mcp", "knowledge-graph"],
-  "skills": "./Skills~/"
+  "skills": "./Skills~/",
+  "commands": "./Commands~/"
 }

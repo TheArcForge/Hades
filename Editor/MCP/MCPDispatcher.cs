@@ -160,10 +160,27 @@ namespace ArcForge.Hades.Editor.MCP
                 {
                     ["name"] = "hades",
                     ["version"] = "0.1.0"
-                }
+                },
+                ["instructions"] = McpInstructions
             };
             return CreateSuccessResponse(id, result);
         }
+
+        const string McpInstructions =
+            "This is a Unity project with Hades — a semantic knowledge graph of every scene, prefab, script, asset, and their dependencies. " +
+            "Before answering questions about this project or writing code, query the graph for structural context. " +
+            "Do NOT default to bash/grep/find for project understanding — use Hades MCP tools instead:\n" +
+            "- get_project_summary: structured project overview (start here for 'tell me about this project')\n" +
+            "- get_scene_summary: parsed scene structure (not raw YAML)\n" +
+            "- search_by_name: find any asset/script/component by name pattern\n" +
+            "- find_references_to: what references a given asset (incoming deps)\n" +
+            "- trace_dependencies: what an asset depends on (outgoing deps)\n" +
+            "- find_prefabs_with_component: find prefabs using a component type\n" +
+            "- recall_memory: search project decisions/conventions in .arcforge/memory/\n" +
+            "- inspector_inspect: full property dump of a GameObject\n" +
+            "- prefab_get_contents: inspect prefab hierarchy without instantiating\n" +
+            "Use bash only for reading file contents, running commands, or editing code — not for navigating project structure. " +
+            "For modifying scenes/prefabs/materials, use the MCP tools (scene_setup, component_add, prefab_edit_property, etc.) instead of editing Unity files directly.";
 
         string HandleToolsList(JToken id)
         {
