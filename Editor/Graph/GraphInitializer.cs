@@ -5,6 +5,10 @@ using UnityEngine;
 
 namespace ArcForge.Hades.Editor.Graph
 {
+    /// <summary>
+    /// Ensures the GraphDatabase singleton exists. Must run before GraphUpdateHandler.
+    /// Does NOT create a GraphBuilder — that's owned by GraphUpdateHandler.
+    /// </summary>
     [InitializeOnLoad]
     public static class GraphInitializer
     {
@@ -13,7 +17,7 @@ namespace ArcForge.Hades.Editor.Graph
             EditorApplication.delayCall += Initialize;
         }
 
-        static void Initialize()
+        internal static void EnsureDatabase()
         {
             if (GraphDatabase.Instance != null) return;
 
@@ -21,17 +25,13 @@ namespace ArcForge.Hades.Editor.Graph
             {
                 var projectRoot = Path.GetDirectoryName(Application.dataPath);
                 var dbPath = Path.Combine(projectRoot, ".arcforge", "graph.db");
-
-                var db = new GraphDatabase(dbPath);
-                var builder = new GraphBuilder(db);
-
-                builder.CheckStartupSync();
-
-                span.SetAttribute("nodes.count", db.GetNodeCount());
-                span.SetAttribute("edges.count", db.GetEdgeCount());
-
-                Debug.Log($"[Hades] Graph initialized: {db.GetNodeCount()} nodes, {db.GetEdgeCount()} edges");
+                new GraphDatabase(dbPath); // sets GraphDatabase.Instance
             }
+        }
+
+        static void Initialize()
+        {
+            EnsureDatabase();
         }
     }
 }

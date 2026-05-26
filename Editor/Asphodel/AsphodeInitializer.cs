@@ -18,6 +18,15 @@ namespace ArcForge.Hades.Editor.Asphodel
         public static MemoryValidator Validator => _validator;
         public static Inference.PatternInferenceEngine InferenceEngine { get; private set; }
 
+        /// <summary>
+        /// Lazy-init the validator if it wasn't created at startup (e.g. GraphDatabase wasn't ready).
+        /// </summary>
+        public static void InitValidator(MemoryManager manager, GraphDatabase db)
+        {
+            if (_validator != null) return;
+            _validator = new MemoryValidator(manager, db);
+        }
+
         static AsphodeInitializer()
         {
             EditorApplication.delayCall += Initialize;

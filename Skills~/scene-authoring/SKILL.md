@@ -314,6 +314,21 @@ public static class SceneHierarchyHelper
 // SceneHierarchyHelper.ParentToGroup(transform, "--- Managers ---");
 ```
 
+### Alternative: Direct MCP Tool Calls
+
+If you prefer tool calls over scripting, these editor-action tools are available:
+- `scene_get_hierarchy` — list all GameObjects as a tree
+- `scene_create_gameobject` — create an empty GameObject with optional parent
+- `scene_create_primitive` — create a primitive shape (Cube, Sphere, etc.)
+- `scene_delete_gameobject` — delete a GameObject (supports undo)
+- `scene_reparent_gameobject` — move a GameObject under a new parent
+- `scene_rename_gameobject` — rename a GameObject
+- `scene_setup` — batch-create multiple GameObjects with components and hierarchy
+- `scene_save` / `scene_create` / `scene_open` — scene file management
+- `inspector_select` / `inspector_inspect` — selection and property inspection
+
+Choose tools for quick one-off operations. Choose C# scripting for reusable Editor tools, complex batch operations, or when the operation should be committed to the project as an Editor script.
+
 ## Anti-Examples
 
 ### Editing .unity Scene Files as Raw Text
@@ -366,5 +381,5 @@ Scene
 - Related architecture skills: `hades:scene-architecture`, `hades:unity-architect`
 - After scene setup, wire prefabs: `hades:prefab-workflow`
 - After prefab wiring, add animation: `hades:animation-workflow`
-- Hades MCP tools used in this skill: `get_scene_summary`, `get_project_summary`, `recall_memory`, `propose_memory_update`
+- Hades MCP tools used in this skill: `get_scene_summary`, `get_project_summary`, `recall_memory`, `propose_memory_update`, `scene_get_hierarchy`, `scene_create_gameobject`, `scene_create_primitive`, `scene_delete_gameobject`, `scene_reparent_gameobject`, `scene_rename_gameobject`, `scene_setup`, `scene_save`, `scene_create`, `scene_open`, `inspector_select`, `inspector_inspect`
 - Unity docs: [EditorSceneManager](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/SceneManagement.EditorSceneManager.html), [Undo](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/Undo.html), [Multi-Scene Editing](https://docs.unity3d.com/6000.0/Documentation/Manual/MultiSceneEditing.html)

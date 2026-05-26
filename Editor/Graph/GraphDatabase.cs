@@ -16,7 +16,7 @@ namespace ArcForge.Hades.Editor.Graph
         readonly SQLiteConnection _connection;
         bool _disposed;
 
-        const int CurrentSchemaVersion = 1;
+        const int CurrentSchemaVersion = 2;
 
         public GraphDatabase(string dbPath)
         {
@@ -65,6 +65,7 @@ namespace ArcForge.Hades.Editor.Graph
                 CREATE TABLE IF NOT EXISTS nodes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     type TEXT NOT NULL,
+                    tier TEXT NOT NULL DEFAULT 'project',
                     guid TEXT,
                     file_id INTEGER,
                     parent_node_id INTEGER REFERENCES nodes(id),
@@ -80,6 +81,8 @@ namespace ArcForge.Hades.Editor.Graph
                 CREATE INDEX IF NOT EXISTS idx_nodes_guid ON nodes(guid);
                 CREATE INDEX IF NOT EXISTS idx_nodes_path ON nodes(path);
                 CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_node_id);
+                CREATE INDEX IF NOT EXISTS idx_nodes_name_type ON nodes(name, type);
+                CREATE INDEX IF NOT EXISTS idx_nodes_tier ON nodes(tier);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_guid_fileid ON nodes(guid, file_id) WHERE guid IS NOT NULL;
 
                 CREATE TABLE IF NOT EXISTS edges (
@@ -96,6 +99,19 @@ namespace ArcForge.Hades.Editor.Graph
                 CREATE INDEX IF NOT EXISTS idx_edges_target_type ON edges(target_id, type);
                 CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(type);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique ON edges(source_id, target_id, type);
+
+                CREATE TABLE IF NOT EXISTS pending_edges (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_node_id INTEGER NOT NULL,
+                    edge_type TEXT NOT NULL,
+                    target_type_name TEXT NOT NULL,
+                    target_namespace TEXT,
+                    source_asset_guid TEXT,
+                    created_at INTEGER NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_pending_edges_target ON pending_edges(target_type_name);
+                CREATE INDEX IF NOT EXISTS idx_pending_edges_source_asset ON pending_edges(source_asset_guid);
 
                 CREATE TABLE IF NOT EXISTS schema_version (
                     version INTEGER PRIMARY KEY,
@@ -130,7 +146,23 @@ namespace ArcForge.Hades.Editor.Graph
 
         void MigrateSchema(long fromVersion)
         {
-            // Future migrations go here
+            if (fromVersion < 2)
+            {
+                // Graph is a rebuildable cache — safest migration is to recreate tables
+                // with correct column ordering. ALTER TABLE ADD COLUMN puts columns at the
+                // end which breaks our positional SELECT * reads.
+                _connection.ExecuteScript(@"
+                    DROP TABLE IF EXISTS edges;
+                    DROP TABLE IF EXISTS nodes;
+                    DROP TABLE IF EXISTS scanned_assets;
+                    DROP TABLE IF EXISTS pending_invalidations;
+                ");
+
+                CreateAllTables();
+                RecordSchemaVersion(2);
+
+                // Graph will be fully rebuilt on next startup via CheckStartupSync
+            }
         }
 
         public bool TableExists(string tableName)
@@ -194,13 +226,14 @@ namespace ArcForge.Hades.Editor.Graph
 
         // --- Node & Edge CRUD ---
 
-        public long InsertNode(NodeRecord node)
+        public long InsertNode(NodeRecord node, string tier = "project")
         {
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             _connection.Execute(@"
-                INSERT INTO nodes (type, guid, file_id, parent_node_id, name, path, source_range, properties, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+                INSERT INTO nodes (type, tier, guid, file_id, parent_node_id, name, path, source_range, properties, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
                 node.Type,
+                tier,
                 node.Guid,
                 node.FileId.HasValue ? (object)node.FileId.Value : null,
                 node.ParentNodeId.HasValue ? (object)node.ParentNodeId.Value : null,
@@ -411,18 +444,18 @@ namespace ArcForge.Hades.Editor.Graph
 
         NodeRecord ReadNodeFromStatement(SQLitePreparedStatement stmt)
         {
-            // col 0: id, 1: type, 2: guid, 3: file_id, 4: parent_node_id,
-            // 5: name, 6: path, 7: source_range, 8: properties
-            var node = new NodeRecord(stmt.GetString(1), stmt.GetString(2))
+            // col 0: id, 1: type, 2: tier, 3: guid, 4: file_id, 5: parent_node_id,
+            // 6: name, 7: path, 8: source_range, 9: properties
+            var node = new NodeRecord(stmt.GetString(1), stmt.GetString(3))
             {
                 Id = stmt.GetLong(0),
-                FileId = stmt.GetString(3) != null ? (long?)stmt.GetLong(3) : null,
-                ParentNodeId = stmt.GetString(4) != null ? (long?)stmt.GetLong(4) : null,
-                Name = stmt.GetString(5),
-                Path = stmt.GetString(6),
-                SourceRange = stmt.GetString(7)
+                FileId = stmt.GetString(4) != null ? (long?)stmt.GetLong(4) : null,
+                ParentNodeId = stmt.GetString(5) != null ? (long?)stmt.GetLong(5) : null,
+                Name = stmt.GetString(6),
+                Path = stmt.GetString(7),
+                SourceRange = stmt.GetString(8)
             };
-            var propsJson = stmt.GetString(8);
+            var propsJson = stmt.GetString(9);
             if (propsJson != null) node.PropertiesJson = propsJson;
             return node;
         }
@@ -441,8 +474,8 @@ namespace ArcForge.Hades.Editor.Graph
 
         EdgeInfo ReadEdgeInfoFromStatement(SQLitePreparedStatement stmt)
         {
-            // e.*: 0: id, 1: source_id, 2: target_id, 3: type, 4: properties
-            // joined: 7: target_type, 8: target_name, 9: target_path
+            // e.*: 0: id, 1: source_id, 2: target_id, 3: type, 4: properties, 5: created_at, 6: updated_at
+            // joined n.*: 7: target_type, 8: target_name, 9: target_path
             return new EdgeInfo
             {
                 Id = stmt.GetLong(0),
@@ -605,6 +638,110 @@ namespace ArcForge.Hades.Editor.Graph
                     counts[stmt.GetString(0)] = stmt.GetLong(1);
             }
             return counts;
+        }
+
+        // --- Tier-aware operations ---
+
+        /// <summary>
+        /// Deletes all nodes (and their cascade-deleted edges) for a given tier.
+        /// Used during project rebuild to preserve package-tier nodes.
+        /// </summary>
+        public int DeleteNodesByTier(string tier)
+        {
+            return _connection.Execute("DELETE FROM nodes WHERE tier = ?;", tier);
+        }
+
+        public long GetNodeCount(string type, string tier)
+        {
+            return _connection.ExecuteScalar<long>(
+                "SELECT COUNT(*) FROM nodes WHERE type = ? AND tier = ?;", type, tier);
+        }
+
+        // --- Name-based lookups for edge resolution ---
+
+        /// <summary>
+        /// Finds a ScriptType node by exact name, optionally filtered by namespace property.
+        /// Used for resolving inheritance/implements edges by type name.
+        /// </summary>
+        public NodeRecord FindNodeByNameAndType(string name, string nodeType)
+        {
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "SELECT * FROM nodes WHERE name = ? AND type = ? LIMIT 1;"))
+            {
+                stmt.Bind(1, name);
+                stmt.Bind(2, nodeType);
+                if (stmt.Step() == SQLite3.Result.Row)
+                    return ReadNodeFromStatement(stmt);
+                return null;
+            }
+        }
+
+        // --- Pending edges ---
+
+        public void InsertPendingEdge(long sourceNodeId, string edgeType, string targetTypeName,
+            string targetNamespace, string sourceAssetGuid)
+        {
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            _connection.Execute(@"
+                INSERT INTO pending_edges (source_node_id, edge_type, target_type_name, target_namespace, source_asset_guid, created_at)
+                VALUES (?, ?, ?, ?, ?, ?);",
+                sourceNodeId, edgeType, targetTypeName, targetNamespace, sourceAssetGuid, now);
+        }
+
+        public List<Models.PendingEdge> GetPendingEdges()
+        {
+            var results = new List<Models.PendingEdge>();
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "SELECT id, source_node_id, edge_type, target_type_name, target_namespace, source_asset_guid, created_at FROM pending_edges;"))
+            {
+                while (stmt.Step() == SQLite3.Result.Row)
+                {
+                    results.Add(new Models.PendingEdge
+                    {
+                        Id = stmt.GetLong(0),
+                        SourceNodeId = stmt.GetLong(1),
+                        EdgeType = stmt.GetString(2),
+                        TargetTypeName = stmt.GetString(3),
+                        TargetNamespace = stmt.GetString(4),
+                        SourceAssetGuid = stmt.GetString(5),
+                        CreatedAt = stmt.GetLong(6)
+                    });
+                }
+            }
+            return results;
+        }
+
+        public void DeletePendingEdge(long id)
+        {
+            _connection.Execute("DELETE FROM pending_edges WHERE id = ?;", id);
+        }
+
+        public void DeletePendingEdgesBySourceAsset(string sourceAssetGuid)
+        {
+            _connection.Execute("DELETE FROM pending_edges WHERE source_asset_guid = ?;", sourceAssetGuid);
+        }
+
+        /// <summary>
+        /// Builds an in-memory map of all existing node GUIDs to their row IDs.
+        /// Used by GraphBuilder to avoid per-edge DB lookups during scanning.
+        /// </summary>
+        public Dictionary<string, long> BuildNodeGuidMap()
+        {
+            var map = new Dictionary<string, long>();
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "SELECT id, guid, file_id FROM nodes WHERE guid IS NOT NULL;"))
+            {
+                while (stmt.Step() == SQLite3.Result.Row)
+                {
+                    var id = stmt.GetLong(0);
+                    var guid = stmt.GetString(1);
+                    var fileIdStr = stmt.GetString(2);
+                    long fileId = fileIdStr != null ? stmt.GetLong(2) : 0;
+                    var key = $"{guid}:{fileId}";
+                    map[key] = id;
+                }
+            }
+            return map;
         }
 
         public void Dispose()

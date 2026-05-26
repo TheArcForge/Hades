@@ -490,6 +490,17 @@ public static class ValidateAvatarSetup
 }
 ```
 
+### Alternative: Direct MCP Tool Calls
+
+If you prefer tool calls over scripting, these editor-action tools are available:
+- `animation_create_controller` — create an AnimatorController asset
+- `animation_edit_controller` — modify controller layers, states, transitions, and parameters
+- `animation_assign_controller` — assign a controller to an Animator component
+- `animation_assign_clip` — assign an AnimationClip to a state
+- `animation_get_controller` — inspect controller structure (layers, states, parameters)
+
+Choose tools for quick one-off operations. Choose C# scripting (AnimatorController API) for reusable Editor tools or complex batch operations.
+
 ## Anti-Examples
 
 ### Using the Legacy Animation Component for New Characters
@@ -578,5 +589,5 @@ public static class ValidateAvatarSetup
 
 - Architecture decisions before animating: `hades:unity-architect`, `hades:component-design`
 - Scene and prefab setup: `hades:scene-authoring`, `hades:prefab-workflow`
-- Hades MCP tools used in this skill: `search_by_name`, `find_components_using_pattern`, `recall_memory`, `propose_memory_update`
+- Hades MCP tools used in this skill: `search_by_name`, `find_components_using_pattern`, `recall_memory`, `propose_memory_update`, `animation_create_controller`, `animation_edit_controller`, `animation_assign_controller`, `animation_assign_clip`, `animation_get_controller`
 - Unity docs: [Animator Controller](https://docs.unity3d.com/6000.0/Documentation/Manual/class-AnimatorController.html), [Blend Trees](https://docs.unity3d.com/6000.0/Documentation/Manual/class-BlendTree.html), [Animation Events](https://docs.unity3d.com/6000.0/Documentation/Manual/animeditor-AnimationEvents.html), [Avatar](https://docs.unity3d.com/6000.0/Documentation/Manual/ConfiguringtheAvatar.html), [AnimatorControllerLayer](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/AnimatorControllerLayer.html)

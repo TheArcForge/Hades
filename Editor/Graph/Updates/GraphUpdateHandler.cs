@@ -21,6 +21,9 @@ namespace ArcForge.Hades.Editor.Graph.Updates
         static void Initialize()
         {
             if (_instance != null) return;
+
+            // Ensure database exists (handles ordering if GraphInitializer hasn't run yet)
+            GraphInitializer.EnsureDatabase();
             if (GraphDatabase.Instance == null) return;
 
             _instance = new GraphUpdateHandler();
@@ -39,6 +42,12 @@ namespace ArcForge.Hades.Editor.Graph.Updates
             #if UNITY_2021_1_OR_NEWER
             PrefabStage.prefabSaved += OnPrefabSaved;
             #endif
+
+            // Run startup sync (package scan + stale asset check) with progress bar
+            _builder.CheckStartupSync();
+
+            var db = GraphDatabase.Instance;
+            Debug.Log($"[Hades] Graph initialized: {db.GetNodeCount()} nodes, {db.GetEdgeCount()} edges");
         }
 
         void OnEditorUpdate()
@@ -67,7 +76,7 @@ namespace ArcForge.Hades.Editor.Graph.Updates
                 _debouncer.Enqueue(new[] { guid });
         }
 
-        public bool IsBusy => _builder?.GetStatus() != BuildStatus.Idle;
+        public bool IsBusy => _builder != null && _builder.GetStatus() != BuildStatus.Idle;
 
         public void OnAssetsChanged(string[] guids)
         {

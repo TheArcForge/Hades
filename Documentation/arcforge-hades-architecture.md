@@ -104,7 +104,7 @@ A substantial portion of Hades's runtime infrastructure is reused from UniClaude
 - **Main Thread Bridge** — `ConcurrentQueue<WorkItem>` that funnels HTTP requests onto Unity's main thread, drained by `EditorApplication.update`. Required because Unity APIs are not thread-safe.
 - **Domain Reload Resilience** — server state (port, PID) persisted in `SessionState` so it survives Unity's assembly reloads. `IDomainReloadStrategy` with `EditorApplication.LockReloadAssemblies()` to prevent reloads mid-tool-execution.
 - **Path Sandboxing** — `PathSandbox.cs` ensures all file operations happen within the project root or the `.arcforge/` directory. No accidental writes outside.
-- **Tool primitives** — the 75+ MCP tools UniClaude shipped are migration candidates. They will be ported to Hades's tool API style, with most of them retained.
+- **Tool primitives** — 68 of UniClaude's 75 MCP tools have been ported to Hades (7 skipped as redundant). These provide direct editor actions: scene manipulation, component management, prefab operations, material editing, animation controller authoring, asset management, and more.
 
 What changes from UniClaude:
 
@@ -414,9 +414,9 @@ public class GraphBuilder
 }
 ```
 
-A full rebuild walks `AssetDatabase.GetAllAssetPaths()`, dispatches each asset to the scanner registered for its type, and collects results into a transaction-batched write to the SQLite database. On a medium project (10k assets), this takes 15-45 seconds depending on machine speed.
+A full rebuild has two phases. First, `GraphBuilder` spawns a Node.js process (`Scanner~/index.js`) that scans all `.cs` files in the project and packages, writing nodes and edges directly to `graph.db` via `better-sqlite3`. This replaced the original C#/Mono regex-based `ScriptScanner` because Mono's regex engine is 15-30x slower than V8's — what took 3-5 minutes on a medium project now completes in 10-30 seconds. Second, `GraphBuilder` runs the remaining C# scanners (scenes, prefabs, ScriptableObjects, materials, etc.) on the main thread for assets that require Unity APIs like `SerializedObject` and `AssetDatabase`.
 
-An incremental update receives a list of GUIDs whose assets have changed. For each, it removes the existing node-and-subgraph from the database, re-scans the asset, and inserts the new nodes and edges. This is typically sub-second for individual asset updates.
+An incremental update receives a list of GUIDs whose assets have changed. For `.cs` files, it spawns the Node.js scanner with `--mode incremental --guids <list>`. For other asset types, it removes the existing node-and-subgraph from the database, re-scans via the appropriate C# scanner, and inserts the new nodes and edges. Both paths are typically sub-second for individual asset updates.
 
 #### 2.3.2 Scanner interface
 
@@ -458,17 +458,17 @@ A second optimization: when scanning multiple scenes in a row in closed-scene mo
 
 **`PrefabScanner`** is similar to `SceneScanner` and follows the same two-mode pattern. For prefabs currently open in the prefab stage (detected via `PrefabStageUtility.GetCurrentPrefabStage()`), the scanner walks the in-memory state directly. For other prefabs, it uses `PrefabUtility.LoadPrefabContents()` to load and `PrefabUtility.UnloadPrefabContents()` to release. It detects prefab variants by checking `PrefabUtility.GetCorrespondingObjectFromOriginalSource()` on the prefab root. For variants, it produces a `PrefabVariant` node and an `inherits_from` edge to the base prefab. Override information is recorded in the edge properties.
 
-**`ScriptScanner`** parses C# files to extract types and methods. By default, it uses lightweight Roslyn (or a faster regex-based fallback) to identify class names, namespaces, base classes, and method signatures. Optional deep mode uses full Roslyn semantic analysis to extract method-call relationships, which populates the `calls` edge type. Deep mode is opt-in because it is expensive on large projects.
+**Script scanning (Node.js)** — `.cs` files are scanned by a standalone Node.js process in `Scanner~/`, not by a C# `IAssetScanner`. This architectural exception exists because script scanning is pure file I/O + regex — it needs no Unity APIs (`SerializedObject`, `AssetDatabase`, scene loading). Running on V8 instead of Mono yields a 15-30x speedup due to V8's JIT-compiled regex engine vs Mono's interpreted one.
 
-When deep mode is enabled, the following safeguards apply:
+The Node.js scanner (`Scanner~/index.js`) replicates the same four regex patterns the original C# `ScriptScanner` used: namespace extraction, type declarations (class/struct/interface/enum with base types), method signatures, and field declarations. It resolves GUIDs by reading `.meta` files directly (no `AssetDatabase.AssetPathToGUID()` call needed). Content-hash caching via the `scanned_assets` table ensures only changed files are re-parsed on subsequent boots.
 
-- **Per-file timeout**: 5 seconds default. If Roslyn semantic analysis on a single file exceeds this, the file is processed in shallow mode for this run and flagged in a `deep_mode_skipped` attribute on the resulting node. Configurable via `graph.deep_analysis_timeout_ms`.
-- **Per-rebuild memory budget**: 1GB default for the entire deep analysis pass. Roslyn's `Compilation` objects can balloon on large projects with many references; the budget caps total in-flight allocations. When the budget is exceeded, deep mode automatically downgrades to shallow for the remainder of the rebuild and surfaces a warning in the dashboard.
-- **Compilation reuse**: rather than constructing a new `Compilation` per file, the scanner builds one `Compilation` per assembly and reuses it across all files in that assembly. This is the difference between "tractable" and "intractable" performance on large projects.
-- **Diagnostic log**: every deep analysis decision (succeeded, timed out, skipped due to budget) is logged with file path and duration. Users hitting performance issues can inspect the log to see which files are problematic.
-- **Assembly filter**: by default, deep mode only analyzes assemblies in `Assets/` (user code). Package and built-in assemblies are skipped because they don't typically need call-graph analysis from Hades's perspective. Configurable via `graph.deep_analysis_assemblies`.
+For full scans with 1000+ files, the scanner parallelizes parsing across CPU cores using Node.js `worker_threads`. Workers handle file reading, GUID resolution, and regex parsing; the main thread handles all SQLite writes in a single transaction via `better-sqlite3`.
 
-In practice, deep mode is most useful for medium-sized projects (10k-50k LOC of user C#) where the call graph is genuinely informative. For very large projects, the safeguards prevent runaway resource usage at the cost of incomplete `calls` edge coverage.
+`GraphBuilder` spawns the Node.js process synchronously via `ProcessResolver.Run()` with a 5-minute timeout. If Node.js is not installed, script scanning is skipped with a warning — all other scanners continue normally. Exit code 2 (database locked) triggers a single retry after 1 second.
+
+The scanner uses version 2 (the original C# scanner was version 1). When projects upgrade from the C# scanner to the Node.js scanner, the version mismatch in `scanned_assets` triggers a full re-scan automatically.
+
+Roslyn deep mode (semantic analysis for `calls` edges) is a separate initiative not yet implemented.
 
 **`ScriptableObjectScanner`** distinguishes the type and the instance. For each `ScriptableObject` derivative type discovered (via `TypeCache.GetTypesDerivedFrom<ScriptableObject>()`), it creates a `ScriptableObjectType` node. For each `.asset` file containing a ScriptableObject instance, it loads the asset, identifies its type, creates a `ScriptableObject` node with an `instance_of` edge to the type node, and records serialized field values in properties.
 
@@ -524,7 +524,7 @@ When the debouncer flushes:
 1. Group pending changes by type: imported, modified, deleted, moved.
 2. For deletions: remove the corresponding nodes from the database. CASCADE removes edges automatically.
 3. For moves: update the `path` column on existing nodes. No re-scan needed if content didn't change.
-4. For imports and modifications: re-scan via the appropriate scanner.
+4. For imports and modifications: `.cs` files are routed to the Node.js scanner (`--mode incremental`); all other asset types are re-scanned via their C# scanner.
 5. The re-scan produces new nodes and edges. Compare with existing nodes/edges for the asset. Compute diffs.
 6. Apply diffs in a single SQLite transaction: `INSERT` new nodes, `UPDATE` changed nodes, `DELETE` removed nodes, similarly for edges.
 7. Update `scanned_assets` table with new content hash.
@@ -561,11 +561,9 @@ Per the architectural decision in the planning phase (hybrid approach), Hades ex
 - **A small number of granular tools** for the most common queries. These are well-documented, deterministic, and easy for the agent to choose correctly.
 - **A general-purpose query tool** as an escape hatch for cases the granular tools don't cover. This tool accepts a structured query expression rather than raw SQL, to keep the abstraction at the right level.
 
-The exact tool set is TBD pending migration of UniClaude's existing 70+ tools to the Hades style. The migration sets the standard. Below is the planned high-level shape.
+Hades exposes 89 MCP tools total: 21 graph/observability/memory tools built natively for Hades, plus 68 editor-action tools migrated from UniClaude. The graph tools are listed below; the editor-action tools are catalogued in the Roadmap §7 (Phase 5 migration section).
 
-#### 2.5.2 Granular query tools (planned)
-
-Examples of expected tools (final names and signatures TBD during migration):
+#### 2.5.2 Granular query tools
 
 - `get_project_summary(depth: shallow|medium|deep)` — returns a structured summary of the project: counts, render pipeline, key directories.
 - `find_components_using_pattern(pattern_name: string)` — finds all components matching a known structural pattern (e.g., "ScriptableObjectChannel<T>"). Patterns are pre-defined.
@@ -604,17 +602,19 @@ This is translated server-side to SQL with appropriate joins. The translation is
 
 #### 2.6.1 Build performance
 
-Empirical estimates (to be validated during development):
+Measured performance after the Node.js script scanner migration (Phase 5):
 
 | Project size | Asset count | Full rebuild | Incremental (single asset) |
 |---|---|---|---|
 | Small | < 1k | 2-5 sec | < 100ms |
-| Medium | 1k-10k | 5-30 sec | < 200ms |
-| Large | 10k-50k | 30-120 sec | 200-500ms |
-| Very large | 50k-200k | 2-8 min | 500ms-2sec |
+| Medium | 1k-10k | 5-15 sec | 100-200ms |
+| Large | 10k-50k | 15-45 sec | 200-500ms |
+| Very large | 50k-200k | 45-120 sec | 500ms-2sec |
 | Enterprise | > 200k | varies | varies |
 
-Most of the build time is in scene and prefab scanners (which open assets). Script scanning is fast in shallow mode, slow in deep mode (Roslyn semantic analysis).
+Script scanning (the dominant cost for projects with many `.cs` files) is now 15-30x faster than the original C#/Mono implementation. In a test with 6,268 package scripts + project scripts, the full first boot (package scan + project rebuild + edge resolution) completed in ~10 seconds, producing 163,449 nodes and 161,696 edges.
+
+Scene and prefab scanners (which open assets via Unity APIs) remain the bottleneck for projects with many scenes. Script scanning is no longer a significant contributor to build time.
 
 #### 2.6.2 Query performance
 
@@ -1177,7 +1177,11 @@ Agent clients (Claude Code, Claude Desktop) connect to Unity's MCP server throug
 The full architecture is documented in the **Plugin document** (`Documentation/arcforge-hades-plugin.md`, §3) and the **MCP Hub design spec** (`docs/superpowers/specs/2026-05-13-mcp-hub-design.md`). Key properties:
 
 1. **Hub** — long-running Node.js HTTP server, one per machine. Maintains a registry of Unity instances, routes tool calls by project path matching, monitors instance health via heartbeats, buffers requests during domain reloads.
-2. **Launcher** — thin stdio process declared in the plugin's `.mcp.json`. Starts the Hub on demand, bridges stdio to HTTP. Zero npm dependencies.
+2. **Launcher** — thin stdio process that starts the Hub on demand and bridges stdio to HTTP. Zero npm dependencies. Two connectivity paths reach it:
+   - **Plugin mode** (`--plugin-dir` or `/plugin install`): the plugin's `.mcp.json` uses `${CLAUDE_PLUGIN_ROOT}/Bridge~/launcher/dist/index.js`
+   - **Project auto-discovery**: `MCPClientConfig` writes a `.mcp.json` to the Unity project root pointing to `~/.arcforge/hades-hub/launcher.js` (the stable installed copy)
+
+   Both paths launch the same launcher binary, which connects to the shared Hub.
 3. **Unity registration** — Unity instances register/deregister with the Hub via HTTP instead of writing discovery files. Heartbeat every 30s. Breadcrumb files for when the Hub is offline.
 
 **Key properties:**
@@ -2573,7 +2577,7 @@ Charon continues operating during play mode — observability of agent actions d
 
 **Mitigation:**
 
-- Both clients connect through the Launcher (stdio process), which bridges to the Hub over HTTP. The Launcher is declared in the plugin's `.mcp.json` for Claude Code, and in `claude_desktop_config.json` for Claude Desktop (via stable copy at `~/.arcforge/hades-hub/launcher.js`).
+- Both clients connect through the Launcher (stdio process), which bridges to the Hub over HTTP. For Claude Code, the Launcher is reached via two paths: (1) the plugin's `.mcp.json` (using `${CLAUDE_PLUGIN_ROOT}/Bridge~/launcher/dist/index.js`) when the plugin is installed via `--plugin-dir` or `/plugin install`, or (2) a project-level `.mcp.json` written by `MCPClientConfig` to the Unity project root, pointing to the stable installed copy at `~/.arcforge/hades-hub/launcher.js`. For Claude Desktop, Unity writes `claude_desktop_config.json` pointing to the same stable launcher path.
 - The Launcher has zero npm dependencies — uses only Node.js built-ins. No `npx` or external tool required.
 - Node.js is a runtime dependency for MCP connectivity. Without Node.js, neither Claude Code nor Claude Desktop can connect to Hades.
 

@@ -4,14 +4,16 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using ArcForge.Hades.Editor.Charon;
+using ArcForge.Hades.Editor.Core;
 using ArcForge.Hades.Editor.Graph.Models;
+using ArcForge.Hades.Editor.Graph.Pipeline;
 using ArcForge.Hades.Editor.Graph.Scanning;
 using UnityEditor;
 using UnityEngine;
 
 namespace ArcForge.Hades.Editor.Graph
 {
-    public enum BuildStatus { Idle, Rebuilding, Updating }
+    public enum BuildStatus { Idle, Rebuilding, Updating, ScanningPackages }
 
     public class GraphBuilder
     {
@@ -20,6 +22,18 @@ namespace ArcForge.Hades.Editor.Graph
         readonly GraphDatabase _db;
         readonly ScannerRegistry _scannerRegistry;
         BuildStatus _status = BuildStatus.Idle;
+
+        // Session-level node map: accumulates guid:fileId → nodeId across all scanned files
+        // during a rebuild. Eliminates per-edge DB lookups in WriteScanResult.
+        Dictionary<string, long> _sessionNodeMap;
+
+        // Cached for the duration of a startup/rebuild session to avoid repeated Unity API calls
+        string[] _cachedAllPaths;
+
+        // Build log — records timing/results per step, written to .arcforge/graph_build.log
+        GraphBuildLog _buildLog;
+
+        const int NodeScannerTimeoutMs = 300000; // 5 minutes
 
         public GraphBuilder(GraphDatabase db)
         {
@@ -42,10 +56,14 @@ namespace ArcForge.Hades.Editor.Graph
             });
         }
 
+        // -------------------------------------------------------------------
+        // Full rebuild (synchronous) — kept for tests and menu items
+        // -------------------------------------------------------------------
+
         public void RebuildAll()
         {
             _status = BuildStatus.Rebuilding;
-            var allPaths = AssetDatabase.GetAllAssetPaths();
+            var allPaths = GetScannablePaths("Assets/");
 
             _db.SetCurrentOperation("rebuild");
 
@@ -55,24 +73,33 @@ namespace ArcForge.Hades.Editor.Graph
 
                 try
                 {
-                    _db.Execute("DELETE FROM edges;");
-                    _db.Execute("DELETE FROM nodes;");
-                    _db.Execute("DELETE FROM scanned_assets;");
-
-                    EnsureProjectNode();
-
-                    int total = allPaths.Length;
-                    int processed = 0;
-
-                    foreach (var path in allPaths)
+                    _db.RunInTransaction(() =>
                     {
-                        processed++;
-                        if (processed % 100 == 0)
-                            EditorUtility.DisplayProgressBar("Hades: Rebuilding Graph",
-                                $"Scanning {processed}/{total}...", (float)processed / total);
+                        _db.Execute("DELETE FROM pending_edges;");
+                        // Deleting project nodes cascades to remove all edges involving them
+                        _db.DeleteNodesByTier("project");
+                        _db.Execute(@"DELETE FROM scanned_assets WHERE guid NOT IN (
+                            SELECT DISTINCT guid FROM nodes WHERE guid IS NOT NULL);");
 
-                        ScanAsset(path);
-                    }
+                        EnsureProjectNode();
+                        _sessionNodeMap = BuildSessionMapFromExistingNodes();
+
+                        int total = allPaths.Length;
+                        int processed = 0;
+
+                        foreach (var path in allPaths)
+                        {
+                            processed++;
+                            if (processed % 20 == 0)
+                                EditorUtility.DisplayProgressBar("Hades: Rebuilding Graph",
+                                    $"Scanning project assets ({processed}/{total})…",
+                                    (float)processed / total);
+
+                            ScanAsset(path, "project");
+                        }
+
+                        ResolvePendingEdges();
+                    });
 
                     span.SetAttribute("nodes.count", _db.GetNodeCount());
                     span.SetAttribute("edges.count", _db.GetEdgeCount());
@@ -85,6 +112,7 @@ namespace ArcForge.Hades.Editor.Graph
                 }
                 finally
                 {
+                    _sessionNodeMap = null;
                     EditorUtility.ClearProgressBar();
                     _db.ClearCurrentOperation();
                     _db.SetMetadata("last_full_rebuild_at",
@@ -94,6 +122,320 @@ namespace ArcForge.Hades.Editor.Graph
                 }
             }
         }
+
+        // -------------------------------------------------------------------
+        // Chunked project rebuild (non-blocking, processes over multiple frames)
+        // -------------------------------------------------------------------
+
+        /// <summary>
+        /// Chunked project rebuild with progress bar.
+        /// Preserves package-tier nodes. Blocks the main thread.
+        /// </summary>
+        public void RebuildAllChunked(int assetsPerBatch = 50)
+        {
+            if (_status == BuildStatus.Rebuilding) return;
+
+            _status = BuildStatus.Rebuilding;
+            _db.SetCurrentOperation("rebuild");
+
+            try
+            {
+                _buildLog?.BeginStep("Chunked rebuild");
+                EditorUtility.DisplayProgressBar("Hades: Rebuilding Graph",
+                    "Loading project asset list from Unity…", 0f);
+
+                var allPaths = GetScannablePaths("Assets/");
+                int total = allPaths.Length;
+
+                _db.RunInTransaction(() =>
+                {
+                    _db.Execute("DELETE FROM pending_edges;");
+                    _db.DeleteNodesByTier("project");
+                    _db.Execute(@"DELETE FROM scanned_assets WHERE guid NOT IN (
+                        SELECT DISTINCT guid FROM nodes WHERE guid IS NOT NULL);");
+                });
+
+                EnsureProjectNode();
+                _sessionNodeMap = BuildSessionMapFromExistingNodes();
+
+                Debug.Log($"[Hades] Rebuild started: {total} scannable assets (package nodes preserved)");
+                _buildLog?.Detail("Total scannable assets", total);
+
+                for (int index = 0; index < total;)
+                {
+                    var batchEnd = Math.Min(index + assetsPerBatch, total);
+
+                    _db.RunInTransaction(() =>
+                    {
+                        for (; index < batchEnd; index++)
+                        {
+                            ScanAsset(allPaths[index], "project");
+                        }
+                    });
+
+                    EditorUtility.DisplayProgressBar("Hades: Rebuilding Graph",
+                        $"Scanning project assets ({index}/{total})…",
+                        0.05f + 0.85f * ((float)index / total));
+                }
+
+                var pendingCount = _db.GetPendingEdges().Count;
+                EditorUtility.DisplayProgressBar("Hades: Rebuilding Graph",
+                    $"Resolving {pendingCount} cross-file type edges…", 0.95f);
+
+                _db.RunInTransaction(() => ResolvePendingEdges());
+
+                _buildLog?.EndStep();
+
+                _db.SetMetadata("last_full_rebuild_at",
+                    DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
+
+                Debug.Log($"[Hades] Rebuild complete: {_db.GetNodeCount()} nodes, {_db.GetEdgeCount()} edges");
+                OnRebuildComplete?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                _buildLog?.Detail("ERROR", ex.Message);
+                Debug.LogError($"[Hades] Rebuild failed: {ex.Message}\n{ex.StackTrace}");
+            }
+            finally
+            {
+                _sessionNodeMap = null;
+                EditorUtility.ClearProgressBar();
+                _db.ClearCurrentOperation();
+                _status = BuildStatus.Idle;
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // Parallel rebuild — Node.js for .cs files, main thread for Unity-API scanners
+        // -------------------------------------------------------------------
+
+        /// <summary>
+        /// Rebuilds the graph: Node.js handles .cs files, main thread handles scenes/prefabs.
+        /// Blocks the main thread with a progress bar.
+        /// </summary>
+        public void RebuildParallel(int assetsPerBatch = 50)
+        {
+            if (_status == BuildStatus.Rebuilding) return;
+
+            _status = BuildStatus.Rebuilding;
+            _db.SetCurrentOperation("rebuild_parallel");
+
+            try
+            {
+                // --- Prepare ---
+                _buildLog?.BeginStep("Prepare project rebuild");
+                EditorUtility.DisplayProgressBar("Hades: Rebuilding Graph",
+                    "Clearing stale project data…", 0f);
+
+                _db.RunInTransaction(() =>
+                {
+                    _db.Execute("DELETE FROM pending_edges;");
+                    _db.DeleteNodesByTier("project");
+                    _db.Execute(@"DELETE FROM scanned_assets WHERE guid NOT IN (
+                        SELECT DISTINCT guid FROM nodes WHERE guid IS NOT NULL);");
+                });
+
+                EnsureProjectNode();
+                _buildLog?.EndStep();
+
+                // --- Phase A: Node.js script scan ---
+                _buildLog?.BeginStep("Node.js project script scan");
+                EditorUtility.DisplayProgressBar("Hades: Rebuilding Graph",
+                    "Scanning project scripts via Node.js…", 0.1f);
+
+                var assetsDir = Application.dataPath;
+                var nodeResult = RunNodeScanner("full", assetsDir);
+
+                if (nodeResult.Success)
+                {
+                    _buildLog?.Detail("Result", "Success");
+                }
+                else
+                {
+                    _buildLog?.Detail("Result", $"Failed: exit {nodeResult.ExitCode}");
+                    Debug.LogWarning("[Hades] Script scan failed, continuing with other scanners");
+                }
+                _buildLog?.EndStep();
+
+                // Rebuild session map from DB (includes what Node.js wrote)
+                _sessionNodeMap = BuildSessionMapFromExistingNodes();
+
+                // --- Phase C: Main-thread assets (scenes, prefabs, etc.) ---
+                var projectAssets = DiscoverProjectAssets();
+                int totalOther = projectAssets.OtherPaths.Length;
+
+                if (totalOther > 0)
+                {
+                    _buildLog?.BeginStep("Main-thread asset scan (scenes, prefabs, etc.)");
+
+                    _db.RunInTransaction(() =>
+                    {
+                        for (int i = 0; i < projectAssets.OtherPaths.Length; i++)
+                        {
+                            if (i % 10 == 0)
+                            {
+                                float progress = 0.5f + 0.3f * ((float)i / totalOther);
+                                EditorUtility.DisplayProgressBar("Hades: Rebuilding Graph",
+                                    $"Scanning project assets ({i}/{totalOther} — scenes, prefabs)…",
+                                    progress);
+                            }
+
+                            ScanAsset(projectAssets.OtherPaths[i], "project");
+                        }
+                    });
+
+                    _buildLog?.Detail("Assets scanned", totalOther);
+                    _buildLog?.EndStep();
+                }
+
+                // --- Phase D: Edge resolution ---
+                _buildLog?.BeginStep("Edge resolution");
+
+                var pendingCount = _db.GetPendingEdges().Count;
+                EditorUtility.DisplayProgressBar("Hades: Rebuilding Graph",
+                    $"Resolving {pendingCount} cross-file type edges…", 0.9f);
+
+                _db.RunInTransaction(() => ResolvePendingEdges());
+                _buildLog?.Detail("Pending edges input", pendingCount);
+                _buildLog?.EndStep();
+
+                _db.SetMetadata("last_full_rebuild_at",
+                    DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
+
+                Debug.Log($"[Hades] Rebuild complete: {_db.GetNodeCount()} nodes, {_db.GetEdgeCount()} edges");
+                OnRebuildComplete?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                _buildLog?.Detail("ERROR", ex.Message);
+                Debug.LogError($"[Hades] Rebuild failed: {ex.Message}\n{ex.StackTrace}");
+            }
+            finally
+            {
+                _sessionNodeMap = null;
+                EditorUtility.ClearProgressBar();
+                _db.ClearCurrentOperation();
+                _status = BuildStatus.Idle;
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // Package scanning — scan once, cache until versions change
+        // -------------------------------------------------------------------
+
+        /// <summary>
+        /// Scans package .cs files and stores them as tier="package" nodes.
+        /// Only rescans if package versions have changed since last scan.
+        /// </summary>
+        public void ScanPackagesIfNeeded()
+        {
+            if (!IsPackageScanNeeded()) return;
+
+            ScanPackages();
+        }
+
+        /// <summary>
+        /// Scans package .cs files via Node.js scanner. Blocks the main thread with a progress bar.
+        /// Optionally chains a follow-up action when complete.
+        /// </summary>
+        public void ScanPackages(Action onComplete = null)
+        {
+            if (_status != BuildStatus.Idle && _status != BuildStatus.ScanningPackages) return;
+
+            _status = BuildStatus.ScanningPackages;
+            _db.SetCurrentOperation("package_scan");
+
+            try
+            {
+                _buildLog?.BeginStep("Node.js package script scan");
+                EditorUtility.DisplayProgressBar("Hades: Scanning Packages",
+                    "Scanning package scripts via Node.js…", 0.1f);
+
+                var projectRoot = Path.GetDirectoryName(Application.dataPath);
+                var cacheDir = Path.Combine(projectRoot, "Library", "PackageCache");
+                var packagesDir = Path.Combine(projectRoot, "Packages");
+                var dirs = string.Join(",", new[] { cacheDir, packagesDir }.Where(Directory.Exists));
+
+                if (string.IsNullOrEmpty(dirs))
+                {
+                    Debug.Log("[Hades] No package directories found, skipping scan");
+                    _buildLog?.Detail("Result", "No package directories");
+                    _buildLog?.EndStep();
+                    return;
+                }
+
+                _sessionNodeMap = _sessionNodeMap ?? BuildSessionMapFromExistingNodes();
+                _db.RunInTransaction(() => _db.DeleteNodesByTier("package"));
+
+                var result = RunNodeScanner("full", dirs, "--tier package");
+
+                if (result.Success)
+                {
+                    var packageHash = ComputePackageLockHash();
+                    if (packageHash != null)
+                        _db.SetMetadata("packages_lock_hash", packageHash);
+
+                    _db.SetMetadata("last_package_scan_at",
+                        DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
+
+                    _sessionNodeMap = BuildSessionMapFromExistingNodes();
+
+                    var typeCount = _db.GetNodeCount("ScriptType", "package");
+                    Debug.Log($"[Hades] Package scan complete: {typeCount} package types indexed");
+                    _buildLog?.Detail("Types indexed", typeCount);
+                }
+                else
+                {
+                    Debug.LogWarning("[Hades] Package scan skipped (Node.js scanner unavailable or failed)");
+                    _buildLog?.Detail("Result", $"Failed: exit {result.ExitCode}");
+                }
+
+                _buildLog?.EndStep();
+            }
+            catch (Exception ex)
+            {
+                _buildLog?.Detail("ERROR", $"{ex.Message}");
+                Debug.LogError($"[Hades] Package scan failed: {ex.Message}\n{ex.StackTrace}");
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+                _db.ClearCurrentOperation();
+                _status = BuildStatus.Idle;
+            }
+
+            onComplete?.Invoke();
+        }
+
+        /// <summary>
+        /// Checks if packages need rescanning by comparing packages-lock.json hash.
+        /// </summary>
+        bool IsPackageScanNeeded()
+        {
+            // If no package nodes exist at all, we need a scan
+            var packageNodeCount = _db.GetNodeCount("ScriptType", "package");
+            if (packageNodeCount == 0) return true;
+
+            // Check if packages-lock.json has changed
+            var currentHash = ComputePackageLockHash();
+            if (currentHash == null) return false; // No lock file, can't determine
+
+            var storedHash = _db.GetMetadata("packages_lock_hash");
+            return storedHash != currentHash;
+        }
+
+        string ComputePackageLockHash()
+        {
+            var projectRoot = Path.GetDirectoryName(Application.dataPath);
+            var lockFile = Path.Combine(projectRoot, "Packages", "packages-lock.json");
+            if (!File.Exists(lockFile)) return null;
+            return ComputeContentHash(lockFile);
+        }
+
+        // -------------------------------------------------------------------
+        // Incremental update
+        // -------------------------------------------------------------------
 
         public void UpdateAssets(string[] guids)
         {
@@ -108,32 +450,70 @@ namespace ArcForge.Hades.Editor.Graph
 
                 try
                 {
-                    _db.RunInTransaction(() =>
+                    var csGuids = new List<string>();
+                    var otherGuids = new List<string>();
+
+                    foreach (var guid in guids)
                     {
-                        foreach (var guid in guids)
+                        var assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                        if (string.IsNullOrEmpty(assetPath))
                         {
-                            var assetPath = AssetDatabase.GUIDToAssetPath(guid);
-                            if (string.IsNullOrEmpty(assetPath))
-                            {
-                                _db.DeleteNodesByGuid(guid);
-                                continue;
-                            }
-
-                            if (!File.Exists(assetPath) && !Directory.Exists(assetPath))
-                            {
-                                _db.DeleteNodesByGuid(guid);
-                                continue;
-                            }
-
-                            var currentHash = ComputeContentHash(assetPath);
-                            var storedHash = _db.GetScannedAssetHash(guid);
-
-                            if (storedHash == currentHash) continue;
-
                             _db.DeleteNodesByGuid(guid);
-                            ScanAsset(assetPath);
+                            _db.DeletePendingEdgesBySourceAsset(guid);
+                            continue;
                         }
-                    });
+
+                        if (!File.Exists(assetPath) && !Directory.Exists(assetPath))
+                        {
+                            _db.DeleteNodesByGuid(guid);
+                            _db.DeletePendingEdgesBySourceAsset(guid);
+                            continue;
+                        }
+
+                        if (assetPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                            csGuids.Add(guid);
+                        else
+                            otherGuids.Add(guid);
+                    }
+
+                    if (csGuids.Count > 0)
+                    {
+                        var assetsDir = Application.dataPath;
+                        var guidList = string.Join(",", csGuids);
+                        RunNodeScanner("incremental", assetsDir, $"--guids \"{guidList}\"");
+                    }
+
+                    if (otherGuids.Count > 0)
+                    {
+                        _sessionNodeMap = BuildSessionMapFromExistingNodes();
+
+                        _db.RunInTransaction(() =>
+                        {
+                            foreach (var guid in otherGuids)
+                            {
+                                var assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                                if (string.IsNullOrEmpty(assetPath)) continue;
+
+                                var currentHash = ComputeContentHash(assetPath);
+                                var storedHash = _db.GetScannedAssetHash(guid);
+
+                                if (storedHash == currentHash) continue;
+
+                                _db.DeleteNodesByGuid(guid);
+                                _db.DeletePendingEdgesBySourceAsset(guid);
+
+                                var tier = assetPath.StartsWith("Packages/") ? "package" : "project";
+                                ScanAsset(assetPath, tier);
+                            }
+
+                            ResolvePendingEdges();
+                        });
+                    }
+                    else
+                    {
+                        _sessionNodeMap = BuildSessionMapFromExistingNodes();
+                        _db.RunInTransaction(() => ResolvePendingEdges());
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -143,6 +523,7 @@ namespace ArcForge.Hades.Editor.Graph
                 }
                 finally
                 {
+                    _sessionNodeMap = null;
                     _db.ClearCurrentOperation();
                     _db.SetMetadata("last_incremental_at",
                         DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
@@ -156,7 +537,7 @@ namespace ArcForge.Hades.Editor.Graph
         {
             foreach (var path in deletedPaths)
             {
-                _db.Execute("DELETE FROM nodes WHERE path = ?;", path);
+                _db.Execute("DELETE FROM nodes WHERE path = ? AND tier = 'project';", path);
             }
         }
 
@@ -173,7 +554,109 @@ namespace ArcForge.Hades.Editor.Graph
             }
         }
 
-        void ScanAsset(string assetPath)
+        // -------------------------------------------------------------------
+        // Path collection
+        // -------------------------------------------------------------------
+
+        /// <summary>
+        /// Returns scannable asset paths under the given prefix that have a registered scanner.
+        /// </summary>
+        string[] GetAllAssetPathsCached()
+        {
+            if (_cachedAllPaths == null)
+                _cachedAllPaths = AssetDatabase.GetAllAssetPaths();
+            return _cachedAllPaths;
+        }
+
+        string[] GetScannablePaths(string pathPrefix)
+        {
+            var allPaths = GetAllAssetPathsCached();
+            var scannable = new List<string>();
+
+            foreach (var path in allPaths)
+            {
+                if (!path.StartsWith(pathPrefix))
+                    continue;
+
+                if (_scannerRegistry.GetScannerForPath(path) != null)
+                    scannable.Add(path);
+            }
+
+            return scannable.ToArray();
+        }
+
+        // -------------------------------------------------------------------
+        // Project asset discovery (pure filesystem, no AssetDatabase)
+        // -------------------------------------------------------------------
+
+        struct ProjectDiscoveryResult
+        {
+            public string[] ScriptPaths; // Asset-relative .cs paths (Assets/Scripts/Foo.cs)
+            public string[] OtherPaths;  // Asset-relative paths for other scannable extensions
+        }
+
+        /// <summary>
+        /// Discovers all scannable files under Assets/ using pure filesystem operations.
+        /// No Unity API calls — safe to call during startup without triggering asset refresh.
+        /// Returns asset-relative paths partitioned into scripts (.cs) and other scannable types.
+        /// </summary>
+        ProjectDiscoveryResult DiscoverProjectAssets()
+        {
+            var projectRoot = Path.GetDirectoryName(Application.dataPath);
+            var assetsDir = Path.Combine(projectRoot, "Assets");
+
+            if (!Directory.Exists(assetsDir))
+            {
+                return new ProjectDiscoveryResult
+                {
+                    ScriptPaths = Array.Empty<string>(),
+                    OtherPaths = Array.Empty<string>()
+                };
+            }
+
+            // Collect the set of scannable extensions from all registered scanners
+            var scannableExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var scanner in _scannerRegistry.GetAll())
+            {
+                foreach (var ext in scanner.SupportedExtensions)
+                    scannableExtensions.Add(ext.ToLowerInvariant());
+            }
+
+            var scriptPaths = new List<string>();
+            var otherPaths = new List<string>();
+
+            // Prefix to strip: projectRoot + separator, so we get "Assets/..." relative paths
+            var prefixLength = projectRoot.Length + 1;
+
+            var allFiles = Directory.GetFiles(assetsDir, "*.*", SearchOption.AllDirectories);
+
+            foreach (var fullPath in allFiles)
+            {
+                var ext = Path.GetExtension(fullPath);
+                if (string.IsNullOrEmpty(ext)) continue;
+                if (!scannableExtensions.Contains(ext.ToLowerInvariant())) continue;
+
+                // Convert to asset-relative path with forward slashes
+                var assetPath = fullPath.Substring(prefixLength).Replace('\\', '/');
+
+                if (ext.Equals(".cs", StringComparison.OrdinalIgnoreCase))
+                    scriptPaths.Add(assetPath);
+                else
+                    otherPaths.Add(assetPath);
+            }
+
+            return new ProjectDiscoveryResult
+            {
+                ScriptPaths = scriptPaths.ToArray(),
+                OtherPaths = otherPaths.ToArray()
+            };
+        }
+
+        // -------------------------------------------------------------------
+        // Scanning core
+        // -------------------------------------------------------------------
+
+        void ScanAsset(string assetPath, string tier)
         {
             var scanner = _scannerRegistry.GetScannerForPath(assetPath);
             if (scanner == null) return;
@@ -182,13 +665,14 @@ namespace ArcForge.Hades.Editor.Graph
             {
                 span.SetAttribute("asset.path", assetPath);
                 span.SetAttribute("scanner.type", scanner.GetType().Name);
+                span.SetAttribute("tier", tier);
 
                 try
                 {
                     var scanResult = scanner.Scan(assetPath);
                     var guid = AssetDatabase.AssetPathToGUID(assetPath);
 
-                    WriteScanResult(scanResult, guid);
+                    WriteScanResult(scanResult, guid, tier);
 
                     var hash = ComputeContentHash(assetPath);
                     _db.RecordScannedAsset(guid, hash, scanner.Version);
@@ -200,7 +684,7 @@ namespace ArcForge.Hades.Editor.Graph
                     {
                         if (warning.Severity >= WarningSeverity.Warning)
                         {
-                            span.AddEvent("scan.warning", new System.Collections.Generic.Dictionary<string, string>
+                            span.AddEvent("scan.warning", new Dictionary<string, string>
                             {
                                 { "message", warning.Message },
                                 { "asset_path", warning.AssetPath }
@@ -218,15 +702,24 @@ namespace ArcForge.Hades.Editor.Graph
             }
         }
 
-        void WriteScanResult(ScanResult scanResult, string assetGuid)
+        // -------------------------------------------------------------------
+        // Write scan results with session-level node map
+        // -------------------------------------------------------------------
+
+        void WriteScanResult(ScanResult scanResult, string assetGuid, string tier)
         {
-            var nodeIdMap = new Dictionary<string, long>();
+            // Local map for nodes created in THIS scan result
+            var localNodeMap = new Dictionary<string, long>();
 
             foreach (var node in scanResult.Nodes)
             {
-                var id = _db.InsertNode(node);
+                var id = _db.InsertNode(node, tier);
                 var key = $"{node.Guid ?? ""}:{node.FileId ?? 0}";
-                nodeIdMap[key] = id;
+                localNodeMap[key] = id;
+
+                // Also register in the session-wide map for cross-file resolution
+                if (_sessionNodeMap != null)
+                    _sessionNodeMap[key] = id;
             }
 
             foreach (var edge in scanResult.Edges)
@@ -236,40 +729,191 @@ namespace ArcForge.Hades.Editor.Graph
 
                 long sourceId, targetId;
 
-                if (!nodeIdMap.TryGetValue(sourceKey, out sourceId))
+                // Resolve source: local map → session map → DB
+                if (!localNodeMap.TryGetValue(sourceKey, out sourceId))
                 {
-                    var sourceNode = _db.FindNodeByGuid(edge.SourceGuid, edge.SourceFileId);
-                    if (sourceNode == null) sourceNode = _db.FindNodeByGuid(edge.SourceGuid);
-                    if (sourceNode == null) continue;
-                    sourceId = sourceNode.Id;
+                    if (_sessionNodeMap == null || !_sessionNodeMap.TryGetValue(sourceKey, out sourceId))
+                    {
+                        var sourceNode = _db.FindNodeByGuid(edge.SourceGuid, edge.SourceFileId);
+                        if (sourceNode == null) sourceNode = _db.FindNodeByGuid(edge.SourceGuid);
+                        if (sourceNode == null) continue;
+                        sourceId = sourceNode.Id;
+                    }
                 }
 
-                if (!nodeIdMap.TryGetValue(targetKey, out targetId))
+                // Resolve target: check for name-based pending marker → local map → session map → DB → pending
+                if (edge.TargetGuid != null && edge.TargetGuid.StartsWith("__pending__"))
                 {
-                    var targetNode = _db.FindNodeByGuid(edge.TargetGuid, edge.TargetFileId);
-                    if (targetNode == null) targetNode = _db.FindNodeByGuid(edge.TargetGuid);
-                    if (targetNode == null) continue;
-                    targetId = targetNode.Id;
+                    // Name-based edge — goes to pending resolution
+                    var targetTypeName = edge.TargetGuid.Substring("__pending__".Length);
+                    string targetNamespace = null;
+                    if (edge.Properties != null && edge.Properties.TryGetValue("target_type_name", out var tn))
+                        targetTypeName = tn.ToString();
+
+                    // Try immediate resolution against existing nodes
+                    var resolved = _db.FindNodeByNameAndType(targetTypeName, "ScriptType");
+                    if (resolved != null)
+                    {
+                        targetId = resolved.Id;
+                    }
+                    else
+                    {
+                        _db.InsertPendingEdge(sourceId, edge.Type, targetTypeName, targetNamespace, assetGuid);
+                        continue;
+                    }
+                }
+                else if (!localNodeMap.TryGetValue(targetKey, out targetId))
+                {
+                    if (_sessionNodeMap != null && _sessionNodeMap.TryGetValue(targetKey, out targetId))
+                    {
+                        // Found in session map
+                    }
+                    else
+                    {
+                        var targetNode = _db.FindNodeByGuid(edge.TargetGuid, edge.TargetFileId);
+                        if (targetNode == null) targetNode = _db.FindNodeByGuid(edge.TargetGuid);
+                        if (targetNode == null)
+                        {
+                            // Target doesn't exist yet — store as pending edge for later resolution
+                            _db.InsertPendingEdge(sourceId, edge.Type,
+                                edge.TargetGuid ?? "", null, assetGuid);
+                            continue;
+                        }
+                        targetId = targetNode.Id;
+                    }
                 }
 
                 _db.InsertEdge(sourceId, targetId, edge.Type, edge.PropertiesJson);
             }
         }
 
-        public void CheckStartupSync()
+        // -------------------------------------------------------------------
+        // Edge resolution
+        // -------------------------------------------------------------------
+
+        /// <summary>
+        /// Resolves pending edges by matching target GUIDs/names against existing nodes.
+        /// Called after scanning completes.
+        /// </summary>
+        void ResolvePendingEdges()
         {
-            if (_db.GetNodeCount() == 0)
+            var pending = _db.GetPendingEdges();
+            if (pending.Count == 0) return;
+
+            int resolved = 0;
+            var toDelete = new List<long>();
+
+            foreach (var pe in pending)
             {
-                RebuildAll();
-                return;
+                // Try to find the target node by GUID (stored in TargetTypeName field for GUID-based edges)
+                NodeRecord targetNode = null;
+                if (!string.IsNullOrEmpty(pe.TargetTypeName))
+                {
+                    targetNode = _db.FindNodeByGuid(pe.TargetTypeName);
+                }
+
+                // Try name-based resolution for type edges (inherits_from, implements)
+                if (targetNode == null && !string.IsNullOrEmpty(pe.TargetTypeName)
+                    && (pe.EdgeType == "inherits_from" || pe.EdgeType == "implements"))
+                {
+                    targetNode = _db.FindNodeByNameAndType(pe.TargetTypeName, "ScriptType");
+                }
+
+                if (targetNode != null)
+                {
+                    _db.InsertEdge(pe.SourceNodeId, targetNode.Id, pe.EdgeType, null);
+                    toDelete.Add(pe.Id);
+                    resolved++;
+                }
             }
 
-            var allPaths = AssetDatabase.GetAllAssetPaths();
+            foreach (var id in toDelete)
+            {
+                _db.DeletePendingEdge(id);
+            }
+
+            if (resolved > 0)
+                Debug.Log($"[Hades] Resolved {resolved}/{pending.Count} pending edges");
+        }
+
+        // -------------------------------------------------------------------
+        // Session map helpers
+        // -------------------------------------------------------------------
+
+        /// <summary>
+        /// Pre-populates the session node map from all existing nodes in the DB.
+        /// This allows cross-file edge resolution without per-edge DB queries.
+        /// </summary>
+        Dictionary<string, long> BuildSessionMapFromExistingNodes()
+        {
+            return _db.BuildNodeGuidMap();
+        }
+
+        // -------------------------------------------------------------------
+        // Startup sync
+        // -------------------------------------------------------------------
+
+        public void CheckStartupSync()
+        {
+            // Determine trigger reason
+            bool firstBoot = _db.GetNodeCount() == 0;
+            bool packagesChanged = !firstBoot && IsPackageScanNeeded();
+            string trigger = firstBoot ? "first_boot"
+                           : packagesChanged ? "packages_changed"
+                           : "incremental";
+
+            _buildLog = new GraphBuildLog(trigger);
+
+            try
+            {
+                if (firstBoot)
+                {
+                    // Package scan uses pure filesystem (no AssetDatabase needed).
+                    // AssetDatabase.GetAllAssetPaths is deferred to RebuildParallel
+                    // where it's called with a progress bar already showing.
+                    ScanPackages(onComplete: () => RebuildParallel());
+                }
+                else if (packagesChanged)
+                {
+                    ScanPackages(onComplete: () => CheckStaleProjectAssets());
+                }
+                else
+                {
+                    CheckStaleProjectAssets();
+                }
+            }
+            finally
+            {
+                _buildLog?.Flush(_db.GetNodeCount(), _db.GetEdgeCount());
+                _buildLog = null;
+                _cachedAllPaths = null;
+            }
+        }
+
+        void CheckStaleProjectAssets()
+        {
+            _buildLog?.BeginStep("Check stale project assets");
+
+            EditorUtility.DisplayProgressBar("Hades: Checking Project",
+                "Loading project asset list from Unity…", 0f);
+
+            var allPaths = GetAllAssetPathsCached();
             var staleGuids = new List<string>();
+            int checked_ = 0;
+            int projectAssets = 0;
 
             foreach (var path in allPaths)
             {
                 if (!path.StartsWith("Assets/")) continue;
+                projectAssets++;
+
+                if (projectAssets % 100 == 0)
+                {
+                    EditorUtility.DisplayProgressBar("Hades: Checking Project",
+                        $"Checking project assets for changes ({projectAssets} checked, {staleGuids.Count} stale)…",
+                        0.5f);
+                }
+
                 var guid = AssetDatabase.AssetPathToGUID(path);
                 if (string.IsNullOrEmpty(guid)) continue;
 
@@ -296,12 +940,26 @@ namespace ArcForge.Hades.Editor.Graph
                     staleGuids.Add(guid);
             }
 
+            _buildLog?.Detail("Project assets checked", projectAssets);
+            _buildLog?.Detail("Stale assets found", staleGuids.Count);
+            _buildLog?.EndStep();
+
+            EditorUtility.ClearProgressBar();
+
             if (staleGuids.Count > 0)
             {
                 Debug.Log($"[Hades] Startup sync: {staleGuids.Count} assets need re-scanning");
+
+                _buildLog?.BeginStep("Incremental update of stale assets");
                 UpdateAssets(staleGuids.ToArray());
+                _buildLog?.Detail("Assets updated", staleGuids.Count);
+                _buildLog?.EndStep();
             }
         }
+
+        // -------------------------------------------------------------------
+        // Utilities
+        // -------------------------------------------------------------------
 
         static string ComputeContentHash(string filePath)
         {
@@ -312,6 +970,54 @@ namespace ArcForge.Hades.Editor.Graph
                 var hash = md5.ComputeHash(stream);
                 return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
             }
+        }
+
+        RunResult RunNodeScanner(string mode, string dirs, string extraArgs = "")
+        {
+            var nodePath = ProcessResolver.FindExecutable("node");
+            if (nodePath == null)
+            {
+                Debug.LogWarning("[Hades] Node.js not found — script scanning disabled. Install Node.js for full graph indexing.");
+                return new RunResult { ExitCode = 3, Error = "Node.js not found" };
+            }
+
+            var projectRoot = Path.GetDirectoryName(Application.dataPath);
+            var dbPath = Path.Combine(projectRoot, ".arcforge", "graph.db");
+            var packageInfo = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(GraphBuilder).Assembly);
+            var scannerDir = Path.Combine(packageInfo.resolvedPath, "Scanner~");
+
+            if (!Directory.Exists(Path.Combine(scannerDir, "node_modules")))
+            {
+                EditorUtility.DisplayProgressBar("Hades: Installing Scanner",
+                    "Running npm install for script scanner…", 0f);
+                var npmResult = ProcessResolver.Run("npm", "install", scannerDir, 120000);
+                EditorUtility.ClearProgressBar();
+                if (!npmResult.Success)
+                {
+                    Debug.LogError($"[Hades] npm install failed: {npmResult.Error}");
+                    return new RunResult { ExitCode = 3, Error = "npm install failed" };
+                }
+            }
+
+            var args = $"\"{Path.Combine(scannerDir, "index.js")}\" --db \"{dbPath}\" --mode {mode} --dirs \"{dirs}\" --project-root \"{projectRoot}\" {extraArgs}";
+
+            _buildLog?.Detail("Node.js scanner", $"mode={mode} dirs={dirs}");
+
+            var result = ProcessResolver.Run("node", args, projectRoot, NodeScannerTimeoutMs);
+
+            if (result.ExitCode == 2)
+            {
+                Debug.LogWarning("[Hades] Scanner reported database contention, retrying…");
+                System.Threading.Thread.Sleep(1000);
+                result = ProcessResolver.Run("node", args, projectRoot, NodeScannerTimeoutMs);
+            }
+
+            if (!result.Success)
+            {
+                Debug.LogError($"[Hades] Node.js scanner failed (exit {result.ExitCode}): {result.Error}");
+            }
+
+            return result;
         }
     }
 }

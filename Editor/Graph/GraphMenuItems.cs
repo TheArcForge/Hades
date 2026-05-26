@@ -1,3 +1,4 @@
+using System.IO;
 using ArcForge.Hades.Editor.Graph.Updates;
 using UnityEditor;
 using UnityEngine;
@@ -48,6 +49,22 @@ namespace ArcForge.Hades.Editor.Graph
             foreach (var kv in counts)
                 sb.AppendLine($"    {kv.Key}: {kv.Value}");
             Debug.Log(sb.ToString());
+        }
+
+        [MenuItem("Hades/Show Build Log", priority = 102)]
+        public static void ShowBuildLog()
+        {
+            var projectRoot = Path.GetDirectoryName(Application.dataPath);
+            var logPath = Path.Combine(projectRoot, ".arcforge", "graph_build.log");
+
+            if (!File.Exists(logPath))
+            {
+                Debug.Log("[Hades] No build log found. A graph rebuild has not run yet.");
+                return;
+            }
+
+            var content = File.ReadAllText(logPath);
+            Debug.Log($"[Hades] Build Log ({logPath}):\n{content}");
         }
     }
 }

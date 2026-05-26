@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using ArcForge.Hades.Editor.Asphodel;
 using ArcForge.Hades.Editor.Charon;
+using ArcForge.Hades.Editor.Graph;
 using ArcForge.Hades.Editor.Graph.Models;
 using ArcForge.Hades.Editor.MCP;
 using Newtonsoft.Json.Linq;
@@ -15,7 +16,22 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         static MemoryValidator _testValidator;
 
         static MemoryManager GetManager() => _testManager ?? AsphodeInitializer.Manager;
-        static MemoryValidator GetValidator() => _testValidator ?? AsphodeInitializer.Validator;
+        static MemoryValidator GetValidator()
+        {
+            if (_testValidator != null) return _testValidator;
+            if (AsphodeInitializer.Validator != null) return AsphodeInitializer.Validator;
+
+            // Lazy init: validator may not have been created if GraphDatabase wasn't ready at startup
+            var manager = GetManager();
+            var db = GraphDatabase.Instance;
+            if (manager != null && db != null)
+            {
+                AsphodeInitializer.InitValidator(manager, db);
+                return AsphodeInitializer.Validator;
+            }
+
+            return null;
+        }
 
         public static void SetTestManager(MemoryManager m) { _testManager = m; }
         public static void SetTestValidator(MemoryValidator v) { _testValidator = v; }

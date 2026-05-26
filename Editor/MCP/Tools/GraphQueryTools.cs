@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using ArcForge.Hades.Editor.Graph;
@@ -144,8 +145,11 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         }
 
         [MCPTool("hades_rebuild_graph",
-            "Triggers a full rebuild of the Hades knowledge graph. Use this if the graph seems stale or out of sync with the project.")]
-        public static MCPToolResult HadesRebuildGraph()
+            "Triggers a full rebuild of the Hades knowledge graph. Use this if the graph seems stale or out of sync with the project. " +
+            "Uses parallel scanning for .cs files (thread pool) and batched processing for other assets. " +
+            "Blocks until rebuild completes (progress bar shown in Unity).")]
+        public static MCPToolResult HadesRebuildGraph(
+            [MCPToolParam("Set to 'true' to also rescan all packages (normally cached)", required: false)] string include_packages = "")
         {
             var handler = ArcForge.Hades.Editor.Graph.Updates.GraphUpdateHandler.Instance;
             if (handler == null) return MCPToolResult.Error("Graph update handler not initialized");
@@ -153,8 +157,22 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             var builder = handler.GetBuilder();
             if (builder == null) return MCPToolResult.Error("Graph builder not available");
 
-            builder.RebuildAll();
-            return MCPToolResult.Success(new { status = "ok", message = "Graph rebuild complete" });
+            if (builder.GetStatus() != ArcForge.Hades.Editor.Graph.BuildStatus.Idle)
+                return MCPToolResult.Success(new { status = "already_rebuilding", message = "A rebuild is already in progress" });
+
+            if (include_packages == "true")
+                builder.ScanPackages();
+
+            builder.RebuildParallel();
+
+            var db = GraphDatabase.Instance;
+            return MCPToolResult.Success(new
+            {
+                status = "completed",
+                nodes = db?.GetNodeCount() ?? 0,
+                edges = db?.GetEdgeCount() ?? 0,
+                message = $"Rebuild complete: {db?.GetNodeCount() ?? 0} nodes, {db?.GetEdgeCount() ?? 0} edges"
+            });
         }
 
         [MCPTool("find_prefabs_with_component",
@@ -425,16 +443,61 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             try
             {
                 var q = JObject.Parse(query);
-                var fromType = q["from"]?["type"]?.ToString();
+                var fromToken = q["from"];
+                var fromType = fromToken is JValue
+                    ? fromToken.ToString()
+                    : fromToken?["type"]?.ToString();
                 var selectFields = q["select"]?.ToObject<string[]>() ?? new[] { "name", "type", "path" };
                 var limit = q["limit"]?.Value<int>() ?? 100;
 
                 if (string.IsNullOrEmpty(fromType))
-                    return MCPToolResult.Error("Query must specify 'from.type'");
+                    return MCPToolResult.Error("Query must specify 'from' as a type name string or object with 'type' field");
 
                 var nodes = db.FindNodesByType(fromType);
 
-                var whereEdges = q["where"]?["edges"] as JArray;
+                // Name-based filtering (supports SQL LIKE patterns with %)
+                var whereClause = q["where"];
+                var nameLike = whereClause?["name_like"]?.ToString();
+                if (!string.IsNullOrEmpty(nameLike))
+                {
+                    var pattern = nameLike.Replace("%", "");
+                    var startsWild = nameLike.StartsWith("%");
+                    var endsWild = nameLike.EndsWith("%");
+
+                    nodes = nodes.Where(n =>
+                    {
+                        if (n.Name == null) return false;
+                        if (startsWild && endsWild)
+                            return n.Name.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+                        if (startsWild)
+                            return n.Name.EndsWith(pattern, StringComparison.OrdinalIgnoreCase);
+                        if (endsWild)
+                            return n.Name.StartsWith(pattern, StringComparison.OrdinalIgnoreCase);
+                        return string.Equals(n.Name, pattern, StringComparison.OrdinalIgnoreCase);
+                    }).ToList();
+                }
+
+                var pathLike = whereClause?["path_like"]?.ToString();
+                if (!string.IsNullOrEmpty(pathLike))
+                {
+                    var pattern = pathLike.Replace("%", "");
+                    var startsWild = pathLike.StartsWith("%");
+                    var endsWild = pathLike.EndsWith("%");
+
+                    nodes = nodes.Where(n =>
+                    {
+                        if (n.Path == null) return false;
+                        if (startsWild && endsWild)
+                            return n.Path.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+                        if (startsWild)
+                            return n.Path.EndsWith(pattern, StringComparison.OrdinalIgnoreCase);
+                        if (endsWild)
+                            return n.Path.StartsWith(pattern, StringComparison.OrdinalIgnoreCase);
+                        return string.Equals(n.Path, pattern, StringComparison.OrdinalIgnoreCase);
+                    }).ToList();
+                }
+
+                var whereEdges = whereClause?["edges"] as JArray;
                 if (whereEdges != null)
                 {
                     var filtered = new List<NodeRecord>();

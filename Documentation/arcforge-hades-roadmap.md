@@ -1065,6 +1065,8 @@ This is also the phase where Hades may optionally be submitted to the official A
 - [x] Tier 2 → Tier 1 promotion proposals appear in queue when confidence/sample thresholds met
 - [x] Inferred patterns are clearly labeled as inferred in agent context (per Architecture §4.6.1)
 - [x] Cross-layer feedback loops work correctly per Architecture §6.4 (graph evolution → memory updates, traces → inference, memory invalidates graph assumptions)
+- [x] UniClaude MCP tool migration complete: 68 editor-action tools ported across 14 files, plus ManualReloadStrategy and GameObjectResolver *(7 tools skipped: 6 FileTools redundant with native file tools, 1 ProjectSearch superseded by Graph)*
+- [x] Post-migration workflow skill updates: scene-authoring, prefab-workflow, animation-workflow skills reference ported tools as alternative to C# scripting
 - [ ] Performance optimization passes complete: large project benchmark (50k+ assets) shows acceptable build/query latency
 - [ ] All known edge cases from Architecture §8 have explicit handling
 - [ ] Documentation complete: user-facing setup guide, troubleshooting, recovery procedures
@@ -1098,18 +1100,20 @@ This is also the phase where Hades may optionally be submitted to the official A
 - Roslyn deep mode safeguards finalized (timeout, memory budget per Architecture §2.3.3)
 - Pre-aggregated rollup tables for dashboard if needed
 
-**UniClaude MCP tool migration (75 → Hades):**
+**UniClaude MCP tool migration (75 → Hades): ✅ Complete (2026-05-15)**
 
-UniClaude shipped 75 MCP tools providing direct editor actions (scene manipulation, component management, prefab operations, etc.). Phase 0 migrated the *infrastructure* (MCPServer, MCPDispatcher, HttpTransport) but not the tool implementations. Hades currently has 21 tools (Graph, Charon, Asphodel, Core). The remaining ~54 editor-action tools must be migrated to restore full parity.
+UniClaude shipped 75 MCP tools providing direct editor actions (scene manipulation, component management, prefab operations, etc.). Phase 0 migrated the *infrastructure* (MCPServer, MCPDispatcher, HttpTransport) but not the tool implementations. This sub-phase migrated the tool implementations.
 
-Source: `/Users/mike/Projects/ArcForge/Packages/com.arcforge.uniclaude/Editor/MCP/Tools/`
+**Result:** 68 tools ported across 14 files. 7 tools skipped (6 FileTools redundant with native file tools across all clients, 1 ProjectSearch superseded by Graph). Additionally ported: `ManualReloadStrategy` (implements `IDomainReloadStrategy` for explicit domain reload control) and `GameObjectResolver` (shared utility used by 7 tool files for resolving GameObjects by hierarchy path including inactive objects).
 
-Migration is mechanical — same `[MCPTool]`/`[MCPToolParam]` attribute pattern, same `MCPToolResult` return type. Each tool file copies to `Editor/MCP/Tools/`, namespace changes to `ArcForge.Hades.Editor.MCP.Tools`, compiles against Hades's existing infrastructure.
+Hades now has **89 total MCP tools**: 21 original (Graph, Charon, Asphodel, Core) + 68 migrated editor-action tools.
 
-**Tier 1 — Direct port (48 tools, 10 files).** Copy, update namespace, verify compilation. No design changes needed:
+Migration was mechanical — same `[MCPTool]`/`[MCPToolParam]` attribute pattern, same `MCPToolResult` return type. Each tool file was copied to `Editor/MCP/Tools/`, namespace changed to `ArcForge.Hades.Editor.MCP.Tools`, XML doc comments stripped to match Hades style. `MCPDispatcher` auto-discovers all tools via reflection.
 
-| Category | Tools | Source file |
-|----------|-------|-------------|
+**Ported tools by category (68 tools, 14 files):**
+
+| Category | Tools | File |
+|----------|-------|------|
 | Scene Hierarchy (7) | `scene_get_hierarchy`, `scene_create_gameobject`, `scene_create_primitive`, `scene_delete_gameobject`, `scene_reparent_gameobject`, `scene_rename_gameobject`, `scene_setup` | SceneTools.cs |
 | Scene Management (6) | `scene_save`, `scene_create`, `scene_open`, `scene_duplicate`, `scene_list_build`, `scene_set_build` | SceneManagementTools.cs |
 | Inspector (2) | `inspector_select`, `inspector_inspect` | InspectorTools.cs |
@@ -1119,32 +1123,26 @@ Migration is mechanical — same `[MCPTool]`/`[MCPToolParam]` attribute pattern,
 | Tag & Layer (5) | `tag_create`, `tag_delete`, `tag_list`, `layer_create`, `layer_list` | TagLayerTools.cs |
 | Animation (5) | `animation_assign_controller`, `animation_assign_clip`, `animation_get_controller`, `animation_create_controller`, `animation_edit_controller` | AnimationTools.cs |
 | Reference (3) | `reference_set`, `reference_get`, `reference_find_unset` | ReferenceTools.cs |
+| Event (4) | `event_add_listener`, `event_remove_listener`, `event_list_listeners`, `event_find_all` | EventTools.cs |
+| Asset (4) | `asset_get_info`, `asset_find`, `asset_move`, `asset_import` | AssetTools.cs |
+| Asset Import (3) | `asset_get_import_settings`, `asset_set_import_settings`, `asset_set_clip_import_settings` | AssetImportTools.cs |
+| Domain Reload (3) | `BeginScriptEditing`, `EndScriptEditing`, `project_recompile_scripts` | DomainReloadTools.cs |
+| Project (4) | `project_run_tests`, `project_get_console_log`, `project_get_settings`, `project_refresh_assets` | ProjectTools.cs |
 
-**Tier 2 — Port with adaptation (12 tools, 4 files).** Need minor adjustments for Hades context:
-
-| Category | Tools | Adaptation needed |
-|----------|-------|-------------------|
-| Event (4) | `event_add_listener`, `event_remove_listener`, `event_list_listeners`, `event_find_all` | EventTools.cs — port as-is, verify UnityEventTools API compatibility with Unity 6 |
-| Asset (4) | `asset_get_info`, `asset_find`, `asset_move`, `asset_import` | AssetTools.cs — port as-is, consider enriching `asset_get_info` with Graph data |
-| Asset Import (3) | `asset_get_import_settings`, `asset_set_import_settings`, `asset_set_clip_import_settings` | AssetImportTools.cs — port as-is |
-| Domain Reload (3) | `BeginScriptEditing`, `EndScriptEditing`, `project_recompile_scripts` | DomainReloadTools.cs — adapt to Hades's `IDomainReloadStrategy` (ManualReloadStrategy already exists) |
-
-**Tier 3 — Port selectively (9 tools, 2 files).** Some overlap with Claude Code or Hades capabilities:
-
-| Category | Tools | Decision |
-|----------|-------|----------|
-| File (6) | `file_read`, `file_write`, `file_create_script`, `file_modify_script`, `file_delete`, `file_find` | **Port `file_create_script` only** — it generates Unity-specific templates (MonoBehaviour, ScriptableObject) with correct namespaces and AssetDatabase.Refresh. The other 5 are redundant with Claude Code's native file tools. For Claude Desktop users (no native file tools), port all 6. |
-| Project (4) | `project_run_tests`, `project_get_console_log`, `project_get_settings`, `project_refresh_assets` | **Port all 4** — these are Unity Editor actions that Claude Code cannot do natively. `project_run_tests` is especially valuable. `project_get_console_log` requires porting the console log ring buffer from UniClaude. |
-
-**Tier 4 — Skip (1 tool):**
+**Skipped tools (7):**
 
 | Category | Tools | Reason |
 |----------|-------|--------|
+| File (6) | `file_read`, `file_write`, `file_create_script`, `file_modify_script`, `file_delete`, `file_find` | Redundant with native file tools (Claude Code and Claude Desktop both have file tools via MCP). `file_create_script` functionality covered by skills teaching proper Unity script templates. |
 | Project Search (1) | `project_search` | Superseded by Hades Graph tools (`query_graph`, `search_by_name`). Graph provides richer results with dependency information. |
 
-**Post-migration: reconnect workflow skills.** Phase 4 rewrote workflow skills (scene-authoring, prefab-workflow, animation-workflow) to teach C# Editor scripting patterns because the editor-action tools didn't exist in Hades. After migration, update these skills to reference the tools as an *alternative* approach — the agent can choose between direct tool calls and C# scripting based on context. Skills remain pattern-focused but now mention tool availability.
+**Post-migration: workflow skills updated.** Phase 4 rewrote workflow skills (scene-authoring, prefab-workflow, animation-workflow) to teach C# Editor scripting patterns because the editor-action tools didn't exist in Hades. These skills now reference the ported tools as an *alternative* approach — the agent can choose between direct tool calls and C# scripting based on context.
 
-**Testing approach:** Each migrated tool file gets a corresponding NUnit test that verifies the tool is discoverable by `MCPDispatcher` and returns a valid `MCPToolResult`. Integration tests use the same pattern as `MCPServerIntegrationTests.cs` — start the server, call tools via HTTP, verify response shape. Editor-action tools (scene manipulation, prefab creation) need a test scene fixture.
+**Testing:** `MigratedToolDiscoveryTests.cs` verifies all 68 tool names are discoverable by `MCPDispatcher`. HTTP smoke tests (calling tools and verifying response shape) deferred — require a running Unity Editor with a test scene fixture for tools that mutate state.
+
+**Deferred:**
+- `asset_get_info` enrichment with Graph dependency data (optional polish)
+- HTTP smoke tests for editor-action tools (requires test scene fixture)
 
 **Deferred from Phase 4:**
 - Skill/MCP version compatibility range in `plugin.json` (tool version negotiation)
@@ -1267,6 +1265,46 @@ Issues and decisions from the Tier 2 inferred memory implementation, documented 
 6. **7 test files + shared fixture factory.** Coverage: `AcceptanceRateAnalyzerTests` (5), `TopicClusterAnalyzerTests` (5), `TimeOfDayAnalyzerTests` (5), `FailureCorrelationAnalyzerTests` (6), `PromotionEvaluatorTests` (7), `PatternInferenceEngineTests` (5), and `InferenceIntegrationTests` (3) — 36 tests total. `SyntheticTraceFixtures` provides 5 reusable fixture factories (AcceptanceRate, TopicCluster, TimeOfDay, FailureCorrelation, Empty) shared across analyzer test files.
 
 7. **Fixed: MemoryFileWatcher → Validator infinite loop.** `ValidateFile()` writes updated frontmatter (validation_status, last_validated_against_graph) back to the memory file. `MemoryFileWatcher` detected this write and scheduled another `ValidateFile()` via `delayCall`, creating an infinite loop that pegged the CPU at 100% and froze the Editor on startup. Fix: added `Suppress()`/`Resume()` methods to `MemoryFileWatcher` that toggle `EnableRaisingEvents`. Both `OnGraphRebuild()` and `OnMemoryFileChanged()` in `AsphodeInitializer` now suppress the watcher around internal writes. External edits (user or MCP tools) still trigger validation normally.
+
+### Phase 5b implementation notes
+
+Issues and decisions from the UniClaude MCP tool migration, documented for future reference:
+
+1. **68 tools migrated, 7 skipped.** All 6 FileTools (`file_read`, `file_write`, `file_create_script`, `file_modify_script`, `file_delete`, `file_find`) skipped — redundant with native file tools available in both Claude Code and Claude Desktop (via MCP filesystem server). `file_create_script` functionality covered by existing skills teaching Unity script templates. `project_search` skipped — superseded by Graph tools (`query_graph`, `search_by_name`).
+
+2. **GameObjectResolver ported as shared utility.** 7 of the 14 tool files depend on `GameObjectResolver.FindByPath()` for resolving GameObjects by hierarchy path (including inactive objects). This was not listed in the original roadmap migration plan — it was discovered during implementation as a compilation dependency. Ported to `Editor/MCP/Utilities/GameObjectResolver.cs` in namespace `ArcForge.Hades.Editor.MCP.Tools`.
+
+3. **ManualReloadStrategy ported but not wired as selectable.** `ManualReloadStrategy` implements `IDomainReloadStrategy` and is referenced by `DomainReloadTools` (`BeginScriptEditing`/`EndScriptEditing`). Ported to `Editor/MCP/DomainReload/ManualReloadStrategy.cs`. `MCPServer.Start()` still defaults to `AutoReloadStrategy`. The `DomainReloadTools` gracefully no-op when Auto is active (the `as ManualReloadStrategy` cast returns null). To enable manual reload control, a setting must be added to `HadesSettings` to choose between Auto/Manual strategies.
+
+4. **ConsoleLogBuffer session key preserved.** `ProjectTools.cs` contains an inline `ConsoleLogBuffer` class with a `SessionStateKey` of `"UniClaude.ConsoleBuffer"`. This runtime string was preserved as-is during the mechanical port. It's a `SessionState` key (editor-session-scoped), not user-facing, and changing it would lose any buffered log data across the migration. Could be renamed to `"Hades.ConsoleBuffer"` in a future cleanup.
+
+5. **Tool count discrepancy from roadmap estimates.** The roadmap originally estimated "48 tools in Tier 1" and "~54 editor-action tools" to migrate. Actual counts: 68 tools migrated (the tiers were estimates and some tools weren't individually counted). The roadmap also referenced "75 tools" total in UniClaude; the actual `[MCPTool(` annotation count is 75, confirming 68 migrated + 7 skipped = 75.
+
+6. **Existing Hades tool count is 21, not 41.** The design spec initially estimated 41 existing Hades tools. The actual count is 21 — the earlier estimate double-counted `[MCPToolParam]` annotations as tools. Corrected total: 21 original + 68 migrated = 89 MCP tools.
+
+7. **Workflow skills updated with tool alternatives.** scene-authoring, prefab-workflow, and animation-workflow skills now include an "Alternative: Direct MCP Tool Calls" section listing the relevant ported tools. The guidance: use tools for quick one-off operations, use C# scripting for reusable Editor tools or complex batch operations. Tool names also added to each skill's Cross-References section.
+
+8. **HTTP smoke tests deferred.** Discovery tests verify all 68 tools are found by `MCPDispatcher` via reflection. HTTP-level smoke tests (calling tools and verifying response shape) require a running Unity Editor with a test scene fixture for state-mutating tools. These are deferred until a test scene fixture is established.
+
+### Phase 5c implementation notes
+
+Issues and decisions from the Node.js script scanner migration, documented for future reference:
+
+1. **ScriptScanner migrated from C#/Mono to Node.js.** The `ScriptScanner` class and `ParallelScanPhase` pipeline were replaced by a standalone Node.js process in `Scanner~/`. Motivation: Mono's regex engine does not JIT-compile `RegexOptions.Compiled` to native IL, making it 15-30x slower than V8 for the same patterns. On a test project with 6,268 package scripts, package scanning dropped from 3-5 minutes to ~9 seconds.
+
+2. **Scanner versioning preserved migration path.** The Node.js scanner uses version 2 (C# was version 1). When projects upgrade, the version mismatch in `scanned_assets` automatically triggers a full re-scan — no manual migration step needed.
+
+3. **Package path resolution via PackageInfo.** Initial implementation hardcoded `Packages/com.arcforge.hades/Scanner~/` as the scanner path. This failed because Unity resolves `file:` package references differently — the actual disk path must be retrieved via `PackageInfo.FindForAssembly(typeof(GraphBuilder).Assembly).resolvedPath`. Fixed during live testing.
+
+4. **DbFlushPhase became dead code.** Deleting `ParallelScanPhase.cs` left `DbFlushPhase.cs` without any consumer. Its `AssetScanEntry` type (defined in `ParallelScanPhase`) caused a compilation error. Resolved by deleting `DbFlushPhase.cs` as well.
+
+5. **GraphBuildLog import dependency.** `GraphBuildLog` lives in the `Pipeline` namespace. Removing `using ArcForge.Hades.Editor.Graph.Pipeline` from `GraphBuilder.cs` (intended to drop the `ParallelScanPhase` dependency) also broke `GraphBuildLog`. Restored the import.
+
+6. **Worker threads for large scans.** Full scans with 1000+ files use `worker_threads` to parallelize parsing across `cpus - 1` cores. Workers handle file I/O and regex; the main thread handles all SQLite writes in a single transaction. Below 1000 files, parsing is synchronous (worker spawn overhead not justified).
+
+7. **58 Node.js tests.** Test suite covers: hasher (3), meta-resolver (3), parser (18), db-writer (25), discovery (4), integration (5). All tests use Jest with `--experimental-vm-modules` for ESM support. Test runtime: ~0.4 seconds.
+
+8. **Verified results: 163,449 nodes, 161,696 edges.** First boot on a near-empty Unity project (only Hades package installed) indexed 13,261 package types across 6,268 .cs files in ~10 seconds. MCP query stress test: 20 queries averaging 154ms each against the 163K-node graph.
 
 ### Regression coverage
 
@@ -1435,6 +1473,8 @@ The actual problem: `MCPServer.Stop()` calls `MCPClientConfig.OnServerStop()` wh
 
 **Resolution:** The MCP Hub architecture makes connectivity directory-independent. The plugin's `.mcp.json` is discovered by Claude Code's plugin system (not by working directory). The Hub routes tool calls to the correct Unity instance via project path matching, which includes matching the CWD as a child of a registered project or via `manifest.json` `file:` references. See **Plugin document** §3.5.
 
+**Note:** `WriteProjectMcpJson()` was deliberately reintroduced alongside the Hub architecture. It writes `.mcp.json` to the Unity project root pointing to `~/.arcforge/hades-hub/launcher.js` (the stable Hub launcher). The original scoping issue is resolved because the Hub provides directory-independent routing regardless of where Claude Code is launched. The project-level `.mcp.json` serves a complementary purpose: it enables Claude Code auto-discovery when launched directly from the Unity project directory, without relying on the plugin system finding the config first.
+
 ### Validation warnings duplicate on repeated runs
 
 **Discovered:** Phase 3 happy path validation (2026-05-12)
@@ -1455,7 +1495,7 @@ The warning-writing logic in `MemoryValidator` needs to be idempotent — either
 
 When a Unity project lives in a subdirectory of the git repo (e.g., `MyRepo/MyUnityProject/`), `.mcp.json` written to the Unity project directory is not found by Claude Code launched from the repo root.
 
-**Resolution:** Same as "MCP config scoped to Unity project" above — the Hub's project path matching resolves this. The Hub matches the CWD as a parent of a registered project path (the "parent match" strategy). See **Plugin document** §3.5.
+**Resolution:** The fix is now dual-path. (1) Hub parent match strategy: the Hub matches the CWD as a parent of a registered project path, so Claude Code launched from the repo root finds the correct Unity instance via the Hub. (2) `MCPClientConfig.WriteProjectMcpJson()` writes `.mcp.json` to the Unity project root pointing at the Hub launcher, giving Claude Code a project-local config to discover directly when launched from that directory. Together these cover the full range of CWD scenarios. See **Plugin document** §3.5.
 
 ---
 

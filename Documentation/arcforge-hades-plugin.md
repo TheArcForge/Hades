@@ -67,7 +67,7 @@ Commands in `Commands~/` are user-invocable slash commands:
 
 ### 1.3 MCP server
 
-The MCP server provides tool access to Hades's four layers — Graph queries, Charon traces, Asphodel memory, and skill integration tools. The server runs inside the Unity Editor (C#) and is connected to Claude Code through the Hub architecture described in §3.
+The MCP server provides 89 tools across five categories: Graph queries, Charon traces, Asphodel memory, core diagnostics, and editor-action tools (scene, component, prefab, material, animation, asset, and project management). The server runs inside the Unity Editor (C#) and is connected to Claude Code through the Hub architecture described in §3.
 
 ---
 
@@ -110,6 +110,17 @@ Hades/                          (repository root = Unity Package root)
 │   ├── tests/
 │   ├── tsconfig.json
 │   └── vitest.config.ts
+├── Scanner~/                   # Node.js .cs file scanner (tilde-suffix: invisible to Unity)
+│   ├── src/
+│   │   ├── parser.js           # Regex-based C# parser (namespace, type, method)
+│   │   ├── meta-resolver.js    # GUID extraction from .meta files
+│   │   ├── hasher.js           # MD5 content hashing
+│   │   ├── db-writer.js        # better-sqlite3 wrapper (graph.db writes)
+│   │   ├── discovery.js        # Recursive .cs file finder
+│   │   └── worker.js           # worker_threads for parallel parsing
+│   ├── tests/
+│   ├── index.js                # CLI entry point
+│   └── package.json            # better-sqlite3 + Jest dependencies
 ├── Editor/                     # Unity C# code
 │   ├── MCP/
 │   │   ├── MCPServer.cs
@@ -120,7 +131,7 @@ Hades/                          (repository root = Unity Package root)
 │   │   └── DomainReload/
 │   │       └── AutoReloadStrategy.cs
 │   ├── Core/
-│   │   ├── MCPClientConfig.cs   # Claude Desktop config only
+│   │   ├── MCPClientConfig.cs   # Claude Desktop config + project .mcp.json auto-discovery
 │   │   ├── PathSandbox.cs
 │   │   └── HadesSettings.cs
 │   ├── Graph/
@@ -134,7 +145,7 @@ Hades/                          (repository root = Unity Package root)
 
 ### 2.2 Tilde-suffix convention
 
-`Skills~/`, `Commands~/`, and `Bridge~/` use Unity's tilde-suffix convention. Unity's asset pipeline ignores directories ending in `~`, but they remain tracked in git and accessible to Claude Code's plugin system. This allows a single repository to serve both ecosystems without asset import conflicts.
+`Skills~/`, `Commands~/`, `Bridge~/`, and `Scanner~/` use Unity's tilde-suffix convention. Unity's asset pipeline ignores directories ending in `~`, but they remain tracked in git and accessible to Claude Code's plugin system. This allows a single repository to serve both ecosystems without asset import conflicts.
 
 ### 2.3 Plugin manifest
 
@@ -150,7 +161,7 @@ Hades/                          (repository root = Unity Package root)
   "homepage": "https://github.com/TheArcForge/Hades",
   "repository": "https://github.com/TheArcForge/Hades",
   "keywords": ["unity", "game-development", "mcp", "knowledge-graph"],
-  "skills": "Skills~/"
+  "skills": "./Skills~/"
 }
 ```
 
@@ -289,7 +300,7 @@ The Hub architecture replaces the previous per-project discovery model:
 - ~~`~/.arcforge/servers/{name}-{hash}.json`~~ — server registry files (replaced by hub registry)
 - ~~`{project}/.mcp.json`~~ — per-project Claude Code config (replaced by plugin `.mcp.json`)
 - ~~`~/.arcforge/mcp-bridge.js`~~ — standalone bridge script (replaced by launcher)
-- ~~`MCPClientConfig.WriteClaudeCodeConfig()`~~ — per-project config generation (removed)
+- ~~`MCPClientConfig.WriteClaudeCodeConfig()`~~ — replaced by `WriteProjectMcpJson()`, which writes `.mcp.json` to the Unity project root pointing to `~/.arcforge/hades-hub/launcher.js`; Claude Code auto-discovers MCP when launched from the project directory. The old behavior was removed; a targeted replacement was added.
 - ~~`MCPClientConfig.OnServerStop()` file deletion~~ — server entry cleanup (replaced by hub deregistration)
 
 The previous model had three known issues documented in the Roadmap (§10): server entry lost during compilation failures, `.mcp.json` not found from wrong directory, and `.mcp.json` scoped to Unity project only. The Hub architecture resolves all three.
@@ -329,13 +340,14 @@ Step 1 is per-project (each Unity project installs the package). Step 2 is per-u
 | Charon traces | Requires | — |
 | Asphodel memory | Requires | — |
 | MCP server (tools) | Requires | — |
-| MCP connectivity (launcher/hub) | — | Requires |
+| MCP connectivity (project-scoped) | Provides | — |
+| MCP connectivity (global, any directory) | — | Requires |
 | Skills (22) | — | Requires |
 | Slash commands (6) | — | Requires |
 
-Both steps are needed for the full experience. Skills alone (Step 2 only) provide general Unity guidance without project-specific context. The Unity Package alone (Step 1 only) provides no agent access — the MCP server exists but nothing connects to it.
+Both steps are needed for the full experience. Skills alone (Step 2 only) provide general Unity guidance without project-specific context. The Unity Package alone (Step 1 only) provides project-scoped MCP access only — tools work when Claude Code is launched from the Unity project directory.
 
-**Common gotcha:** Installing the Unity Package (Step 1) does NOT give Claude Code sessions access to Hades MCP tools. The plugin (Step 2) is what declares the MCP launcher — without it, Claude Code has no way to discover or connect to the Hub. If you see "no tools found" in Claude Code while Unity is running, this is almost always the reason. Claude Desktop is unaffected (it uses `claude_desktop_config.json` written by Unity directly).
+**Note on MCP access:** Installing the Unity Package (Step 1) writes `.mcp.json` to the Unity project root, so Claude Code auto-discovers MCP tools when launched from that directory. The plugin (Step 2) adds skills and enables MCP access from **any** directory — not just the project root. If you need MCP tools to work from unrelated directories (e.g., a separate repo or home directory), install the plugin. Claude Desktop is unaffected (it uses `claude_desktop_config.json` written by Unity directly).
 
 ### 4.3 Claude Desktop
 
@@ -404,6 +416,7 @@ arcforge/hades-plugin/
 ├── Skills~/
 ├── Commands~/
 ├── Bridge~/
+├── Scanner~/
 ├── LICENSE
 └── README.md
 ```
@@ -447,14 +460,18 @@ Future consideration: `plugin.json` could declare a `"minMcpVersion"` field. The
 
 **Symptoms:** `/hades:status` returns an error. No Hades MCP tools in the session.
 
-**Most likely cause:** The Claude Code plugin is not installed. Installing the Unity Package (Step 1) does NOT register the MCP server with Claude Code — the plugin (Step 2) is required for that. Run `/plugin install hades@TheArcForge/Hades` to fix.
+**Check which connectivity path applies:**
 
-**Check:**
-1. Is the plugin installed? Run `/plugin list` — look for `arcforge-hades`. **This is the #1 cause of "no tools."**
-2. Is the MCP server connected? Run `/mcp` — look for `hades` server status.
-3. If server shows "failed": the launcher couldn't start or connect to the hub. Check `~/.arcforge/hades-hub/hub.json` — does it exist? Is the PID alive?
-4. Is Unity running with Hades? Check Unity console for "Hades MCP server started" log.
-5. If Unity is running but tools are empty: the hub may not have matched your working directory to the Unity project. Check `/mcp` for the server status, or run a tool to see the error message listing available instances.
+**If Claude Code was launched from the Unity project directory:**
+1. Does `.mcp.json` exist at the Unity project root? If not, reopen Unity — `MCPClientConfig.WriteProjectMcpJson()` writes it on MCP server start.
+2. Is Unity running with Hades? Check Unity console for "Hades MCP server started" log.
+3. Is the MCP server connected? Run `/mcp` — look for `hades` server status. If "failed", check `~/.arcforge/hades-hub/hub.json` — does it exist? Is the PID alive?
+
+**If Claude Code was launched from a different directory (e.g., another repo, home directory):**
+1. Is the plugin installed? Run `/plugin list` — look for `arcforge-hades`. Without the plugin, Claude Code has no way to discover or connect to the Hub from an unrelated directory. Run `/plugin install hades@TheArcForge/Hades` to fix.
+2. Once the plugin is installed, follow checks 2–3 above.
+
+**If Unity is running but tools are empty:** the hub may not have matched your working directory to the Unity project. Run a tool to see the error message listing available instances, or launch Claude Code from within the Unity project directory.
 
 ### 7.2 Tools disappear after Unity recompile
 

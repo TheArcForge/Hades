@@ -1,7 +1,7 @@
 // Editor/Graph/Scanning/ScannerRegistry.cs
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using UnityEngine;
 
 namespace ArcForge.Hades.Editor.Graph.Scanning
 {
@@ -13,6 +13,7 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
         public ScannerRegistry()
         {
             DiscoverScanners();
+            ApplyScannerPriority();
         }
 
         void DiscoverScanners()
@@ -40,6 +41,11 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
                     catch { }
                 }
             }
+        }
+
+        void ApplyScannerPriority()
+        {
+            _extensionMap.Remove(".cs");
         }
 
         public IAssetScanner GetScannerForPath(string assetPath)

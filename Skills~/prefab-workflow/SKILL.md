@@ -333,6 +333,20 @@ public static class BatchUpdatePrefabField
 }
 ```
 
+### Alternative: Direct MCP Tool Calls
+
+If you prefer tool calls over scripting, these editor-action tools are available:
+- `prefab_create` — create a prefab from a GameObject
+- `prefab_instantiate` — instantiate a prefab in the scene
+- `prefab_apply_overrides` — apply instance overrides back to the prefab
+- `prefab_get_contents` — inspect prefab contents without instantiating
+- `prefab_edit_property` — modify a property on a prefab asset
+- `prefab_open_editing` / `prefab_save_editing` — enter/exit prefab editing mode
+- `prefab_create_variant` — create a prefab variant
+- `component_add` / `component_set_property` — modify components on prefab instances
+
+Choose tools for quick one-off operations. Choose C# scripting (PrefabUtility API) for reusable Editor tools or complex batch operations.
+
 ## Anti-Examples
 
 ### Editing Prefab Instances in the Scene Without Applying
@@ -399,5 +413,5 @@ public static class BatchUpdatePrefabField
 
 - Architecture decisions before authoring: `hades:prefab-architecture`, `hades:unity-architect`
 - Scene placement after prefab creation: `hades:scene-authoring`
-- Hades MCP tools used in this skill: `find_prefabs_with_component`, `search_by_name`, `recall_memory`, `propose_memory_update`
+- Hades MCP tools used in this skill: `find_prefabs_with_component`, `search_by_name`, `recall_memory`, `propose_memory_update`, `prefab_create`, `prefab_instantiate`, `prefab_apply_overrides`, `prefab_get_contents`, `prefab_edit_property`, `prefab_open_editing`, `prefab_save_editing`, `prefab_create_variant`, `component_add`, `component_set_property`
 - Unity docs: [PrefabUtility](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/PrefabUtility.html), [Prefab Variants](https://docs.unity3d.com/6000.0/Documentation/Manual/PrefabVariants.html), [Prefab Mode](https://docs.unity3d.com/6000.0/Documentation/Manual/EditingInPrefabMode.html), [SerializedObject](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/SerializedObject.html)

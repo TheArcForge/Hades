@@ -11,50 +11,18 @@ namespace ArcForge.Hades.Editor.Core
     {
         public static void OnServerStart(int port)
         {
-            UpdateClaudeDesktopConfig();
+            var launcherPath = EnsureStableLauncher();
+            if (launcherPath == null) return;
+
+            UpdateClaudeDesktopConfig(launcherPath);
+            WriteProjectMcpJson(launcherPath);
         }
 
-        static void UpdateClaudeDesktopConfig()
-        {
-            try
-            {
-                var configPath = GetDesktopConfigPath();
-                if (configPath == null) return;
-
-                JObject root;
-                if (File.Exists(configPath))
-                {
-                    var existing = File.ReadAllText(configPath);
-                    root = JObject.Parse(existing);
-                }
-                else
-                {
-                    root = new JObject();
-                }
-
-                if (root["mcpServers"] == null)
-                    root["mcpServers"] = new JObject();
-
-                var servers = (JObject)root["mcpServers"];
-
-                var launcherPath = GetStableLauncherPath();
-                if (launcherPath == null) return;
-
-                servers["hades"] = new JObject
-                {
-                    ["command"] = "node",
-                    ["args"] = new JArray(launcherPath)
-                };
-
-                AtomicWrite(configPath, root.ToString(Formatting.Indented));
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"[Hades] Failed to update Claude Desktop config: {ex.Message}");
-            }
-        }
-
-        static string GetStableLauncherPath()
+        /// <summary>
+        /// Copies the launcher to ~/.arcforge/hades-hub/launcher.js and writes hub-path.json.
+        /// Returns the stable launcher path, or null if it can't be resolved.
+        /// </summary>
+        static string EnsureStableLauncher()
         {
             var hubDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -80,10 +48,80 @@ namespace ArcForge.Hades.Editor.Core
                 Debug.LogWarning($"[Hades] Failed to copy launcher: {ex.Message}");
             }
 
-            // Write hub-path.json so the stable launcher can find the hub at its original location
             WriteHubPath(packageLauncherDir, hubDir);
 
             return stablePath;
+        }
+
+        /// <summary>
+        /// Writes/updates claude_desktop_config.json so Claude Desktop (Chat/Cowork) can reach the hub.
+        /// </summary>
+        static void UpdateClaudeDesktopConfig(string launcherPath)
+        {
+            try
+            {
+                var configPath = GetDesktopConfigPath();
+                if (configPath == null) return;
+
+                JObject root;
+                if (File.Exists(configPath))
+                {
+                    var existing = File.ReadAllText(configPath);
+                    root = JObject.Parse(existing);
+                }
+                else
+                {
+                    root = new JObject();
+                }
+
+                if (root["mcpServers"] == null)
+                    root["mcpServers"] = new JObject();
+
+                var servers = (JObject)root["mcpServers"];
+
+                servers["hades"] = new JObject
+                {
+                    ["command"] = "node",
+                    ["args"] = new JArray(launcherPath)
+                };
+
+                AtomicWrite(configPath, root.ToString(Formatting.Indented));
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Hades] Failed to update Claude Desktop config: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Writes .mcp.json to the Unity project root so Claude Code auto-discovers the MCP server.
+        /// Replaces any stale .mcp.json from the pre-Hub architecture.
+        /// </summary>
+        static void WriteProjectMcpJson(string launcherPath)
+        {
+            try
+            {
+                var projectRoot = PathSandbox.ProjectRoot;
+                var mcpJsonPath = Path.Combine(projectRoot, ".mcp.json");
+
+                var root = new JObject
+                {
+                    ["mcpServers"] = new JObject
+                    {
+                        ["hades"] = new JObject
+                        {
+                            ["command"] = "node",
+                            ["args"] = new JArray(launcherPath)
+                        }
+                    }
+                };
+
+                AtomicWrite(mcpJsonPath, root.ToString(Formatting.Indented));
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Hades] Failed to write project .mcp.json: {ex.Message}");
+            }
         }
 
         static void WriteHubPath(string packageLauncherDir, string hubDir)
