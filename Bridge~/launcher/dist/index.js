@@ -7,11 +7,9 @@ const HUB_DIR = path.join(process.env.HOME ?? process.env.USERPROFILE ?? "", ".a
 const HUB_JSON_PATH = path.join(HUB_DIR, "hub.json");
 const HUB_ENTRY = findHubEntry();
 function findHubEntry() {
-    // 1. Relative to launcher source (works in dev: Bridge~/launcher/dist/ → Bridge~/hub/dist/)
     const relative = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..", "hub", "dist", "index.js");
     if (fs.existsSync(relative))
         return relative;
-    // 2. Path file written by Unity with the absolute path to the hub entry point
     const pathFile = path.join(HUB_DIR, "hub-path.json");
     if (fs.existsSync(pathFile)) {
         try {
@@ -23,11 +21,13 @@ function findHubEntry() {
             // ignore corrupt file
         }
     }
-    // If none found, return relative and let it fail with a clear error at startup
     return relative;
 }
 const PROJECT_PATH = process.cwd();
-const HUB_STARTUP_TIMEOUT_MS = 5000;
+const HUB_STARTUP_TIMEOUT_MS = 15000;
+const PROTOCOL_VERSION = "2024-11-05";
+const SERVER_NAME = "hades";
+const SERVER_VERSION = "0.9.1";
 function readHubJson() {
     try {
         if (!fs.existsSync(HUB_JSON_PATH))
@@ -71,14 +71,12 @@ function startHub() {
     child.unref();
 }
 async function ensureHub() {
-    // Check if hub is already running
     const existing = readHubJson();
     if (existing && isProcessAlive(existing.pid)) {
         const healthy = await probeHealth(existing.port);
         if (healthy)
             return existing.port;
     }
-    // Clean up stale hub.json
     if (existing && !isProcessAlive(existing.pid)) {
         try {
             fs.unlinkSync(HUB_JSON_PATH);
@@ -87,9 +85,7 @@ async function ensureHub() {
             // ignore
         }
     }
-    // Start the hub
     startHub();
-    // Wait for hub.json to appear with a live process
     const deadline = Date.now() + HUB_STARTUP_TIMEOUT_MS;
     while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 200));
@@ -116,6 +112,11 @@ function httpPost(port, urlPath, body, headers) {
             },
             timeout: 30_000,
         }, (res) => {
+            if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+                res.resume();
+                reject(new Error(`HTTP ${res.statusCode}`));
+                return;
+            }
             let data = "";
             res.on("data", (chunk) => (data += chunk));
             res.on("end", () => resolve(data));
@@ -129,25 +130,71 @@ function httpPost(port, urlPath, body, headers) {
         req.end();
     });
 }
+function handleInitializeLocally(request) {
+    const response = {
+        jsonrpc: "2.0",
+        id: request.id,
+        result: {
+            protocolVersion: PROTOCOL_VERSION,
+            capabilities: { tools: {} },
+            serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
+        },
+    };
+    return JSON.stringify(response);
+}
 async function main() {
-    let hubPort;
-    try {
-        hubPort = await ensureHub();
+    let hubPort = null;
+    let hubReady = false;
+    let hubPromise = null;
+    async function getHubPort() {
+        if (hubReady && hubPort !== null)
+            return hubPort;
+        if (!hubPromise) {
+            hubPromise = ensureHub().then((port) => {
+                hubPort = port;
+                hubReady = true;
+                process.stderr.write(`[hades-launcher] Connected to hub on port ${port}\n`);
+                return httpPost(port, "/api/launcher/connect", "{}").then(() => port);
+            });
+        }
+        return hubPromise;
     }
-    catch (err) {
-        process.stderr.write(`[hades-launcher] ${err}\n`);
-        process.exit(1);
-    }
-    process.stderr.write(`[hades-launcher] Connected to hub on port ${hubPort}\n`);
-    // Register as launcher
-    await httpPost(hubPort, "/api/launcher/connect", "{}");
-    // Bridge stdin → hub → stdout
+    // Attach stdin immediately — do NOT wait for Hub
     const rl = createInterface({ input: process.stdin });
-    rl.on("line", async (line) => {
+    // Start Hub connection eagerly in background
+    getHubPort().catch((err) => {
+        process.stderr.write(`[hades-launcher] Hub startup failed: ${err}\n`);
+    });
+    rl.on("line", (line) => {
+        handleLine(line).catch((err) => {
+            process.stderr.write(`[hades-launcher] Fatal: ${err}\n`);
+            process.exit(1);
+        });
+    });
+    async function handleLine(line) {
         if (!line.trim())
             return;
+        let parsed;
         try {
-            const response = await httpPost(hubPort, "/rpc", line, {
+            parsed = JSON.parse(line);
+        }
+        catch {
+            return;
+        }
+        // Answer initialize locally — no Hub round-trip needed
+        if (parsed.method === "initialize") {
+            const response = handleInitializeLocally(parsed);
+            process.stdout.write(response + "\n");
+            return;
+        }
+        // notifications/initialized — acknowledge silently, no response needed
+        if (parsed.method === "notifications/initialized") {
+            return;
+        }
+        // All other messages (tools/list, tools/call) need the Hub
+        try {
+            const port = await getHubPort();
+            const response = await httpPost(port, "/rpc", line, {
                 "X-Hades-Project": PROJECT_PATH,
             });
             if (response) {
@@ -158,9 +205,10 @@ async function main() {
             // Hub might have died — try to restart
             try {
                 process.stderr.write("[hades-launcher] Hub connection lost, restarting...\n");
-                hubPort = await ensureHub();
-                await httpPost(hubPort, "/api/launcher/connect", "{}");
-                const response = await httpPost(hubPort, "/rpc", line, {
+                hubReady = false;
+                hubPromise = null;
+                const port = await getHubPort();
+                const response = await httpPost(port, "/rpc", line, {
                     "X-Hades-Project": PROJECT_PATH,
                 });
                 if (response) {
@@ -170,19 +218,21 @@ async function main() {
             catch (retryErr) {
                 const errorResponse = JSON.stringify({
                     jsonrpc: "2.0",
-                    id: null,
+                    id: parsed.id ?? null,
                     error: { code: -32000, message: `Hub error: ${retryErr}` },
                 });
                 process.stdout.write(errorResponse + "\n");
             }
         }
-    });
+    }
     rl.on("close", async () => {
-        try {
-            await httpPost(hubPort, "/api/launcher/disconnect", "{}");
-        }
-        catch {
-            // best effort
+        if (hubReady && hubPort !== null) {
+            try {
+                await httpPost(hubPort, "/api/launcher/disconnect", "{}");
+            }
+            catch {
+                // best effort
+            }
         }
         process.exit(0);
     });

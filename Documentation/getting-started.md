@@ -11,32 +11,56 @@ This guide walks you through installing and verifying Hades from scratch. Follow
 | **Claude Code** | Run `claude --version` in your terminal. Install from [claude.ai/download](https://claude.ai/download) if missing. |
 | **A Unity project** | Any project works. A small one is fine for first-time setup. |
 
-You should have received two zip files:
+You should have received a zip file:
 
-- **Hades.zip** — the Unity Package (installs into your Unity project)
 - **hades-plugin.zip** — the Claude Code plugin (installs into your Claude Code environment)
+
+The Unity package installs directly from GitHub — no zip required.
 
 ## Step 1: Install the Unity Package
 
-1. Unzip **Hades.zip** to a permanent location on your machine. For example:
+1. Open your Unity project.
+
+2. Open **Window > Package Manager**.
+
+3. Click the **+** button (top-left) and choose **Add package from git URL...**
+
+4. Enter the following URL and click **Add**:
+   ```
+   https://github.com/TheArcForge/Hades.git
+   ```
+
+5. Unity fetches and imports the package. You'll see "Hades" appear in the Package Manager list.
+
+6. Wait for the initial graph build to complete. Watch the Unity console — you'll see a log message when it finishes. This takes 10–45 seconds depending on project size.
+
+**Verification:** In the Unity console, you should see messages from Hades including "MCP server started". If you see compilation errors instead, check that you're on Unity 6000.0 or newer.
+
+### Alternative: Install from local folder
+
+If you can't reach GitHub from your machine, you can install from a local copy instead.
+
+1. Obtain **Hades.zip** and unzip it to a permanent location on your machine. For example:
    ```
    ~/Tools/Hades
    ```
    This folder must stay in place — Unity references it by path.
 
-2. Open your Unity project.
+2. **macOS only — remove the quarantine flag.** macOS blocks bundled native libraries downloaded from the internet. Before importing into Unity, run:
+   ```bash
+   xattr -dr com.apple.quarantine ~/Tools/Hades
+   ```
+   Replace the path with wherever you unzipped. Skipping this step causes native module load errors at runtime.
 
-3. Open **Window > Package Manager**.
+3. Open your Unity project.
 
-4. Click the **+** button (top-left) and choose **Add package from disk...**
+4. Open **Window > Package Manager**.
 
-5. Navigate to the folder you unzipped and select the `package.json` file inside it.
+5. Click the **+** button (top-left) and choose **Add package from disk...**
 
-6. Unity imports the package. You'll see "Hades" appear in the Package Manager list.
+6. Navigate to the folder you unzipped and select the `package.json` file inside it.
 
-7. Wait for the initial graph build to complete. Watch the Unity console — you'll see a log message when it finishes. This takes 10–45 seconds depending on project size.
-
-**Verification:** In the Unity console, you should see messages from Hades including "MCP server started". If you see compilation errors instead, check that you're on Unity 6000.0 or newer.
+7. Unity imports the package. Continue from step 6 of the main path above.
 
 ## Step 2: Install the Claude Code Plugin
 
@@ -145,6 +169,8 @@ npm install
 
 This compiles the native SQLite module for your machine. You only need to do this once.
 
+> **Note:** If you installed via git URL, the package lives inside Unity's package cache. Replace `~/Tools/Hades` above with the actual cache path shown in the error message.
+
 ### Still stuck?
 
-Check the full troubleshooting guide at `Documentation/troubleshooting.md` in the Hades folder, or reach out to whoever gave you the zip files.
+Check the full troubleshooting guide at `Documentation/troubleshooting.md` in the Hades package, or reach out to whoever set you up with access.

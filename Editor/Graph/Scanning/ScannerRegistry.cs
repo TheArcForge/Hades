@@ -57,5 +57,18 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
         }
 
         public IReadOnlyList<IAssetScanner> GetAll() => _allScanners.AsReadOnly();
+
+        public HashSet<string> GetCoveredExtensions()
+        {
+            var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var scanner in _allScanners)
+            {
+                foreach (var ext in scanner.SupportedExtensions)
+                    extensions.Add(ext.ToLowerInvariant());
+            }
+            // .cs files are handled by the Node.js scanner, not registered in _extensionMap
+            extensions.Add(".cs");
+            return extensions;
+        }
     }
 }

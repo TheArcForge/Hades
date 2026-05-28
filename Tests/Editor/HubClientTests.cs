@@ -68,5 +68,46 @@ namespace ArcForge.Hades.Editor.Tests
             Assert.AreEqual("/path/to/test", content["projectPath"].ToString());
             Assert.AreEqual(12345, content["port"].Value<int>());
         }
+
+        [Test]
+        public void DetectHubChange_ReturnsHubInfo_WhenPortChanges()
+        {
+            HubClient.ResetLastKnownHub();
+            HubClient.UpdateLastKnownHub(11111, 9876);
+
+            var filePath = Path.Combine(_testDir, "hub.json");
+            File.WriteAllText(filePath, @"{""port"":12345,""pid"":9876}");
+
+            var result = HubClient.DetectHubChange(filePath);
+            Assert.IsNotNull(result);
+            Assert.AreEqual(12345, result.Port);
+        }
+
+        [Test]
+        public void DetectHubChange_ReturnsHubInfo_WhenPidChanges()
+        {
+            HubClient.ResetLastKnownHub();
+            HubClient.UpdateLastKnownHub(12345, 9876);
+
+            var filePath = Path.Combine(_testDir, "hub.json");
+            File.WriteAllText(filePath, @"{""port"":12345,""pid"":1111}");
+
+            var result = HubClient.DetectHubChange(filePath);
+            Assert.IsNotNull(result);
+            Assert.AreEqual(1111, result.Pid);
+        }
+
+        [Test]
+        public void DetectHubChange_ReturnsNull_WhenSame()
+        {
+            HubClient.ResetLastKnownHub();
+            HubClient.UpdateLastKnownHub(12345, 9876);
+
+            var filePath = Path.Combine(_testDir, "hub.json");
+            File.WriteAllText(filePath, @"{""port"":12345,""pid"":9876}");
+
+            var result = HubClient.DetectHubChange(filePath);
+            Assert.IsNull(result);
+        }
     }
 }

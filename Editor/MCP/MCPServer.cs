@@ -145,7 +145,19 @@ namespace ArcForge.Hades.Editor.MCP
 
             _lastHeartbeat = EditorApplication.timeSinceStartup;
             var port = (_transport as HttpTransport)?.Port ?? 0;
-            var pid = Process.GetCurrentProcess().Id;
+            var pid = System.Diagnostics.Process.GetCurrentProcess().Id;
+
+            // Check if Hub has restarted (new PID or port in hub.json)
+            var changed = HubClient.DetectHubChange();
+            if (changed != null)
+            {
+                Debug.Log($"[Hades MCP] Hub restart detected (port {changed.Port}, pid {changed.Pid}), re-registering…");
+                var projectName = System.IO.Path.GetFileName(Core.PathSandbox.ProjectRoot);
+                var manifestPackages = HubClient.ReadManifestPackages(Core.PathSandbox.ProjectRoot);
+                HubClient.Register(projectName, Core.PathSandbox.ProjectRoot, port, pid, manifestPackages);
+                return;
+            }
+
             HubClient.Heartbeat(Core.PathSandbox.ProjectRoot, port, pid);
         }
 

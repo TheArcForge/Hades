@@ -1,6 +1,6 @@
 {
   "name": "arcforge-hades",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Unity-aware AI infrastructure for Claude Code: project knowledge graph, observability, memory, 89 MCP tools, and 22 skills.",
   "author": { "name": "ArcForge" },
   "license": "MIT",

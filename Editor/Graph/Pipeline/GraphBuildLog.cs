@@ -1,21 +1,18 @@
 // Editor/Graph/Pipeline/GraphBuildLog.cs
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
 
 namespace ArcForge.Hades.Editor.Graph.Pipeline
 {
-    /// <summary>
-    /// Records timing and results for each step of a graph build.
-    /// Overwrites on each build — keeps only the last rebuild's log.
-    /// Saved to .arcforge/graph_build.log alongside graph.db.
-    /// </summary>
     public class GraphBuildLog
     {
         readonly StringBuilder _sb = new StringBuilder();
         readonly Stopwatch _total = Stopwatch.StartNew();
         readonly string _filePath;
+        readonly List<string> _degradations = new List<string>();
         Stopwatch _step;
         int _stepNum;
 
@@ -53,6 +50,12 @@ namespace ArcForge.Hades.Editor.Graph.Pipeline
             }
         }
 
+        public void ReportDegraded(string reason)
+        {
+            _degradations.Add(reason);
+            _sb.AppendLine($"  ⚠ DEGRADED: {reason}");
+        }
+
         public void Flush(long totalNodes, long totalEdges)
         {
             _total.Stop();
@@ -60,6 +63,18 @@ namespace ArcForge.Hades.Editor.Graph.Pipeline
             _sb.AppendLine($"Total duration: {FormatDuration(_total.ElapsedMilliseconds)}");
             _sb.AppendLine($"Total nodes:    {totalNodes:N0}");
             _sb.AppendLine($"Total edges:    {totalEdges:N0}");
+
+            if (_degradations.Count > 0)
+            {
+                _sb.AppendLine();
+                _sb.AppendLine("=== DEGRADED STATE ===");
+                foreach (var d in _degradations)
+                    _sb.AppendLine($"  - {d}");
+            }
+            else
+            {
+                _sb.AppendLine($"Status:         OK");
+            }
 
             try
             {
@@ -72,6 +87,9 @@ namespace ArcForge.Hades.Editor.Graph.Pipeline
                 // Silently ignore write failures — log is non-critical
             }
         }
+
+        public bool IsDegraded => _degradations.Count > 0;
+        public IReadOnlyList<string> Degradations => _degradations;
 
         static string FormatDuration(long ms)
         {

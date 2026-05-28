@@ -20,6 +20,21 @@ Quick reference for diagnosing and fixing common issues with Hades.
 
 ---
 
+## First-Run Issues
+
+Issues that appear on a fresh install and are often mistaken for real failures:
+
+| Symptom | Likely Cause | Fix |
+|---------|-------------|-----|
+| Unity shows `DllNotFoundException` for `libgilzoide-sqlite-net` on macOS | macOS quarantine blocks native libraries in zip downloads | Run `xattr -dr com.apple.quarantine <path-to-Hades-folder>` in Terminal, then restart Unity. Using git URL install avoids this entirely. |
+| Graph build missing C# nodes (graph much smaller than expected) | Scanner `npm install` failed silently on first boot | Run `cd <Hades-package-path>/Scanner~ && npm install` manually. Check the output for errors. Then run `/hades:rebuild-graph`. |
+| Graph build log shows "exit 100" | Node.js not found on PATH | Install Node.js 20+ and restart Unity. Run `node --version` to verify. |
+| Graph build log shows "exit 101" | Scanner `npm install` failed (network error, native compilation error) | Run `cd <Hades-package-path>/Scanner~ && npm install` manually to see the full error output. |
+| MCP shows "failed" on first Claude Code connect, works after Reconnect | Launcher startup race — Hub wasn't ready when Claude Code sent `initialize` | This is fixed in v0.9.1+. On older versions, click Reconnect in Claude Code's MCP panel. |
+| Build log shows "Resolved 80/67504 pending edges" | Most pending edges reference asset types Hades doesn't index (textures, meshes, audio) | This is expected. The log in v0.9.1+ distinguishes resolved vs. unresolvable edges. See "Asset Coverage" below. |
+
+---
+
 ## Recovery Procedures
 
 For more serious issues requiring manual intervention:
@@ -33,6 +48,33 @@ For more serious issues requiring manual intervention:
 | Memory file frontmatter broken | Open the file in a text editor. Ensure the YAML block between `---` markers is valid. Common mistakes: missing colon after a key name, or tabs used instead of spaces. |
 | Tool calls timing out | Add `mcp.request_timeout_ms: 60000` to `.arcforge/config.yaml` to increase the timeout. Also check whether a large graph rebuild is in progress. |
 | Unity is slow with Hades enabled | Increase the debounce delay in config. Disable Tier 2 inference if it isn't needed (`asphodel.tier2_enabled: false`). |
+
+---
+
+## Asset Coverage
+
+Hades indexes the following asset types into the knowledge graph:
+
+- Scenes (`.unity`)
+- Prefabs (`.prefab`)
+- ScriptableObjects (`.asset`)
+- Materials (`.mat`)
+- Shaders (`.shader`, `.shadergraph`)
+- Addressable groups and labels
+- Project Settings files
+- C# scripts (`.cs`)
+
+The following asset types are **not** currently indexed:
+
+- Textures and sprites
+- 3D models and meshes
+- Audio clips
+- Animation clips and Animator Controllers
+- Fonts
+- Video clips
+- Binary and proprietary assets
+
+Unindexed types are planned for Phase 9 (MetaScanner). References to these assets in the graph appear as unresolved edges — this is expected and does not indicate a problem. The "Resolved X/Y pending edges" log line reflects this: the gap between the two numbers is almost entirely unindexed asset types.
 
 ---
 

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using ArcForge.Hades.Editor.Charon;
 using ArcForge.Hades.Editor.Core;
@@ -10,6 +11,8 @@ using ArcForge.Hades.Editor.Graph.Pipeline;
 using ArcForge.Hades.Editor.Graph.Scanning;
 using UnityEditor;
 using UnityEngine;
+
+[assembly: InternalsVisibleTo("ArcForge.Hades.Tests.Editor")]
 
 namespace ArcForge.Hades.Editor.Graph
 {
@@ -254,6 +257,12 @@ namespace ArcForge.Hades.Editor.Graph
                 else
                 {
                     _buildLog?.Detail("Result", $"Failed: exit {nodeResult.ExitCode}");
+                    if (nodeResult.ExitCode == 100)
+                        _buildLog?.ReportDegraded("C# nodes missing — Node.js not found");
+                    else if (nodeResult.ExitCode == 101)
+                        _buildLog?.ReportDegraded("C# nodes missing — Scanner npm install failed");
+                    else
+                        _buildLog?.ReportDegraded($"C# nodes missing — Scanner failed (exit {nodeResult.ExitCode})");
                     Debug.LogWarning("[Hades] Script scan failed, continuing with other scanners");
                 }
                 _buildLog?.EndStep();
@@ -303,7 +312,10 @@ namespace ArcForge.Hades.Editor.Graph
                 _db.SetMetadata("last_full_rebuild_at",
                     DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
 
-                Debug.Log($"[Hades] Rebuild complete: {_db.GetNodeCount()} nodes, {_db.GetEdgeCount()} edges");
+                if (_buildLog != null && _buildLog.IsDegraded)
+                    Debug.LogWarning($"[Hades] Rebuild complete (degraded): {_db.GetNodeCount()} nodes, {_db.GetEdgeCount()} edges — {string.Join("; ", _buildLog.Degradations)}");
+                else
+                    Debug.Log($"[Hades] Rebuild complete: {_db.GetNodeCount()} nodes, {_db.GetEdgeCount()} edges");
                 OnRebuildComplete?.Invoke();
             }
             catch (Exception ex)
@@ -387,6 +399,12 @@ namespace ArcForge.Hades.Editor.Graph
                 }
                 else
                 {
+                    if (result.ExitCode == 100)
+                        _buildLog?.ReportDegraded("Package C# nodes missing — Node.js not found");
+                    else if (result.ExitCode == 101)
+                        _buildLog?.ReportDegraded("Package C# nodes missing — Scanner npm install failed");
+                    else
+                        _buildLog?.ReportDegraded($"Package C# nodes missing — Scanner failed (exit {result.ExitCode})");
                     Debug.LogWarning("[Hades] Package scan skipped (Node.js scanner unavailable or failed)");
                     _buildLog?.Detail("Result", $"Failed: exit {result.ExitCode}");
                 }
@@ -800,19 +818,21 @@ namespace ArcForge.Hades.Editor.Graph
             var pending = _db.GetPendingEdges();
             if (pending.Count == 0) return;
 
+            var coveredExtensions = _scannerRegistry.GetCoveredExtensions();
+
             int resolved = 0;
-            var toDelete = new List<long>();
+            int permanent = 0;
+            int transient = 0;
+            var toDelete = new HashSet<long>();
 
             foreach (var pe in pending)
             {
-                // Try to find the target node by GUID (stored in TargetTypeName field for GUID-based edges)
                 NodeRecord targetNode = null;
                 if (!string.IsNullOrEmpty(pe.TargetTypeName))
                 {
                     targetNode = _db.FindNodeByGuid(pe.TargetTypeName);
                 }
 
-                // Try name-based resolution for type edges (inherits_from, implements)
                 if (targetNode == null && !string.IsNullOrEmpty(pe.TargetTypeName)
                     && (pe.EdgeType == "inherits_from" || pe.EdgeType == "implements"))
                 {
@@ -832,8 +852,50 @@ namespace ArcForge.Hades.Editor.Graph
                 _db.DeletePendingEdge(id);
             }
 
-            if (resolved > 0)
-                Debug.Log($"[Hades] Resolved {resolved}/{pending.Count} pending edges");
+            // Classify remaining unresolved edges
+            var remaining = pending.Count - resolved;
+            if (remaining > 0)
+            {
+                foreach (var pe in pending)
+                {
+                    if (toDelete.Contains(pe.Id)) continue;
+
+                    // Try to resolve the GUID to an asset path to check its extension
+                    var assetPath = UnityEditor.AssetDatabase.GUIDToAssetPath(pe.TargetTypeName);
+                    if (!string.IsNullOrEmpty(assetPath))
+                    {
+                        var ext = Path.GetExtension(assetPath)?.ToLowerInvariant();
+                        if (ext != null && !coveredExtensions.Contains(ext))
+                            permanent++;
+                        else
+                            transient++;
+                    }
+                    else
+                    {
+                        // GUID doesn't resolve to any asset — likely a type name for inherits_from/implements
+                        transient++;
+                    }
+                }
+            }
+
+            // Build informative log message
+            if (resolved > 0 || remaining > 0)
+            {
+                var parts = new List<string>();
+                parts.Add($"{resolved} resolved");
+                if (permanent > 0)
+                    parts.Add($"{permanent} unresolvable (refs to textures, meshes, audio, etc. — asset types not indexed by Hades)");
+                if (transient > 0)
+                    parts.Add($"{transient} still pending (will resolve on next rebuild)");
+
+                Debug.Log($"[Hades] Pending edges: {string.Join(", ", parts)}");
+
+                _buildLog?.Detail("Edges resolved", resolved);
+                if (permanent > 0)
+                    _buildLog?.Detail("Edges unresolvable (unscanned types)", permanent);
+                if (transient > 0)
+                    _buildLog?.Detail("Edges still pending", transient);
+            }
         }
 
         // -------------------------------------------------------------------
@@ -972,13 +1034,20 @@ namespace ArcForge.Hades.Editor.Graph
             }
         }
 
+        internal static bool IsNodeModulesValid(string scannerDir)
+        {
+            var markerFile = Path.Combine(scannerDir, "node_modules", "better-sqlite3", "package.json");
+            return File.Exists(markerFile);
+        }
+
         RunResult RunNodeScanner(string mode, string dirs, string extraArgs = "")
         {
             var nodePath = ProcessResolver.FindExecutable("node");
             if (nodePath == null)
             {
                 Debug.LogWarning("[Hades] Node.js not found — script scanning disabled. Install Node.js for full graph indexing.");
-                return new RunResult { ExitCode = 3, Error = "Node.js not found" };
+                _buildLog?.Detail("Result", "Node.js not found (exit 100)");
+                return new RunResult { ExitCode = 100, Error = "Node.js not found" };
             }
 
             var projectRoot = Path.GetDirectoryName(Application.dataPath);
@@ -986,17 +1055,29 @@ namespace ArcForge.Hades.Editor.Graph
             var packageInfo = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(GraphBuilder).Assembly);
             var scannerDir = Path.Combine(packageInfo.resolvedPath, "Scanner~");
 
-            if (!Directory.Exists(Path.Combine(scannerDir, "node_modules")))
+            if (!IsNodeModulesValid(scannerDir))
             {
                 EditorUtility.DisplayProgressBar("Hades: Installing Scanner",
                     "Running npm install for script scanner…", 0f);
+
                 var npmResult = ProcessResolver.Run("npm", "install", scannerDir, 120000);
-                EditorUtility.ClearProgressBar();
                 if (!npmResult.Success)
                 {
-                    Debug.LogError($"[Hades] npm install failed: {npmResult.Error}");
-                    return new RunResult { ExitCode = 3, Error = "npm install failed" };
+                    Debug.LogWarning($"[Hades] npm install failed (attempt 1/2): {npmResult.Error}");
+                    _buildLog?.Detail("npm install attempt 1", $"Failed: {npmResult.Error}");
+
+                    npmResult = ProcessResolver.Run("npm", "install", scannerDir, 300000);
+                    if (!npmResult.Success)
+                    {
+                        EditorUtility.ClearProgressBar();
+                        var errorMsg = $"npm install failed after 2 attempts: {npmResult.Error}";
+                        Debug.LogError($"[Hades] {errorMsg}");
+                        _buildLog?.Detail("npm install attempt 2", $"Failed: {npmResult.Error}");
+                        return new RunResult { ExitCode = 101, Error = errorMsg };
+                    }
                 }
+
+                EditorUtility.ClearProgressBar();
             }
 
             var args = $"\"{Path.Combine(scannerDir, "index.js")}\" --db \"{dbPath}\" --mode {mode} --dirs \"{dirs}\" --project-root \"{projectRoot}\" {extraArgs}";
@@ -1015,6 +1096,7 @@ namespace ArcForge.Hades.Editor.Graph
             if (!result.Success)
             {
                 Debug.LogError($"[Hades] Node.js scanner failed (exit {result.ExitCode}): {result.Error}");
+                _buildLog?.Detail("Scanner error", $"exit {result.ExitCode}: {result.Error}");
             }
 
             return result;

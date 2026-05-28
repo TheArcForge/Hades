@@ -1,8 +1,8 @@
 # Hades — Roadmap Document
 
-**Version:** 1.2
-**Status:** Active development — Phase 7 in progress (v0.9.0 → v1.0.0)
-**Last updated:** 2026-05-26
+**Version:** 1.3
+**Status:** Active development — Phase 8 next (first-run reliability from external tester feedback)
+**Last updated:** 2026-05-27
 **Companion to:** Vision document, Architecture document, Plugin document
 
 ---
@@ -1450,22 +1450,16 @@ Phase 6 produces a validated v0.9.0 beta. Phase 7 takes this to v1.0 public rele
 
 ---
 
-## 9. Phase 7: Pre-prod to prod (v1.0)
+## 9. Phase 7: Friends-and-family prep (complete)
 
 ### Strategic intent
 
-Phase 7 takes a validated v0.9 beta and ships it publicly. This phase handles the production concerns that don't exist in a single-repo development context: splitting the repository into separate UPM and plugin repos, submitting to the Anthropic marketplace, ensuring CI covers both repos, and verifying the full install experience from scratch on a clean machine.
+Phase 7 prepared Hades for its first external testers. This phase handled plugin distribution, agent routing (ensuring agents use Hades MCP tools instead of defaulting to bash), tester documentation, and repository cleanup.
 
-After Phase 7, Hades is:
-- A Unity Package at `TheArcForge/Hades` installable via UPM git URL
-- A Claude Code plugin at `TheArcForge/hades-plugin` installable via `/plugin install` (marketplace) or `claude --plugin-dir <path>` (local)
-- Listed on the Anthropic plugin marketplace for discoverability
-- Documented with a user guide, architecture overview, and troubleshooting guide
-- v1.0.0 tagged and announced
+Phase 7 was validated by deploying to an external developer working on a large-scale real Unity project. The feedback confirmed the core thesis: Hades's typed Unity-asset navigation is materially better than grep, and the graph delivers real value. It also surfaced four reproducible bugs and a set of agent UX gaps — these drive Phases 8 and 9.
 
 ### Done criteria
 
-**Friends-and-family prep (completed):**
 - [x] Sync script (`scripts/sync-plugin.sh`) implemented — produces plugin repo content (872KB, 62 files) from main repo, copies `plugin-README.md` and `plugin-CLAUDE.md` as the plugin repo's `README.md` and `CLAUDE.md`
 - [x] Plugin manifest fix: added `"commands": "./Commands~/"` to `plugin.json` (commands weren't being discovered)
 - [x] Agent routing — three-layer guidance so agents use Hades MCP tools instead of defaulting to bash:
@@ -1477,8 +1471,360 @@ After Phase 7, Hades is:
 - [x] Repo cleanup: removed 49MB stale `Bridge~/hub/node_modules/` and 61MB `Scanner~/node_modules/` from git tracking, updated `.gitignore`
 - [x] Dry-run validation: plugin install via `--plugin-dir`, MCP tools working, agent routing confirmed (agent says "I'll query the Hades knowledge graph" instead of using bash)
 - [x] All four documentation docs refreshed (Architecture, Roadmap, Plugin, Vision) to reflect current state
+- [x] External tester smoke-test completed on a large-scale real Unity project
 
-**Public release (remaining):**
+### Scope: what was delivered
+
+**Plugin distribution:** Sync script, plugin-specific README and CLAUDE.md, `--plugin-dir` workflow validated.
+
+**Agent routing:** MCP `instructions` field in `MCPDispatcher.HandleInitialize()`, auto-generated `CLAUDE.md` at project root, skills copied to `~/.claude/skills/hades-*/` for Claude Desktop.
+
+**Tester documentation:** `Documentation/getting-started.md` (full walkthrough), `scripts/plugin-README.md`, `scripts/plugin-CLAUDE.md`.
+
+**Repo cleanup:** Removed 110MB of stale `node_modules/` from git tracking.
+
+### Phase 7 validation results (2026-05-27)
+
+First external tester feedback on a large-scale production project (10k+ assets, 13k+ C# types). Key findings:
+
+**What worked well:**
+- `search_by_name` — fast, accurate, typed results. Standout tool.
+- `trace_dependencies` — genuine value for prefab hierarchy inspection.
+- `find_references_to` on assets — asset-pointer wiring discovery that grep can't do.
+- `get_project_summary` — solid structural overview.
+- Agent routing confirmed: agent queries graph first instead of bash.
+
+**Bugs found (4 reproducible):**
+1. macOS quarantine blocks `libgilzoide-sqlite-net.dylib` on zip install → Phase 8
+2. Scanner `npm install` silently fails on first boot → graph missing all C# nodes (38% smaller) → Phase 8
+3. Launcher startup race → MCP "failed" on every cold start, Reconnect succeeds → Phase 8
+4. `pending_edges` accumulates ~67k unresolvable entries, misleading log → Phase 8
+
+**Coverage gaps identified:**
+- No C# code-level reference graph (`find_references_to` returns 0 on scripts) → Phase 9
+- Graph stops at Unity project boundary (monorepo sibling projects invisible) → Phase 9
+- Unscanned asset types (textures, meshes, animations, audio, fonts) → 67k dead-end edges → Phase 9
+
+### Bridge to next phase
+
+Phase 7 validated that Hades works on real projects and identified the gaps standing between v0.9 and v1.0. Phase 8 addresses first-run reliability (the bugs that hit during install). Phase 9 expands graph coverage (the gaps that limit query value). Phase 10 handles the public release mechanics.
+
+---
+
+## 10. Phase 8: First-run reliability
+
+### Strategic intent
+
+Phase 8 addresses every bug and UX issue that hits during install and first use. The external tester feedback (Phase 7) revealed a cross-cutting pattern: **operations that fail or partially complete report success or are silenced**, leaving users to investigate manually. This is unacceptable for first-run experience — the highest-stakes window for building trust.
+
+All four bugs share the "looks like failure" anti-pattern. The fixes are individually small but collectively transform the install path from "works if you know the workarounds" to "works on first try."
+
+This phase also addresses the Hub/Unity recovery gap (one-shot registration with no re-Register path) and the build pipeline observability debt that causes phantom bug reports.
+
+### Done criteria
+
+- [x] **Bug 1 — macOS quarantine:** `getting-started.md` recommends git URL install path first; `xattr -dr com.apple.quarantine` workaround documented prominently in troubleshooting guide; zip distribution deprecated in favor of git URL
+- [x] **Bug 2 — Scanner npm install:** Exit codes in `GraphBuilder.RunNodeScanner` are distinct (not all exit 3); `node_modules` freshness check validates `node_modules/better-sqlite3/package.json` exists (not just `Directory.Exists`); npm error text surfaces in the graph build log step (not just `Debug.LogError`); one retry with extended timeout on `npm install` failure
+- [x] **Bug 3 — Launcher startup race:** Launcher attaches stdin reader before `await ensureHub()`, buffers incoming MCP messages until Hub is ready; alternatively, launcher answers `initialize` locally without Hub round-trip
+- [x] **Bug 4 — pending_edges log:** `ResolvePendingEdges()` distinguishes transient pending from permanently unresolvable; log message reads `Resolved N, K unresolvable (unscanned asset types)` instead of misleading `Resolved N/M`
+- [x] **Hub recovery:** Unity re-registers with the Hub when `hub.json` changes (FileSystemWatcher or re-Register on failed heartbeat), eliminating the one-heartbeat-interval dead-air gap
+- [x] **Build observability:** Each graph build step distinguishes *succeeded* / *expected-unresolvable* / *actually broken* in its output; exit codes from subprocesses are not overloaded with environmental errors
+- [x] All fixes have automated tests
+- [ ] Clean install tested end-to-end on macOS (the tester's platform) — all four bugs confirmed resolved
+
+### Scope: what's in
+
+**Bug 1 — macOS quarantine on zip distribution:**
+- Update `Documentation/getting-started.md` to recommend git URL install as primary path
+- Add `xattr -dr com.apple.quarantine` workaround to `Documentation/troubleshooting.md` with cross-reference from "first Unity open fails" symptom
+- Test `ditto -ck --sequesterRsrc --keepParent` as zip repackaging method (doesn't set quarantine seed flag)
+- Long-term: evaluate Apple Developer ID + notarization for bundled native libs
+
+**Bug 2 — Scanner npm install silent failure:**
+- `Editor/Graph/GraphBuilder.cs`: Assign distinct exit codes — reserve 3 for scanner's own `EXIT_DB_OPEN_FAILED`, use 100 for "Node.js not found", 101 for "npm install failed"
+- Replace `Directory.Exists(node_modules)` freshness check with validation that `node_modules/better-sqlite3/package.json` exists
+- Surface npm error text in the `GraphBuildLog` step output, not just `Debug.LogError`
+- Add one retry of `npm install` with 5-minute timeout before giving up
+- Add "exit 3 in Step 1/3" → "run `cd Scanner~ && npm install`" cross-reference in troubleshooting guide
+
+**Bug 3 — Launcher startup race:**
+- `Bridge~/launcher/src/index.ts`: Restructure `main()` to attach stdin reader (via `createInterface`) before `await ensureHub()`. Buffer incoming lines in an array; drain after Hub is ready.
+- Evaluate answering MCP `initialize` locally from launcher constants (protocol version, server info, capabilities) without Hub round-trip — only `tools/list` and `tools/call` need the Hub.
+- Raise `HUB_STARTUP_TIMEOUT_MS` from 5000 to 15000 as defense-in-depth.
+- Consider pre-warming Hub from `MCPClientConfig.OnServerStart` (fire-and-forget `node launcher.js < /dev/null &`).
+
+**Bug 4 — pending_edges misleading log:**
+- `Editor/Graph/GraphBuilder.cs:ResolvePendingEdges()`: After resolution pass, classify remaining pending edges as "transient" (target type has a registered scanner) vs "permanent" (target extension not covered by any scanner).
+- Log: `[Hades] Pending edges: N resolved, K unresolvable (refs to textures, meshes, audio, etc. — asset types not indexed by Hades)`
+- Add "Coverage" note to `Documentation/troubleshooting.md` listing which asset types are indexed and which aren't.
+
+**Hub recovery (cross-cutting):**
+- `Editor/MCP/MCPServer.cs`: Add `FileSystemWatcher` on `hub.json` (or extend `HubClient.Heartbeat` to detect `hub.json` PID/port changes since last call) and call `Register()` when a new Hub appears.
+- This eliminates the up-to-one-heartbeat-interval dead-air gap when the Hub restarts.
+
+**Build pipeline observability (cross-cutting):**
+- Each `GraphBuildLog` step reports: succeeded count, expected-unresolved count, actually-broken count.
+- Subprocess exit codes carry distinct meanings, not overloaded.
+- When the system "logs and continues," the log makes explicit whether Hades is running degraded.
+
+### Scope: what's out
+
+- New scanners for unscanned asset types (Phase 9)
+- C# code-level reference graph (Phase 9)
+- Search improvements (Phase 9)
+- Parameter naming normalization (Phase 9)
+- Plugin repo creation, CI, marketplace (Phase 10)
+
+### Dependencies
+
+- Phase 7 complete (external tester feedback received)
+
+### Risk assessment
+
+**Risk: Launcher stdin buffering introduces message ordering issues.** Buffered lines must be drained in order after Hub ready.
+*Mitigation:* Simple array buffer with sequential drain. The MCP protocol is request-response over stdio — messages don't arrive faster than the agent can generate them. Test with rapid `initialize` + `tools/list` in sequence.
+
+**Risk: `npm install` retry masks a real failure.** Two retries might hide a genuine incompatibility.
+*Mitigation:* Log each attempt with full error output. If both retries fail, the final error is surfaced prominently — not silently swallowed.
+
+**Risk: FileSystemWatcher on `hub.json` is unreliable on some platforms.** macOS FSEvents and Linux inotify have known edge cases.
+*Mitigation:* FileSystemWatcher is the fast path. The existing heartbeat-based auto-register (`server.js:53-66`) remains as the slow fallback. Belt and suspenders.
+
+### Implementation hints
+
+- Bug 2: The probe for `node_modules/better-sqlite3/package.json` is more robust than `Directory.Exists` — it catches partial installs, empty directories, and version mismatches.
+- Bug 3: The key insight from the tester is that Claude Code's *init timeout* is shorter than its *per-request timeout*. Answering `initialize` from the launcher eliminates the race entirely — the Hub only matters for `tools/list` and `tools/call`, which have 30s per-request budgets.
+- Bug 4: `ScannerRegistry` already knows which extensions it covers. Use it to classify pending edges: if the target GUID resolves to a `.meta` whose main asset extension isn't in any scanner's `SupportedAssetType`, it's permanently unresolvable.
+- Hub recovery: `HubClient` already reads `hub.json` on every heartbeat. Comparing `(pid, port)` from the file against the last-known values is a 2-line change that detects a Hub restart.
+
+### Tests added
+
+**Automated:**
+- `GraphBuilder` exit code tests: verify distinct codes for "node not found" (100), "npm install failed" (101), "scanner DB error" (3)
+- `GraphBuilder` npm freshness check: `Directory.Exists` alone doesn't pass; `better-sqlite3/package.json` required
+- `GraphBuilder.ResolvePendingEdges`: synthetic pending edges with unscanned-type targets classified as "permanent"; log output matches expected format
+- Launcher: integration test sending `initialize` before Hub is ready → response arrives (not timeout)
+- Hub recovery: simulate `hub.json` change → Unity re-registers within one update tick
+
+**Manual:**
+- Clean macOS install end-to-end: download zip, `xattr` workaround, first Unity open, first Claude Code session — all four bugs confirmed resolved
+- Cold-start launcher: kill Hub, start Claude Code — no "failed" state in `/mcp`
+
+### Happy Path scenarios
+
+**Scenario 17: Clean install works on first try**
+
+A developer follows `getting-started.md` on macOS. They:
+1. Install via git URL (or zip + `xattr`)
+2. Open Unity — graph builds with all C# nodes present (no exit 3 failures)
+3. Open Claude Code — MCP server shows connected (not "failed")
+4. Build log reports honest numbers: resolved edges, expected-unresolved (unscanned types), no alarming ratios
+
+**Demonstrates:** all four bugs fixed.
+**Pass criteria:** developer reaches a working state without any manual workarounds or investigation.
+
+**Scenario 18: Hub restart recovery**
+
+The developer is working. The Hub process dies (or is killed). Within seconds, the next heartbeat tick detects the change. The developer starts a new Claude Code session — it spawns a new Hub, Unity re-registers, tools work immediately.
+
+**Demonstrates:** Hub recovery without manual intervention.
+**Pass criteria:** no "failed" state, no stale connections, no manual restarts required.
+
+### Regression coverage
+
+All Phase 0–7 tests must continue to pass. Bug fixes in this phase are additive (new exit codes, better log messages, stdin buffering) and should not change the behavior of working code paths.
+
+### Phase 8 implementation notes
+
+Issues and decisions from Phase 8 development, documented for future reference:
+
+1. **Launcher local initialize eliminates the race entirely.** Rather than buffering stdin messages during Hub startup, the launcher now answers MCP `initialize` locally from constants. Only `tools/list` and `tools/call` need the Hub. This means Claude Code's MCP connection succeeds in <1ms regardless of Hub startup time. Hub startup timeout raised from 5s to 15s as defense-in-depth.
+
+2. **npm freshness validated by marker file, not directory existence.** `Directory.Exists(node_modules)` was replaced with `File.Exists(node_modules/better-sqlite3/package.json)`. This catches empty directories, partial installs, and missing native modules — all conditions that cause silent failures.
+
+3. **Exit codes now distinguish environmental from scanner errors.** 100 = Node.js not found, 101 = npm install failed, 3 = scanner DB error, 2 = database contention. Previously all non-2 failures returned exit 3, making diagnosis impossible.
+
+4. **Heartbeat-based Hub recovery chosen over FileSystemWatcher.** FSWatcher has known reliability issues on macOS. Heartbeat runs every 30s, compares cached (pid, port) from hub.json. Up-to-30s detection lag is acceptable for rare Hub restart events.
+
+5. **Pending edge classification uses ScannerRegistry.** Unresolved pending edges are classified as "permanent" (target extension not covered by any scanner) vs "transient" (should resolve on next rebuild). The log now reads "N resolved, K unresolvable (textures, meshes, etc.)" instead of the misleading "Resolved N/M".
+
+6. **GraphBuildLog tracks degraded state.** A new `ReportDegraded(reason)` method accumulates degradation reasons. The final log message and build log file explicitly report when Hades is running degraded (e.g., "C# nodes missing — Scanner npm install failed").
+
+### Bridge to next phase
+
+Phase 8 makes the install path robust. Phase 9 expands the graph's coverage to close the gaps the external tester identified — unscanned asset types and C# code-level references.
+
+---
+
+## 11. Phase 9: Graph coverage expansion
+
+### Strategic intent
+
+Phase 9 addresses the two biggest functional gaps the external tester identified: **unscanned asset types** (textures, meshes, animations, audio, fonts) leaving 67k dead-end edges, and **no C# code-level reference graph** making `find_references_to` useless on scripts. These are the gaps that limit Hades from "good Unity asset navigator" to "complete project understanding tool."
+
+The C# reference graph is the single highest-impact improvement identified in external testing. When a developer asks "where is this class used?", the answer is almost always in other C# files — and today Hades returns 0 results. Solving this transforms `find_references_to` from a prefab-only tool into the universal "what depends on this?" query the Vision document promises.
+
+The approach for C# indexing must balance speed and quality. Roslyn semantic analysis gives perfect results but is heavyweight. Tree-sitter or regex-based approaches are fast but miss implicit dependencies. This phase evaluates both paths and ships whichever delivers the right trade-off for the graph's needs.
+
+### Done criteria
+
+- [ ] **MetaScanner:** Lightweight scanner creates `Asset` nodes (Texture, Mesh, AnimationClip, AnimatorController, AudioClip, Font, Sprite, Model) from `.meta` files — GUID + path + type, no binary parsing
+- [ ] **pending_edges near-zero:** After MetaScanner runs, `pending_edges` drops from ~67k to near-zero (only truly missing references remain)
+- [ ] **Queries on unscanned types work:** `find_references_to` on a `.png` returns all prefabs/materials referencing it; `trace_dependencies` on a UI prefab includes sprites, fonts, audio
+- [ ] **UnityEngine.dll base types indexed:** Precomputed JSON of public types from `UnityEngine.CoreModule`, `UnityEngine.UI`, etc. seeded as `ScriptType` nodes with `source = "builtin"` flag; resolves ~5k `inherits_from`/`implements` pending edges
+- [ ] **C# reference graph:** `find_references_to` on a script/type returns all C# types that reference it (field types, method parameters, construction, inheritance, interface implementation, static calls)
+- [ ] **C# reference approach validated:** Speed benchmark on large-scale project (13k+ types) — full scan completes in acceptable time; incremental updates for single-file changes are sub-second
+- [ ] **Search improvements:** `search_by_name` supports filtering by path prefix (e.g., `Assets/` only, exclude `Packages/`); option for case-sensitive or whole-word matching
+- [ ] **Scanned roots surfaced:** `get_project_summary` reports which directories/asset types are indexed and which aren't, so the agent knows when to widen search
+- [ ] **Parameter naming consistency:** All 89 MCP tools use a single parameter naming convention (snake_case), with migration path for any camelCase holdovers from UniClaude
+
+### Scope: what's in
+
+**MetaScanner — lightweight node creation for unscanned asset types:**
+- New `MetaScanner` (or per-type scanners: `TextureScanner`, `MeshScanner`, `AnimationScanner`, `AudioClipScanner`, `FontScanner`) that creates a single `Asset` node per `.meta` file
+- No binary file parsing — just GUID from `.meta`, asset path, Unity import type from the importer class name in `.meta`
+- Handles: `.png`, `.jpg`, `.tga`, `.psd`, `.gif` (Texture); `.fbx`, `.obj`, `.blend` (Model/Mesh); `.anim` (AnimationClip); `.controller` (AnimatorController); `.wav`, `.mp3`, `.ogg` (AudioClip); `.ttf`, `.otf` (Font); `.spriteatlas` (SpriteAtlas)
+- These nodes serve as edge targets — the existing scanners (PrefabScanner, MaterialScanner, SceneScanner) already emit edges to these GUIDs; the nodes just need to exist for the edges to resolve
+- Incremental updates via `AssetPostprocessor` (same debouncer path as other scanners)
+
+**UnityEngine.dll base type seeding:**
+- Ship a precomputed JSON (`Editor/Graph/Data/unity-builtin-types.json`) listing public types from core Unity assemblies: `UnityEngine.CoreModule`, `UnityEngine.PhysicsModule`, `UnityEngine.UI`, `UnityEngine.InputModule`, `TMPro`, etc.
+- Seed as `ScriptType` nodes with `properties.source = "builtin"` on graph initialization
+- Resolves `inherits_from` edges to `MonoBehaviour`, `ScriptableObject`, `Component`, etc.
+- Resolves `implements` edges to `IDisposable`, `IPointerClickHandler`, `ISerializationCallbackReceiver`, etc.
+- JSON regenerated per Unity major version; shipped version targets Unity 6000.x
+
+**C# code-level reference graph:**
+- **Goal:** For every `ScriptType` node, capture which other `ScriptType` nodes reference it — via field declarations, method parameters/return types, local variable types, constructor calls, inheritance, interface implementation, generic type arguments, attribute usage.
+- **Approach evaluation (to be resolved early in the phase):**
+  - *Option A — Extend Node.js scanner with tree-sitter C# grammar:* Fast (V8 speed), already proven architecture. Tree-sitter parses syntax without semantic resolution — captures explicit type names but misses `using` alias resolution, partial classes across files, implicit conversions, extension methods. Estimated 80-90% of references captured. Can be supplemented with a `using`-statement resolver pass.
+  - *Option B — Roslyn semantic analysis via Node.js child process:* `dotnet` CLI tool that runs Roslyn `SemanticModel` analysis, outputs JSON. Perfect accuracy but requires .NET SDK on the developer's machine (which Unity developers have). Speed concern: Roslyn compilation of a full Unity project can take 30-60 seconds. Incremental: Roslyn supports `WithChangedDocument` for single-file re-analysis.
+  - *Option C — Hybrid:* Tree-sitter for fast incremental updates (single file changed → re-parse in <100ms), Roslyn for periodic full validation (background, non-blocking). Ship tree-sitter first, add Roslyn as optional deep mode.
+- **Decision criteria:** Speed at scale (13k+ types); correctness on real Unity code (generics, partial classes, nested types, extension methods); incremental update time for single-file changes.
+- New edge types: `type_references` (ScriptType → ScriptType), with `properties.reference_kind` distinguishing field, parameter, return, construction, attribute, generic_argument.
+- Results surfaced through existing `find_references_to` tool — no new tool needed, just richer results.
+
+**Search improvements:**
+- `search_by_name`: Add optional `path_filter` parameter (e.g., `"Assets/"` excludes `Packages/` results)
+- `search_by_name`: Add optional `match_mode` parameter: `substring` (default, current behavior), `exact`, `word` (word-boundary matching)
+- Consider fuzzy fallback: if exact/word match returns 0 results, auto-retry with substring and surface "did you mean?" in the response
+
+**Scanned roots visibility:**
+- `get_project_summary` includes a `scanned_roots` field listing which directories are indexed (e.g., `Assets/`, `Packages/`) and a `coverage_notes` field listing known blind spots (e.g., "sibling C# projects outside the Unity project are not indexed")
+- MCP `instructions` field updated to tell the agent about project boundary limitations
+
+**Parameter naming normalization:**
+- Audit all 89 tools for parameter naming convention
+- Normalize to snake_case (the convention used by native Hades tools)
+- For migrated UniClaude tools using camelCase: accept both forms transparently (check for snake_case first, fall back to camelCase) to avoid breaking existing agent muscle memory
+
+### Scope: what's out
+
+- Binary asset parsing (texture dimensions, mesh vertex counts, audio sample rates) — nodes are metadata-only
+- Runtime instrumentation for DI/reflection (Phase 11 candidate)
+- Cross-project graph queries (monorepo sibling projects) — document the boundary instead
+- Roslyn deep mode for method call graphs (`calls` edges between `ScriptMethod` nodes) — deferred to Phase 11
+- Plugin repo creation, CI, marketplace (Phase 10)
+
+### Dependencies
+
+- Phase 8 complete (install path is reliable)
+- For C# reference graph Option B (Roslyn): .NET SDK available on developer machines (standard for Unity developers)
+
+### Risk assessment
+
+**Risk: MetaScanner increases graph size significantly.** A project with 10k textures adds 10k nodes.
+*Mitigation:* The nodes are lightweight (GUID + path + type, no substructure). Storage impact is minimal. Query performance impact negligible — existing indexes handle the volume.
+
+**Risk: C# reference graph approach doesn't scale.** Roslyn is too slow; tree-sitter misses too many references.
+*Mitigation:* Evaluate both approaches early in the phase on a large-scale project (13k+ types). Set a clear bar: full scan <30s, incremental <1s, accuracy >85% of references captured. If neither approach meets all three, ship tree-sitter (fast + good enough) and document limitations.
+
+**Risk: UnityEngine.dll type list maintenance.** Unity adds/removes types across versions.
+*Mitigation:* The JSON is generated from a script that reads the actual assemblies. Ship a generation script alongside the JSON. Regenerate when targeting a new Unity version. The list changes slowly — major updates only.
+
+**Risk: Parameter naming change breaks existing agent behavior.** Agents may have learned camelCase parameter names from prior sessions.
+*Mitigation:* Accept both conventions transparently. Log a deprecation note in Charon traces when camelCase is used, so we can track adoption and eventually remove the fallback.
+
+**Risk: Fuzzy search produces confusing results.** Auto-retry with broader matching may surface irrelevant hits.
+*Mitigation:* Fuzzy results are clearly labeled as "similar matches" in the response. The agent can decide whether to use them. If noise is too high, make fuzzy opt-in rather than automatic.
+
+### Implementation hints
+
+- **MetaScanner:** The `.meta` file format is YAML with a `guid` field at the top and an importer class name (e.g., `TextureImporter`, `ModelImporter`). The importer class name directly tells you the asset type. A single scanner that maps importer class → node type handles all cases.
+- **UnityEngine.dll types:** `TypeCache.GetTypesDerivedFrom<UnityEngine.Object>()` at editor time gives you the full list. Export once, ship as JSON. Alternatively, a Roslyn analysis of the Unity reference assemblies (in `<Unity>/Data/Managed/UnityEngine/`) produces the complete public API.
+- **C# references (tree-sitter path):** The existing Node.js scanner already parses C# with regex. Tree-sitter's C# grammar (`tree-sitter-c-sharp`) provides a proper AST. The migration path: replace regex patterns with tree-sitter queries, add reference extraction queries for field types, base types, and constructor calls. The `worker_threads` parallelization from Phase 5c applies directly.
+- **C# references (Roslyn path):** A standalone `dotnet tool` that opens the Unity project's `.csproj` files (generated by Unity), runs `SemanticModel.GetSymbolInfo()` on every identifier, and outputs a JSON of `(source_type, target_type, reference_kind)` tuples. The tool runs as a subprocess from `GraphBuilder`, same pattern as the Node.js scanner.
+- **Parameter naming:** `MCPDispatcher.BindArguments()` already does parameter mapping by name. Adding a fallback lookup (snake_case → camelCase) is a small change in the binding logic.
+- Architecture §2.9 lists the static analysis boundaries. Phase 9 closes some of them (unscanned asset types, inheritance resolution) but not all (DI, reflection, addressable-by-key remain dynamic).
+
+### Tests added
+
+**Automated:**
+- MetaScanner: produces correct node type for each supported extension; GUID matches `.meta` file; no binary file access
+- MetaScanner incremental: asset added/removed/moved → node created/deleted/updated
+- UnityEngine.dll seeding: `MonoBehaviour`, `ScriptableObject`, `Component` nodes exist after init; `inherits_from` edges resolve
+- C# reference graph: fixture with known type references → correct `type_references` edges produced
+- C# reference incremental: modify one `.cs` file → only that file's outgoing references updated; other files' references unchanged
+- `find_references_to` on a `.png` file: returns prefabs/materials that reference it
+- `search_by_name` with `path_filter`: excludes `Packages/` results when filtering to `Assets/`
+- Parameter naming: both `name_pattern` and `namePattern` accepted by `search_by_name`
+
+**Performance benchmarks:**
+- MetaScanner full scan on fixture with 5k+ asset files: completes in <10s
+- C# reference full scan on fixture with 500+ types: completes in <30s
+- C# reference incremental (single file change): completes in <1s
+- `pending_edges` count after full build with MetaScanner: <100 (down from ~67k)
+
+**Manual:**
+- Run against a large-scale test project: verify `find_references_to` on a sprite returns real results; verify `find_references_to` on a script returns C# references; verify `pending_edges` is near-zero
+
+### Happy Path scenarios
+
+**Scenario 19: "Which prefabs use this sprite?"**
+
+The developer asks about a commonly-used UI sprite. With MetaScanner, the graph now contains `Texture` nodes for every `.png`. `find_references_to` on `icStar_1x.png` returns all 3,586 prefabs that reference it (previously returned 0).
+
+**Demonstrates:** MetaScanner resolves the dead-end edges gap.
+**Pass criteria:** Results match a manual grep of GUID references in prefab YAML files.
+
+**Scenario 20: "Where is this class used?"**
+
+The developer asks about `ApplicationLogic.cs`. With the C# reference graph, `find_references_to` returns every class that holds a field of type `ApplicationLogic`, calls its methods, or inherits from it. Previously returned 0.
+
+**Demonstrates:** C# reference graph transforms script queries.
+**Pass criteria:** Results include at least the references visible in a manual code search. Agent no longer falls back to bash for this query.
+
+**Scenario 21: "Search only in my project code"**
+
+The developer searches for `%Manager%` with `path_filter: "Assets/"`. Results exclude the 200+ Manager classes from Unity packages and third-party libraries, returning only the project's own Manager implementations.
+
+**Demonstrates:** Search filtering reduces noise.
+**Pass criteria:** Zero `Packages/` results in the filtered output.
+
+### Regression coverage
+
+All Phase 0–8 tests must continue to pass. MetaScanner adds nodes that didn't previously exist — this may cause some snapshot-based tests to show higher node counts, which is expected and correct. C# reference edges are additive and don't change existing edge types.
+
+### Bridge to next phase
+
+Phase 9 delivers a complete graph that covers all asset types and C# code-level references. Phase 10 handles the public release: repo split, CI, marketplace submission, version bump to v1.0.0.
+
+---
+
+## 12. Phase 10: Public release (v1.0)
+
+### Strategic intent
+
+Phase 10 handles the production release mechanics. By this point, Hades has been externally tested (Phase 7), first-run bugs are fixed (Phase 8), and graph coverage is comprehensive (Phase 9). What remains is the distribution infrastructure: splitting the repository, setting up CI, submitting to the Anthropic marketplace, and validating the install experience from a clean machine.
+
+After Phase 10, Hades is:
+- A Unity Package at `TheArcForge/Hades` installable via UPM git URL
+- A Claude Code plugin at `TheArcForge/hades-plugin` installable via `/plugin install` (marketplace) or `claude --plugin-dir <path>` (local)
+- Listed on the Anthropic plugin marketplace for discoverability
+- v1.0.0 tagged and announced
+
+### Done criteria
+
 - [ ] `TheArcForge/hades-plugin` repository created with plugin-relevant subset (per Plugin doc §5.3)
 - [ ] Sync script wired to CI: auto-sync plugin repo on release tags
 - [ ] CI on main repo: Bridge + Scanner tests on push/PR
@@ -1488,30 +1834,15 @@ After Phase 7, Hades is:
 - [ ] Anthropic marketplace submission completed via `platform.claude.com/plugins/submit`
 - [ ] Marketplace compliance checklist passes (Plugin doc §5.2 — all items verified)
 - [ ] Version fields set to 1.0.0 across both repos
-- [ ] CHANGELOG.md covers all phases 0–7
-- [ ] At least one external developer (not the author) has installed and used Hades successfully
+- [ ] CHANGELOG.md covers all phases 0–10
+- [ ] At least one external developer (not the author) has installed and used Hades successfully without workarounds
 - [ ] GitHub release created with release notes on both repos
 
 ### Scope: what's in
 
-**Plugin repository (implemented):**
+**Plugin repository:**
 - Create `TheArcForge/hades-plugin` with plugin-relevant subset: `.claude-plugin/`, `.mcp.json`, `Skills~/`, `Commands~/`, `Bridge~/` (dist only), `Scanner~/` (source, no tests)
-- Sync script (`scripts/sync-plugin.sh`) — **done**: copies content from main repo, strips TypeScript source, tests, and Unity C# code; copies `scripts/plugin-README.md` → `README.md` and `scripts/plugin-CLAUDE.md` → `CLAUDE.md` in the plugin repo
-- Plugin-specific README (`scripts/plugin-README.md`) focused on Claude Code users; covers both `claude --plugin-dir` (local) and `/plugin install` (marketplace) install paths
-
-**Agent routing (implemented):**
-- MCP `instructions` field added to `MCPDispatcher.HandleInitialize()` — read by both Claude Code and Claude Desktop on connection, guides the agent to prefer Hades MCP tools over bash/grep/find for project understanding
-- `CLAUDE.md` auto-generated at Unity project root by `MCPClientConfig.WriteProjectClaudeMd()` — non-destructive append/update with `<!-- HADES:START -->` / `<!-- HADES:END -->` markers; provides routing table, common question patterns, tool guidance
-- Skills copied to `~/.claude/skills/hades-*/` by `MCPClientConfig.InstallSkillsForDesktop()` — runs on every server start, keeps skills in sync with installed package version; this is Claude Desktop's distribution path since it doesn't use the plugin system
-
-**Tester documentation (implemented):**
-- `Documentation/getting-started.md` — full first-time user walkthrough: prerequisites, zip-based install for both Unity package and plugin, verification steps, first-use prompts, troubleshooting
-- `scripts/plugin-CLAUDE.md` — agent guidance template shipped in plugin zip, "structural context first" principle with routing table and common question patterns
-
-**Repo cleanup (implemented):**
-- Removed 49MB stale `Bridge~/hub/node_modules/` from git (hub has zero runtime npm dependencies — devDependencies only for TypeScript compilation)
-- Removed 61MB `Scanner~/node_modules/` from git tracking (Scanner needs `npm install` at runtime for native `better-sqlite3`)
-- Updated `.gitignore` for both directories
+- Sync script (`scripts/sync-plugin.sh`) wired to CI
 
 **CI workflows:**
 - Main repo: Bridge + Scanner test runs on push/PR
@@ -1519,7 +1850,7 @@ After Phase 7, Hades is:
 - Plugin repo: structural validation (plugin.json, .mcp.json, skill count, command count, Bridge dist presence)
 
 **Version and release:**
-- Bump all version fields to 1.0.0 (after Phase 6 validation confirmed)
+- Bump all version fields to 1.0.0
 - CHANGELOG.md covering all phases
 - Git tag v1.0.0 on both repos
 - GitHub releases on both repos
@@ -1537,15 +1868,13 @@ After Phase 7, Hades is:
 
 ### Scope: what's out
 
-- New features (Phase 8)
+- New features (Phase 11)
 - Enterprise features
-- Asset Store distribution (Phase 8 candidate)
-- Marketing beyond README and marketplace listing
+- Asset Store distribution (Phase 11 candidate)
 
 ### Dependencies
 
-- Phase 6 complete (v0.9.0 validated, all docs current, all bugs fixed)
-- Hub working end-to-end (confirmed in Phase 6)
+- Phase 9 complete (graph coverage comprehensive, install path reliable)
 
 ### Risk assessment
 
@@ -1553,60 +1882,37 @@ After Phase 7, Hades is:
 *Mitigation:* Hades is fully functional without a marketplace listing. Submit early, iterate on feedback. Don't block release on approval.
 
 **Risk: Clean-machine install reveals hidden dependencies.** Something works on the dev machine but not on a fresh install.
-*Mitigation:* Test on a genuinely clean environment. Document every prerequisite. The Hub's zero-runtime-dependency design minimizes this risk.
+*Mitigation:* Phase 8 specifically addressed first-run reliability. Clean-machine test is the final validation.
 
 **Risk: Plugin repo sync drift.** The plugin repo gets out of sync with the main repo after manual changes.
 *Mitigation:* Automated sync on release tags via CI. Plugin repo CI validates structure on every push. No manual edits to the plugin repo.
 
-### Implementation hints
-
-- Plugin repo structure per Plugin doc §5.3. Include `Bridge~/` dist only (compiled JS), not TypeScript source. Include `Scanner~/` source because it runs directly as JS.
-- The sync script should clean the target (preserving `.git/`), then copy fresh. This prevents stale files from accumulating.
-- For clean-machine testing: clear `~/.arcforge/`, uninstall the Claude Code plugin, use a Unity project that has never had Hades.
-- Marketplace compliance: Plugin doc §5.2 is the checklist. Pay attention to: no writes to `~/.claude.json`, no fixed ports, no orphan processes, all paths use `${CLAUDE_PLUGIN_ROOT}`.
-
-### Tests added
-
-**Automated (CI):**
-- Plugin repo structural validation (skill count, command count, manifest fields, Bridge dist presence)
-- Main repo Bridge + Scanner test suites
-
-**Manual:**
-- Clean-machine install end-to-end
-- Plugin-only install (without Unity Package)
-- Marketplace compliance walkthrough
-
 ### Happy Path scenarios
 
-**Scenario 16: First external tester**
+**Scenario 22: v1.0 clean install**
 
-A developer who has never seen Hades follows the getting-started guide (`Documentation/getting-started.md`) from a cold start. They:
-1. Install the Unity Package via UPM (git URL or local path)
-2. Install the Claude Code plugin via `claude --plugin-dir <path>` (local) or `/plugin install` (marketplace)
-3. Open Claude Code from their project directory
-4. Ask "Tell me about this project"
-5. Receive a project-specific response powered by Hades MCP tools (agent queries the graph, not bash)
+A developer who has never seen Hades follows the getting-started guide from a cold start on a clean machine. They complete the full install and first-use flow without encountering any of the four bugs from Phase 7 testing. Graph includes all asset types and C# references. Agent uses Hades tools by default.
 
-**Demonstrates:** the full product works for someone other than the author, and agent routing guides the agent to use Hades tools by default.
-**Pass criteria:** the developer completes all 5 steps without asking the author for help. The response is project-aware and uses Hades MCP tools rather than falling back to grep/find.
+**Demonstrates:** the full product is ready for public release.
+**Pass criteria:** zero manual workarounds required. Developer reaches a working state by following documentation alone.
 
 ### Regression coverage
 
-All Phase 0–6 tests must continue to pass. Phase 7 added C# changes to the main repo (MCP `instructions` field in `MCPDispatcher.cs`, `CLAUDE.md` auto-generation and skills copy in `MCPClientConfig.cs`) and a bash sync script. Regression risk is low — the C# additions are additive (new fields, new methods on startup) and do not modify existing tool behavior.
+All Phase 0–9 tests must continue to pass.
 
 ### Bridge to next phase
 
-Phase 7 declares Hades publicly released at v1.0. Phase 8 is post-launch evolution — not building toward a fixed scope, but responding to real-world usage data and feedback.
+Phase 10 declares Hades publicly released at v1.0. Phase 11 is post-launch evolution.
 
 ---
 
-## 10. Phase 8: Long-tail and post-launch
+## 13. Phase 11: Long-tail and post-launch
 
 ### Strategic intent
 
-Phase 8 is open-ended. Unlike phases 0-7 which had defined scope, Phase 8 evolves based on what actually happens after Hades is in real users' hands. The roadmap cannot predict which features matter most until adoption signals tell us.
+Phase 11 is open-ended. Unlike phases 0-10 which had defined scope, Phase 11 evolves based on what actually happens after Hades is in real users' hands. The roadmap cannot predict which features matter most until adoption signals tell us.
 
-This chapter therefore lists candidate directions rather than prescribing them. Whether and when each is pursued depends on usage data, contributor interest, ecosystem evolution, and product feedback.
+This chapter lists candidate directions rather than prescribing them. Whether and when each is pursued depends on usage data, contributor interest, ecosystem evolution, and product feedback.
 
 ### Candidate directions
 
@@ -1625,21 +1931,22 @@ This chapter therefore lists candidate directions rather than prescribing them. 
 - Cross-project skill sharing with explicit provenance
 - Shared eval datasets across projects
 - Memory inheritance patterns
+- Cross-project graph queries for monorepo scenarios
 
 **Distribution:**
 - Asset Store as supplementary channel
 - Documentation site as standalone web property
-- Anthropic marketplace submission (if not yet done and traction warrants)
 
 **Advanced graph features:**
-- Roslyn deep mode default-on (after performance is solved)
-- Method call graph analysis
+- Roslyn deep mode for method call graphs (`calls` edges between `ScriptMethod` nodes)
 - Semantic similarity over graph (if useful in practice)
+- Cross-project boundary scanning for monorepo sibling C# projects
 
 **Skills ecosystem:**
 - Community skill contributions
 - Skill marketplace beyond Hades's own (third-party contributions)
 - Specialized skills for sub-domains (mobile, console, VR)
+- Recipe skills (health, inventory, save, spawn) deferred from Phase 4
 
 **Enterprise considerations:**
 - If demand emerges, evaluate enterprise features
@@ -1656,33 +1963,34 @@ For each candidate direction, the question to answer is:
 
 Pursue directions where the answer to all three is yes. Defer or skip where any is no.
 
-### Phase 8 has no Done criteria
+### Phase 11 has no Done criteria
 
 This phase doesn't end. It continues as long as Hades is maintained.
 
 ---
 
-## 11. Cross-phase concerns
+## 14. Cross-phase concerns
 
-### 11.1 Test infrastructure summary
+### 14.1 Test infrastructure summary
 
-By the end of Phase 5, the test suite includes:
+By the end of Phase 9, the test suite includes:
 
-- **C# unit tests** (NUnit): hundreds of tests covering scanners, graph operations, validation engine, MCP infrastructure
-- **Node.js unit tests** (Vitest): tests covering bridge process, dashboard, MCP protocol handling
+- **C# unit tests** (NUnit): hundreds of tests covering scanners (including MetaScanner), graph operations, validation engine, MCP infrastructure
+- **Node.js unit tests** (Vitest/Jest): tests covering bridge process, dashboard, MCP protocol handling, C# scanner
 - **Integration tests** (Unity Test Runner): scanner correctness on fixtures, end-to-end MCP calls, multi-instance behavior
 - **Charon-based regression**: traces of happy paths replayed for deterministic Hades-side parts
-- **Manual happy path scenarios**: 15 scenarios across phases, manually run after each phase
+- **Performance benchmarks**: graph build time, query latency, incremental update time at scale
+- **Manual happy path scenarios**: 22 scenarios across phases, manually run after each phase
 
 CI runs the full automated suite on every commit. Manual scenarios are part of phase completion gates.
 
-### 11.2 Cumulative regression principle
+### 14.2 Cumulative regression principle
 
 Every phase adds tests. No phase removes tests. Test fixtures, once stable, are frozen. This grows the suite over time but ensures regressions cannot occur silently.
 
 When a Phase N change breaks a Phase M test (M < N), this is a bug in Phase N, not "expected behavior change." Investigate and fix before continuing.
 
-### 11.3 Documentation cadence
+### 14.3 Documentation cadence
 
 Documentation is built incrementally:
 
@@ -1693,11 +2001,14 @@ Documentation is built incrementally:
 - Phase 4: skills overview
 - Phase 5: implementation notes for each sub-phase
 - Phase 6: README rewrite for external users, troubleshooting guide, architecture doc refresh
-- Phase 7: CHANGELOG, plugin repo README, release notes; also `Documentation/getting-started.md`, `scripts/plugin-README.md` (plugin repo README), and `scripts/plugin-CLAUDE.md` (plugin repo CLAUDE.md)
+- Phase 7: getting-started guide, plugin README/CLAUDE.md
+- Phase 8: troubleshooting updates (quarantine, npm install, launcher race, pending edges)
+- Phase 9: coverage documentation (which asset types indexed), parameter naming migration notes
+- Phase 10: CHANGELOG, release notes, plugin repo README
 
 Documentation is not an afterthought; it accumulates throughout the journey.
 
-### 11.4 Versioning across phases
+### 14.4 Versioning across phases
 
 Hades version progresses with each phase:
 
@@ -1706,29 +2017,32 @@ Hades version progresses with each phase:
 - Phase 2 complete: v0.3.0 ✅
 - Phase 3 complete: v0.4.0 ✅
 - Phase 4 complete: v0.5.0 ✅
-- Phase 5 complete (5a/5b/5c): v0.6.0 ✅ *(current — `plugin.json` at 0.6.0)*
-- Phase 6 complete (polish, tester-ready): **v0.9.0**
-- Phase 7 complete (public release): **v1.0.0**
-- Phase 8: v1.x and v2.x as evolution dictates
+- Phase 5 complete (5a/5b/5c): v0.6.0 ✅
+- Phase 6 complete (polish, tester-ready): v0.9.0 ✅
+- Phase 7 complete (friends-and-family): v0.9.0 ✅ *(same version — no new features, only distribution prep)*
+- Phase 8 complete (first-run reliability): **v0.9.1**
+- Phase 9 complete (graph coverage): **v0.9.5**
+- Phase 10 complete (public release): **v1.0.0**
+- Phase 11: v1.x and v2.x as evolution dictates
 
-Versions 0.1.0–0.6.0 are internal milestones. v0.9.0 is the external tester-ready beta. v1.0.0 is the first publicly announced release. Both `package.json` (UPM) and `plugin.json` (Claude Code) track these tags in lockstep.
+Versions 0.1.0–0.6.0 are internal milestones. v0.9.0–0.9.5 are external-tester betas incorporating feedback. v1.0.0 is the first publicly announced release. Both `package.json` (UPM) and `plugin.json` (Claude Code) track these tags in lockstep.
 
-### 11.5 Anthropic plugin marketplace submission
+### 14.5 Anthropic plugin marketplace submission
 
-Marketplace submission is part of Phase 7 (v1.0). The full marketplace strategy, compliance checklist, and standalone plugin repo considerations are documented in the **Plugin document** (`Documentation/arcforge-hades-plugin.md`, §5). That document is the authoritative source.
+Marketplace submission is part of Phase 10 (v1.0). The full marketplace strategy, compliance checklist, and standalone plugin repo considerations are documented in the **Plugin document** (`Documentation/arcforge-hades-plugin.md`, §5). That document is the authoritative source.
 
 **Summary:** Hades is fully functional without a marketplace listing. The marketplace adds discoverability only. Current plugin structure passes all known marketplace compliance requirements (no fixed ports, no orphan processes, no config file manipulation).
 
-### 11.6 The product after Phase 7
+### 14.6 The product after Phase 10
 
-After Phase 7, Hades is:
+After Phase 10, Hades is:
 
 - A Unity Package at `TheArcForge/Hades` distributable via UPM git URL
 - A Claude Code plugin at `TheArcForge/hades-plugin` installable via `/plugin install` (marketplace) or `claude --plugin-dir <path>` (local), discoverable through the Anthropic plugin marketplace
 - A coherent product with three integrated layers (Graph, Charon, Asphodel) plus 22 Skills and 6 slash commands
-- 89 MCP tools (21 native + 68 migrated editor-action tools)
+- 89+ MCP tools (21 native + 68 migrated editor-action tools), with comprehensive graph coverage across all Unity asset types and C# code-level references
 - Documented for users with setup guide, troubleshooting guide, and architecture docs
-- Battle-tested on real Unity projects through dogfooding and external tester validation
+- Battle-tested on real Unity projects through dogfooding and large-scale external tester validation
 - Open source under MIT license
 - Free of dependencies on Anthropic auth that could be revoked
 
@@ -1736,7 +2050,7 @@ It is ready to be used by developers who are not the original developer.
 
 ---
 
-## 12. Known issues
+## 15. Known issues
 
 Issues discovered during development that need resolution. Tracked here for visibility across phases.
 
@@ -1784,15 +2098,27 @@ When a Unity project lives in a subdirectory of the git repo (e.g., `MyRepo/MyUn
 
 **Resolution:** The fix is now dual-path. (1) Hub parent match strategy: the Hub matches the CWD as a parent of a registered project path, so Claude Code launched from the repo root finds the correct Unity instance via the Hub. (2) `MCPClientConfig.WriteProjectMcpJson()` writes `.mcp.json` to the Unity project root pointing at the Hub launcher, giving Claude Code a project-local config to discover directly when launched from that directory. Together these cover the full range of CWD scenarios. See **Plugin document** §3.5.
 
+### External tester bugs (Phase 7 feedback, 2026-05-27)
+
+**Status:** Tracked in Phase 8 (first-run reliability) and Phase 9 (graph coverage)
+
+Four reproducible bugs discovered during the first external smoke-test on a large-scale production project:
+
+1. **macOS quarantine blocks native dylib** — `com.apple.quarantine` on zip distribution blocks `libgilzoide-sqlite-net.dylib`. Workaround: `xattr -dr com.apple.quarantine`. Fix: Phase 8.
+2. **Scanner npm install silently fails** — first-boot graph missing all C# nodes (38% smaller). Exit code 3 overloaded. Workaround: manual `cd Scanner~ && npm install`. Fix: Phase 8.
+3. **Launcher startup race** — MCP "failed" on every cold start; Reconnect succeeds. stdin not consumed until after Hub bootstrap. Fix: Phase 8.
+4. **pending_edges misleading log** — "Resolved 80/67504" when 99.88% are expected-unresolvable (unscanned asset types). Fix: Phase 8 (log), Phase 9 (MetaScanner).
+
+
 ---
 
-## 13. Closing
+## 16. Closing
 
 This roadmap is a sequence of phases, each building on the last, each producing something coherent on its own, accumulating into a complete product that realizes the Vision.
 
-The roadmap is honest about what's hard. Phase 1 is the highest-risk: the Graph thesis must validate. Phase 3 has subtle correctness requirements (validation that doesn't drift). Phase 5 has the broadest scope (everything must come together). Phase 6 resolves accumulated polish. Phase 7 is the ship gate. Phases 2 and 4 are evolutionary rather than transformational — they extend what exists rather than introducing new architectural risks.
+The roadmap has evolved through contact with reality. Phases 0–6 built the components. Phase 7 validated with an external tester and revealed that the install path needed hardening (Phase 8) and the graph needed broader coverage (Phase 9) before public release (Phase 10). This is the process working as intended — external feedback reshaping priorities before they calcify.
 
-The roadmap is also honest about what's outside its scope. Many directions could be pursued — runtime instrumentation, enterprise features, multi-project workflows. These are explicitly Phase 8 candidates, not Phase 0-7 commitments.
+The roadmap is honest about what's hard. Phase 1 was the highest-risk: the Graph thesis validated. Phase 9 is the next critical bet: whether C# code-level reference indexing can be made both fast and accurate enough to transform `find_references_to` from a prefab-only tool into the universal dependency query. Phase 8 is unglamorous but essential — first impressions determine adoption.
 
 What this document does not commit to:
 
@@ -1802,7 +2128,7 @@ What this document does not commit to:
 
 What this document does commit to:
 
-- The order of phases (validated by dependencies)
+- The order of phases (validated by dependencies and real-world feedback)
 - The Done criteria of each phase
 - The Happy Path scenarios that validate each phase
 - The TDD-first principle throughout

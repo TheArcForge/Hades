@@ -26,6 +26,34 @@ namespace ArcForge.Hades.Editor.MCP
         static string HubJsonPath => Path.Combine(HubDir, "hub.json");
         static string PendingDir => Path.Combine(HubDir, "pending");
 
+        static int _lastKnownHubPort;
+        static int _lastKnownHubPid;
+
+        public static HubInfo DetectHubChange(string path = null)
+        {
+            var current = ReadHubInfo(path);
+            if (current == null) return null;
+
+            if (current.Port != _lastKnownHubPort || current.Pid != _lastKnownHubPid)
+            {
+                return current;
+            }
+
+            return null;
+        }
+
+        public static void UpdateLastKnownHub(int port, int pid)
+        {
+            _lastKnownHubPort = port;
+            _lastKnownHubPid = pid;
+        }
+
+        internal static void ResetLastKnownHub()
+        {
+            _lastKnownHubPort = 0;
+            _lastKnownHubPid = 0;
+        }
+
         public static HubInfo ReadHubInfo(string path = null)
         {
             var filePath = path ?? HubJsonPath;
@@ -84,7 +112,10 @@ namespace ArcForge.Hades.Editor.MCP
             if (manifestPackages != null && manifestPackages.Length > 0)
                 body["manifestPackages"] = new JArray(manifestPackages);
 
-            return PostToHub(info.Port, "/api/register", body.ToString(Formatting.None));
+            var success = PostToHub(info.Port, "/api/register", body.ToString(Formatting.None));
+            if (success)
+                UpdateLastKnownHub(info.Port, info.Pid);
+            return success;
         }
 
         public static string[] ReadManifestPackages(string projectRoot)
@@ -145,7 +176,10 @@ namespace ArcForge.Hades.Editor.MCP
                 ["pid"] = pid
             };
 
-            return PostToHub(info.Port, "/api/heartbeat", body.ToString(Formatting.None));
+            var success = PostToHub(info.Port, "/api/heartbeat", body.ToString(Formatting.None));
+            if (success)
+                UpdateLastKnownHub(info.Port, info.Pid);
+            return success;
         }
 
         public static void WriteBreadcrumb(string pendingDir, string projectName,
