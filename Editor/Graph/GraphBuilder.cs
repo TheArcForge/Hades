@@ -1132,8 +1132,9 @@ namespace ArcForge.Hades.Editor.Graph
 
         internal static bool IsNodeModulesValid(string scannerDir)
         {
-            var markerFile = Path.Combine(scannerDir, "node_modules", "better-sqlite3", "package.json");
-            return File.Exists(markerFile);
+            var sqliteMarker = Path.Combine(scannerDir, "node_modules", "better-sqlite3", "package.json");
+            var treeSitterMarker = Path.Combine(scannerDir, "node_modules", "tree-sitter", "package.json");
+            return File.Exists(sqliteMarker) && File.Exists(treeSitterMarker);
         }
 
         RunResult RunNodeScanner(string mode, string dirs, string extraArgs = "")
