@@ -14,14 +14,14 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         [MCPTool("project_run_tests", "Run unit tests with optional name filter. Returns pass/fail/skip counts and failure details.")]
         public static MCPToolResult RunTests(
             [MCPToolParam("Test name filter (e.g. 'MyTests'). Empty = all tests.")] string filter,
-            [MCPToolParam("Test mode: EditMode, PlayMode, or All (default EditMode)")] string testMode)
+            [MCPToolParam("Test mode: EditMode, PlayMode, or All (default EditMode)")] string test_mode)
         {
             var api = ScriptableObject.CreateInstance<TestRunnerApi>();
 
             var mode = TestMode.EditMode;
-            if (!string.IsNullOrEmpty(testMode))
+            if (!string.IsNullOrEmpty(test_mode))
             {
-                switch (testMode.ToLowerInvariant())
+                switch (test_mode.ToLowerInvariant())
                 {
                     case "playmode":
                         mode = TestMode.PlayMode;
@@ -93,7 +93,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         [MCPTool("project_get_console_log", "Get recent Unity console log entries with optional type filter (Error, Warning, Log)")]
         public static MCPToolResult GetConsoleLog(
             [MCPToolParam("Number of entries to return (default 50, max 200)")] string count,
-            [MCPToolParam("Filter by type: Error, Warning, Log, or empty for all")] string typeFilter)
+            [MCPToolParam("Filter by type: Error, Warning, Log, or empty for all")] string type_filter)
         {
             int n = 50;
             if (!string.IsNullOrEmpty(count) && int.TryParse(count, out var parsed))
@@ -102,9 +102,9 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             var entries = ConsoleLogBuffer.GetRecent(n);
 
             LogType? filterType = null;
-            if (!string.IsNullOrEmpty(typeFilter))
+            if (!string.IsNullOrEmpty(type_filter))
             {
-                switch (typeFilter.ToLowerInvariant())
+                switch (type_filter.ToLowerInvariant())
                 {
                     case "error":
                         filterType = LogType.Error;

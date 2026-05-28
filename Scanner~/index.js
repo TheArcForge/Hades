@@ -4,10 +4,11 @@ import { cpus } from 'os';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { discoverCsFiles } from './src/discovery.js';
-import { parseFile } from './src/parser.js';
+import { parseFile } from './src/ts-parser.js';
 import { resolveGuid } from './src/meta-resolver.js';
 import { computeContentHash } from './src/hasher.js';
 import { DbWriter } from './src/db-writer.js';
+import { scanMetaFiles, getSupportedExtensions } from './src/meta-scanner.js';
 
 // ─── Exit codes ──────────────────────────────────────────────────────────────
 const EXIT_OK = 0;
@@ -62,7 +63,7 @@ export async function scan({
   mode,
   dirs,
   projectRoot,
-  scannerVersion = 2,
+  scannerVersion = 3,
   guids = null,
   tier = 'project',
 }) {
@@ -82,6 +83,7 @@ export async function scan({
     }
 
     if (mode === 'full') {
+      _runMetaScan({ db, dirs });
       return await _runFullScan({ db, allFiles, guidToFile, scannerVersion, tier });
     } else if (mode === 'incremental') {
       return await _runIncrementalScan({ db, guids: guids ?? [], guidToFile, scannerVersion, tier });
@@ -252,6 +254,25 @@ function _writeParseResult({ db, filePath, guid, contentHash, scannerVersion, pa
     }
   }
 
+  // Write code_references as pending edges for later resolution
+  if (parsed.codeReferences) {
+    for (const ref of parsed.codeReferences) {
+      const sourceType = parsed.nodes.find(
+        n => n.type === 'ScriptType' && n.name === ref.sourceTypeName
+      );
+      const sourceDbId = sourceType ? idMap.get(sourceType.id) : null;
+      if (sourceDbId == null) continue;
+
+      db.insertPendingEdge(
+        sourceDbId,
+        'code_references',
+        ref.targetTypeName,
+        ref.referenceKind, // stored in target_namespace column
+        guid,
+      );
+    }
+  }
+
   // Write edges (local ids → DB ids)
   for (const edge of parsed.edges) {
     const srcDbId = idMap.get(edge.sourceId);
@@ -270,6 +291,18 @@ function _scanFile({ db, filePath, guid, contentHash, scannerVersion }) {
   db.runInTransaction(() => {
     _writeParseResult({ db, filePath, guid, contentHash, scannerVersion, parsed });
   });
+}
+
+// ─── Meta-scan for non-code assets ──────────────────────────────────────────
+
+function _runMetaScan({ db, dirs }) {
+  const extensions = [...getSupportedExtensions()];
+  const assets = scanMetaFiles(dirs, extensions);
+  if (assets.length > 0) {
+    db.insertMetaAssets(assets);
+  }
+  process.stderr.write(`Meta-scan: ${assets.length} asset nodes created\n`);
+  return assets.length;
 }
 
 // ─── CLI entry point ─────────────────────────────────────────────────────────
@@ -296,7 +329,7 @@ if (isCLI) {
   const dirs = (values['dirs'] ?? '').split(',').filter(Boolean);
   const projectRoot = values['project-root'] ?? process.cwd();
   const guidsList = values['guids'] ? values['guids'].split(',').filter(Boolean) : null;
-  const scannerVersion = values['scanner-version'] ? Number(values['scanner-version']) : 2;
+  const scannerVersion = values['scanner-version'] ? Number(values['scanner-version']) : 3;
   const tier = values['tier'] ?? 'project';
 
   let writer;

@@ -87,20 +87,20 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("scene_duplicate", "Duplicate a scene asset to a new path (does not open the copy)")]
         public static MCPToolResult DuplicateScene(
-            [MCPToolParam("Source scene path", required: true)] string sourcePath,
-            [MCPToolParam("Destination path for the copy", required: true)] string destPath)
+            [MCPToolParam("Source scene path", required: true)] string source_path,
+            [MCPToolParam("Destination path for the copy", required: true)] string dest_path)
         {
-            if (AssetDatabase.LoadAssetAtPath<SceneAsset>(sourcePath) == null)
-                return MCPToolResult.Error($"Source scene not found at '{sourcePath}'.");
+            if (AssetDatabase.LoadAssetAtPath<SceneAsset>(source_path) == null)
+                return MCPToolResult.Error($"Source scene not found at '{source_path}'.");
 
-            var directory = Path.GetDirectoryName(destPath);
+            var directory = Path.GetDirectoryName(dest_path);
             if (!string.IsNullOrEmpty(directory))
                 EnsureFolderExists(directory);
 
-            if (!AssetDatabase.CopyAsset(sourcePath, destPath))
-                return MCPToolResult.Error($"Failed to copy scene to '{destPath}'.");
+            if (!AssetDatabase.CopyAsset(source_path, dest_path))
+                return MCPToolResult.Error($"Failed to copy scene to '{dest_path}'.");
 
-            return MCPToolResult.Success(new { source = sourcePath, created = destPath });
+            return MCPToolResult.Success(new { source = source_path, created = dest_path });
         }
 
         [MCPTool("scene_list_build", "List all scenes in Build Settings with index, path, and enabled status")]
@@ -116,12 +116,12 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         [MCPTool("scene_set_build", "Set the Build Settings scene list. " +
             "JSON array of {\"path\": \"Assets/Scenes/X.unity\", \"enabled\": true}")]
         public static MCPToolResult SetBuildScenes(
-            [MCPToolParam("JSON array of scene entries with path and enabled fields", required: true)] string scenesJson)
+            [MCPToolParam("JSON array of scene entries with path and enabled fields", required: true)] string scenes_json)
         {
             BuildSceneEntry[] entries;
             try
             {
-                entries = JsonConvert.DeserializeObject<BuildSceneEntry[]>(scenesJson);
+                entries = JsonConvert.DeserializeObject<BuildSceneEntry[]>(scenes_json);
             }
             catch (Exception ex)
             {
@@ -129,7 +129,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             }
 
             if (entries == null)
-                return MCPToolResult.Error("scenesJson must be a non-null JSON array.");
+                return MCPToolResult.Error("scenes_json must be a non-null JSON array.");
 
             var missing = entries
                 .Where(e => AssetDatabase.LoadAssetAtPath<SceneAsset>(e.Path) == null)

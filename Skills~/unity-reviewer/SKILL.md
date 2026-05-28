@@ -18,15 +18,16 @@ Run through these checks after modifying or creating C# scripts. Organized by se
 Before running the checklist, gather impact context using Hades Graph and memory:
 
 ```
-find_references_to("<changed_script_path>")   — what other scripts depend on the changed file
+find_references_to("<changed_script_path>")   — returns BOTH asset references (prefabs, scenes) AND C# code references (fields, parameters, constructors, casts, inheritance)
 trace_dependencies("<changed_script_path>")   — what the changed script depends on
 recall_memory("code review conventions style") — documented team conventions and past decisions
 ```
 
 Use these results to:
-- Flag ripple risks (e.g., a change to a base class affects many dependents)
+- Flag ripple risks (e.g., a change to a base class affects many dependents — `find_references_to` shows both prefab dependents and C# code dependents)
 - Adjust severity: a performance issue in a script referenced by 40 prefabs is higher priority than one referenced by 1
 - Verify the change aligns with team conventions before marking Style issues as acceptable
+- Do NOT use `grep` to find references — the graph is authoritative for both asset and code-level dependencies
 
 ## Decision Framework
 

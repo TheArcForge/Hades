@@ -113,7 +113,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         [MCPTool("layer_create", "Create a layer in the project's TagManager (assigns to first available slot 8-31, or specific index)")]
         public static MCPToolResult CreateLayer(
             [MCPToolParam("Layer name to create", required: true)] string name,
-            [MCPToolParam("Specific layer index (8-31). Omit to auto-assign first available.")] string layerIndex = null)
+            [MCPToolParam("Specific layer index (8-31). Omit to auto-assign first available.")] string layer_index = null)
         {
             if (string.IsNullOrEmpty(name))
                 return MCPToolResult.Error("Layer name is required.");
@@ -125,10 +125,10 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             var so = new SerializedObject(asset);
             var layers = so.FindProperty("layers");
 
-            if (!string.IsNullOrEmpty(layerIndex))
+            if (!string.IsNullOrEmpty(layer_index))
             {
-                if (!int.TryParse(layerIndex, out var idx) || idx < 0 || idx >= 32)
-                    return MCPToolResult.Error($"Layer index must be 0-31, got '{layerIndex}'.");
+                if (!int.TryParse(layer_index, out var idx) || idx < 0 || idx >= 32)
+                    return MCPToolResult.Error($"Layer index must be 0-31, got '{layer_index}'.");
 
                 if (idx < 8)
                     return MCPToolResult.Error($"Layer indices 0-7 are reserved for Unity built-in layers. Use indices 8-31.");

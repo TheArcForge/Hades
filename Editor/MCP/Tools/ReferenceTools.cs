@@ -11,33 +11,33 @@ namespace ArcForge.Hades.Editor.MCP.Tools
     public static class ReferenceTools
     {
         [MCPTool("reference_set", "Set an object reference field on a component. " +
-            "Provide either targetPath (scene hierarchy path) or targetAssetPath (asset path), not both. " +
-            "Use targetComponentType to reference a specific component on the target GameObject.")]
+            "Provide either target_path (scene hierarchy path) or target_asset_path (asset path), not both. " +
+            "Use target_component_type to reference a specific component on the target GameObject.")]
         public static MCPToolResult SetReference(
-            [MCPToolParam("GameObject name or hierarchy path", required: true)] string gameObjectPath,
-            [MCPToolParam("Component type name (e.g. 'GameManager')", required: true)] string componentType,
-            [MCPToolParam("Serialized property name (e.g. '_scoreText', 'm_ConnectedBody')", required: true)] string propertyName,
-            [MCPToolParam("Target scene GameObject path (e.g. 'Canvas/ScoreText')")] string targetPath = null,
-            [MCPToolParam("Target asset path (e.g. 'Assets/Sprites/hero.png')")] string targetAssetPath = null,
+            [MCPToolParam("GameObject name or hierarchy path", required: true)] string game_object_path,
+            [MCPToolParam("Component type name (e.g. 'GameManager')", required: true)] string component_type,
+            [MCPToolParam("Serialized property name (e.g. '_scoreText', 'm_ConnectedBody')", required: true)] string property_name,
+            [MCPToolParam("Target scene GameObject path (e.g. 'Canvas/ScoreText')")] string target_path = null,
+            [MCPToolParam("Target asset path (e.g. 'Assets/Sprites/hero.png')")] string target_asset_path = null,
             [MCPToolParam("Component type on target to reference (e.g. 'Rigidbody', 'Text'). " +
-                "Omit to reference the GameObject itself.")] string targetComponentType = null)
+                "Omit to reference the GameObject itself.")] string target_component_type = null)
         {
-            bool hasTargetPath = !string.IsNullOrEmpty(targetPath);
-            bool hasAssetPath = !string.IsNullOrEmpty(targetAssetPath);
+            bool hasTargetPath = !string.IsNullOrEmpty(target_path);
+            bool hasAssetPath = !string.IsNullOrEmpty(target_asset_path);
             if (!hasTargetPath && !hasAssetPath)
                 return MCPToolResult.Error(
-                    "Must provide either targetPath (scene object) or targetAssetPath (asset). Neither was provided.");
+                    "Must provide either target_path (scene object) or target_asset_path (asset). Neither was provided.");
             if (hasTargetPath && hasAssetPath)
                 return MCPToolResult.Error(
-                    "Provide either targetPath or targetAssetPath, not both.");
+                    "Provide either target_path or target_asset_path, not both.");
 
-            var go = ComponentTools.FindGameObject(gameObjectPath);
+            var go = ComponentTools.FindGameObject(game_object_path);
             if (go == null)
-                return GameObjectNotFoundError(gameObjectPath);
+                return GameObjectNotFoundError(game_object_path);
 
-            var type = ComponentTools.FindComponentType(componentType);
+            var type = ComponentTools.FindComponentType(component_type);
             if (type == null)
-                return MCPToolResult.Error($"Component type not found: '{componentType}'.");
+                return MCPToolResult.Error($"Component type not found: '{component_type}'.");
 
             var component = go.GetComponent(type);
             if (component == null)
@@ -45,42 +45,42 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 var existing = go.GetComponents<Component>()
                     .Where(c => c != null).Select(c => c.GetType().Name).ToArray();
                 return MCPToolResult.Error(
-                    $"Component '{componentType}' not found on '{ComponentTools.GetPath(go)}'. " +
+                    $"Component '{component_type}' not found on '{ComponentTools.GetPath(go)}'. " +
                     $"Existing components: {string.Join(", ", existing)}");
             }
 
             var so = new SerializedObject(component);
-            var prop = so.FindProperty(propertyName);
+            var prop = so.FindProperty(property_name);
             if (prop == null)
             {
                 // Try to grow array if this is an array element path like "myArray.Array.data[0]"
-                prop = ResolveOrGrowArrayElement(so, propertyName);
+                prop = ResolveOrGrowArrayElement(so, property_name);
             }
             if (prop == null)
             {
                 var validProps = ListObjectReferenceProperties(so);
                 return MCPToolResult.Error(
-                    $"Property '{propertyName}' not found on {componentType}. " +
+                    $"Property '{property_name}' not found on {component_type}. " +
                     $"ObjectReference properties: {string.Join(", ", validProps)}");
             }
             if (prop.propertyType != SerializedPropertyType.ObjectReference)
                 return MCPToolResult.Error(
-                    $"Property '{propertyName}' is type {prop.propertyType}, not ObjectReference.");
+                    $"Property '{property_name}' is type {prop.propertyType}, not ObjectReference.");
 
             UnityEngine.Object targetObj;
             string targetDescription;
 
             if (hasTargetPath)
             {
-                var targetGO = GameObjectResolver.FindByPath(targetPath);
+                var targetGO = GameObjectResolver.FindByPath(target_path);
                 if (targetGO == null)
-                    return GameObjectNotFoundError(targetPath);
+                    return GameObjectNotFoundError(target_path);
 
-                if (!string.IsNullOrEmpty(targetComponentType))
+                if (!string.IsNullOrEmpty(target_component_type))
                 {
-                    var targetType = ComponentTools.FindComponentType(targetComponentType);
+                    var targetType = ComponentTools.FindComponentType(target_component_type);
                     if (targetType == null)
-                        return MCPToolResult.Error($"Target component type not found: '{targetComponentType}'.");
+                        return MCPToolResult.Error($"Target component type not found: '{target_component_type}'.");
 
                     var targetComp = targetGO.GetComponent(targetType);
                     if (targetComp == null)
@@ -88,25 +88,25 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                         var availableComps = targetGO.GetComponents<Component>()
                             .Where(c => c != null).Select(c => c.GetType().Name).ToArray();
                         return MCPToolResult.Error(
-                            $"Component '{targetComponentType}' not found on '{targetPath}'. " +
+                            $"Component '{target_component_type}' not found on '{target_path}'. " +
                             $"Available: {string.Join(", ", availableComps)}");
                     }
                     targetObj = targetComp;
-                    targetDescription = $"{targetPath} ({targetComponentType})";
+                    targetDescription = $"{target_path} ({target_component_type})";
                 }
                 else
                 {
                     targetObj = targetGO;
-                    targetDescription = targetPath;
+                    targetDescription = target_path;
                 }
             }
             else
             {
                 var fieldType = GetObjectReferenceFieldType(prop);
-                var resolveErr = ResolveAsset(targetAssetPath, fieldType, out targetObj);
+                var resolveErr = ResolveAsset(target_asset_path, fieldType, out targetObj);
                 if (resolveErr != null)
                     return MCPToolResult.Error(resolveErr);
-                targetDescription = targetAssetPath;
+                targetDescription = target_asset_path;
             }
 
             if (hasTargetPath)
@@ -114,22 +114,22 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 var fieldType2 = GetObjectReferenceFieldType(prop);
                 if (fieldType2 != null && !fieldType2.IsInstanceOfType(targetObj))
                     return MCPToolResult.Error(
-                        $"Type mismatch: field '{propertyName}' expects {fieldType2.Name}, " +
+                        $"Type mismatch: field '{property_name}' expects {fieldType2.Name}, " +
                         $"but target is {targetObj.GetType().Name}. " +
-                        (string.IsNullOrEmpty(targetComponentType)
-                            ? $"Try specifying targetComponentType to reference a component instead of the GameObject."
+                        (string.IsNullOrEmpty(target_component_type)
+                            ? $"Try specifying target_component_type to reference a component instead of the GameObject."
                             : ""));
             }
 
-            Undo.RecordObject(component, $"MCP Set Reference {propertyName}");
+            Undo.RecordObject(component, $"MCP Set Reference {property_name}");
             prop.objectReferenceValue = targetObj;
             so.ApplyModifiedProperties();
 
             return MCPToolResult.Success(new
             {
                 gameObject = ComponentTools.GetPath(go),
-                component = componentType,
-                property = propertyName,
+                component = component_type,
+                property = property_name,
                 target = targetDescription,
                 targetType = targetObj.GetType().Name
             });
@@ -137,28 +137,28 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("reference_get", "Get the current value of an object reference field on a component")]
         public static MCPToolResult GetReference(
-            [MCPToolParam("GameObject name or hierarchy path", required: true)] string gameObjectPath,
-            [MCPToolParam("Component type name", required: true)] string componentType,
-            [MCPToolParam("Serialized property name", required: true)] string propertyName)
+            [MCPToolParam("GameObject name or hierarchy path", required: true)] string game_object_path,
+            [MCPToolParam("Component type name", required: true)] string component_type,
+            [MCPToolParam("Serialized property name", required: true)] string property_name)
         {
-            var go = ComponentTools.FindGameObject(gameObjectPath);
+            var go = ComponentTools.FindGameObject(game_object_path);
             if (go == null)
-                return GameObjectNotFoundError(gameObjectPath);
+                return GameObjectNotFoundError(game_object_path);
 
-            var type = ComponentTools.FindComponentType(componentType);
+            var type = ComponentTools.FindComponentType(component_type);
             if (type == null)
-                return MCPToolResult.Error($"Component type not found: '{componentType}'.");
+                return MCPToolResult.Error($"Component type not found: '{component_type}'.");
 
             var component = go.GetComponent(type);
             if (component == null)
-                return MCPToolResult.Error($"Component '{componentType}' not found on '{ComponentTools.GetPath(go)}'.");
+                return MCPToolResult.Error($"Component '{component_type}' not found on '{ComponentTools.GetPath(go)}'.");
 
             var so = new SerializedObject(component);
-            var prop = so.FindProperty(propertyName);
+            var prop = so.FindProperty(property_name);
             if (prop == null)
-                return MCPToolResult.Error($"Property '{propertyName}' not found on {componentType}.");
+                return MCPToolResult.Error($"Property '{property_name}' not found on {component_type}.");
             if (prop.propertyType != SerializedPropertyType.ObjectReference)
-                return MCPToolResult.Error($"Property '{propertyName}' is type {prop.propertyType}, not ObjectReference.");
+                return MCPToolResult.Error($"Property '{property_name}' is type {prop.propertyType}, not ObjectReference.");
 
             var obj = prop.objectReferenceValue;
             if (obj == null)
@@ -166,8 +166,8 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 return MCPToolResult.Success(new
                 {
                     gameObject = ComponentTools.GetPath(go),
-                    component = componentType,
-                    property = propertyName,
+                    component = component_type,
+                    property = property_name,
                     value = (string)null,
                     isNull = true
                 });
@@ -177,8 +177,8 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             return MCPToolResult.Success(new
             {
                 gameObject = ComponentTools.GetPath(go),
-                component = componentType,
-                property = propertyName,
+                component = component_type,
+                property = property_name,
                 value = obj.name,
                 type = obj.GetType().Name,
                 assetPath = string.IsNullOrEmpty(assetPath) ? null : assetPath,
@@ -188,22 +188,22 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("reference_find_unset", "Find all unset (null) object reference fields on a GameObject's components")]
         public static MCPToolResult FindUnsetReferences(
-            [MCPToolParam("GameObject name or hierarchy path", required: true)] string gameObjectPath,
-            [MCPToolParam("Component type to scan (omit to scan all components)")] string componentType = null)
+            [MCPToolParam("GameObject name or hierarchy path", required: true)] string game_object_path,
+            [MCPToolParam("Component type to scan (omit to scan all components)")] string component_type = null)
         {
-            var go = ComponentTools.FindGameObject(gameObjectPath);
+            var go = ComponentTools.FindGameObject(game_object_path);
             if (go == null)
-                return GameObjectNotFoundError(gameObjectPath);
+                return GameObjectNotFoundError(game_object_path);
 
             var components = new List<Component>();
-            if (!string.IsNullOrEmpty(componentType))
+            if (!string.IsNullOrEmpty(component_type))
             {
-                var type = ComponentTools.FindComponentType(componentType);
+                var type = ComponentTools.FindComponentType(component_type);
                 if (type == null)
-                    return MCPToolResult.Error($"Component type not found: '{componentType}'.");
+                    return MCPToolResult.Error($"Component type not found: '{component_type}'.");
                 var comp = go.GetComponent(type);
                 if (comp == null)
-                    return MCPToolResult.Error($"Component '{componentType}' not found on '{ComponentTools.GetPath(go)}'.");
+                    return MCPToolResult.Error($"Component '{component_type}' not found on '{ComponentTools.GetPath(go)}'.");
                 components.Add(comp);
             }
             else

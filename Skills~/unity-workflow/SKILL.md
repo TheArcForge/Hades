@@ -126,11 +126,12 @@ propose_memory_update("<domain>", "<what was decided and why>")
 - Jumping straight to implementation without running `get_project_summary` or `recall_memory` — produces designs that duplicate existing systems or contradict prior decisions.
 - Asking no clarifying questions when the request is ambiguous — produces implementations that solve the wrong problem.
 - Presenting a design and immediately starting implementation before the user responds — skips the approval gate.
-- Using UniClaude MCP authoring tools (`BeginScriptEditing`, `EndScriptEditing`, `scene_setup`, `component_set_properties`, `scene_create`, `component_add`) — these are not Hades tools and do not exist in this environment.
-- Checking for errors with `project_run_tests` or `project_get_console_log` — these are not Hades tools.
+- Using `grep -r "ClassName"` to find references instead of `find_references_to` — the graph knows about both asset references and C# code-level references (fields, parameters, constructors, casts, inheritance).
+- Using `find . -name "*.cs"` to locate scripts instead of `search_by_name` — the graph indexes every script, type, and method with their relationships.
+- Reading `.unity` or `.prefab` files as YAML instead of using `get_scene_summary`, `scene_get_hierarchy`, or `prefab_get_contents` — the graph provides parsed, structured data.
 
 ## Cross-References
 
 **Skills:** `hades:unity-architect` — architecture decision frameworks. `hades:scene-authoring` — scene construction workflows. `hades:prefab-workflow` — prefab creation and editing. `hades:animation-workflow` — animation controller setup. `hades:unity-reviewer` — code review for Unity anti-patterns.
 
-**Hades MCP Tools:** `get_project_summary`, `get_scene_summary`, `search_by_name`, `recall_memory`, `propose_memory_update`, `find_components_using_pattern`.
+**Hades MCP Tools:** `get_project_summary`, `get_scene_summary`, `search_by_name` (supports `path_prefix`, `match_mode`), `find_references_to` (asset + C# code references), `trace_dependencies`, `recall_memory`, `propose_memory_update`, `find_components_using_pattern`, `project_get_console_log`, `project_run_tests`, `BeginScriptEditing` / `EndScriptEditing`.

@@ -140,4 +140,6 @@ The Hades-Unity-Client graph (163k nodes, 128MB) is representative of a medium-t
 3. **Storage**: 128MB graph + 14MB traces. Reasonable for the node count.
 4. **First boot**: ~10s for cold start including full script scanning. Acceptable as a one-time cost.
 
-A true 50k+ *project asset* benchmark (50k scenes, prefabs, textures — not package scripts) would stress the project-tier scanners differently and is recommended for Phase 8 validation on a real game project.
+A true 50k+ *project asset* benchmark (50k scenes, prefabs, textures — not package scripts) would stress the project-tier scanners differently and is recommended for validation on a real game project.
+
+**Note:** This benchmark predates Phase 9 (v0.9.5), which added the MetaScanner (creates Asset nodes for textures, models, audio, animation, fonts via `.meta` file reads), tree-sitter C# parser (AST-based cross-file reference extraction replacing regex), and Unity builtin type seeding (4,001 ScriptType nodes from Unity assemblies). These additions increase total node/edge counts and may affect build and query timings. A fresh benchmark is recommended after Phase 9 stabilization.

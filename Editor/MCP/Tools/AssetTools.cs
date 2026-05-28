@@ -71,29 +71,29 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         [MCPTool("asset_move", "Move or rename an asset from one path to another")]
         public static MCPToolResult MoveAsset(
             [MCPToolParam("Current asset path (e.g. 'Assets/Old/Player.cs')", required: true)]
-            string sourcePath,
+            string source_path,
             [MCPToolParam("Destination asset path (e.g. 'Assets/New/Player.cs')", required: true)]
-            string destPath)
+            string dest_path)
         {
-            var sourceType = AssetDatabase.GetMainAssetTypeAtPath(sourcePath);
+            var sourceType = AssetDatabase.GetMainAssetTypeAtPath(source_path);
             if (sourceType == null)
-                return MCPToolResult.Error($"Source asset not found at path: {sourcePath}");
+                return MCPToolResult.Error($"Source asset not found at path: {source_path}");
 
             // Ensure the destination directory exists
-            var destDir = Path.GetDirectoryName(destPath);
+            var destDir = Path.GetDirectoryName(dest_path);
             if (!string.IsNullOrEmpty(destDir) && !AssetDatabase.IsValidFolder(destDir))
             {
                 CreateFolderRecursive(destDir);
             }
 
-            var error = AssetDatabase.MoveAsset(sourcePath, destPath);
+            var error = AssetDatabase.MoveAsset(source_path, dest_path);
             if (!string.IsNullOrEmpty(error))
                 return MCPToolResult.Error($"Move failed: {error}");
 
             return MCPToolResult.Success(new
             {
-                source = sourcePath,
-                destination = destPath
+                source = source_path,
+                destination = dest_path
             });
         }
 

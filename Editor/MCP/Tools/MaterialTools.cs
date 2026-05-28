@@ -14,14 +14,14 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         [MCPTool("material_create", "Create a new material asset at the specified path with the given shader")]
         public static MCPToolResult CreateMaterial(
             [MCPToolParam("Project-relative path for the new material (e.g. 'Assets/Materials/MyMat.mat')", required: true)] string path,
-            [MCPToolParam("Shader name (e.g. 'Standard', 'Unlit/Color'). Defaults to 'Standard'")] string shaderName = "Standard")
+            [MCPToolParam("Shader name (e.g. 'Standard', 'Unlit/Color'). Defaults to 'Standard'")] string shader_name = "Standard")
         {
-            if (string.IsNullOrEmpty(shaderName))
-                shaderName = "Standard";
+            if (string.IsNullOrEmpty(shader_name))
+                shader_name = "Standard";
 
-            var shader = Shader.Find(shaderName);
+            var shader = Shader.Find(shader_name);
             if (shader == null)
-                return MCPToolResult.Error($"Shader '{shaderName}' not found. Ensure the shader name is correct and the shader is included in the project.");
+                return MCPToolResult.Error($"Shader '{shader_name}' not found. Ensure the shader name is correct and the shader is included in the project.");
 
             EnsureFolderExists(Path.GetDirectoryName(path));
 
@@ -32,50 +32,50 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             return MCPToolResult.Success(new
             {
                 path,
-                shader = shaderName,
+                shader = shader_name,
                 created = true
             });
         }
 
         [MCPTool("material_set_property", "Set a shader property on a material asset (float, int, color, vector, or texture)")]
         public static MCPToolResult SetMaterialProperty(
-            [MCPToolParam("Project-relative path to the material asset", required: true)] string materialPath,
-            [MCPToolParam("Shader property name (e.g. '_Color', '_Glossiness')", required: true)] string propertyName,
+            [MCPToolParam("Project-relative path to the material asset", required: true)] string material_path,
+            [MCPToolParam("Shader property name (e.g. '_Color', '_Glossiness')", required: true)] string property_name,
             [MCPToolParam("Value to set (number, JSON color/vector, hex color, or texture asset path)", required: true)] string value,
-            [MCPToolParam("Type hint: 'float', 'int', 'color', 'vector', or 'texture'. Auto-detected if omitted.")] string propertyType = null)
+            [MCPToolParam("Type hint: 'float', 'int', 'color', 'vector', or 'texture'. Auto-detected if omitted.")] string property_type = null)
         {
-            var mat = AssetDatabase.LoadAssetAtPath<Material>(materialPath);
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(material_path);
             if (mat == null)
-                return MCPToolResult.Error($"Material not found at path: '{materialPath}'.");
+                return MCPToolResult.Error($"Material not found at path: '{material_path}'.");
 
             try
             {
-                Undo.RecordObject(mat, $"MCP Set Material Property {propertyName}");
-                ApplyMaterialProperty(mat, propertyName, value, propertyType);
+                Undo.RecordObject(mat, $"MCP Set Material Property {property_name}");
+                ApplyMaterialProperty(mat, property_name, value, property_type);
                 EditorUtility.SetDirty(mat);
                 AssetDatabase.SaveAssets();
             }
             catch (Exception ex)
             {
-                return MCPToolResult.Error($"Failed to set property '{propertyName}': {ex.Message}");
+                return MCPToolResult.Error($"Failed to set property '{property_name}': {ex.Message}");
             }
 
             return MCPToolResult.Success(new
             {
-                materialPath,
-                property = propertyName,
+                materialPath = material_path,
+                property = property_name,
                 value,
-                propertyType = propertyType ?? "auto"
+                propertyType = property_type ?? "auto"
             });
         }
 
         [MCPTool("material_get_properties", "List all shader properties of a material with their types and current values")]
         public static MCPToolResult GetMaterialProperties(
-            [MCPToolParam("Project-relative path to the material asset", required: true)] string materialPath)
+            [MCPToolParam("Project-relative path to the material asset", required: true)] string material_path)
         {
-            var mat = AssetDatabase.LoadAssetAtPath<Material>(materialPath);
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(material_path);
             if (mat == null)
-                return MCPToolResult.Error($"Material not found at path: '{materialPath}'.");
+                return MCPToolResult.Error($"Material not found at path: '{material_path}'.");
 
             var shader = mat.shader;
             var propertyCount = ShaderUtil.GetPropertyCount(shader);
@@ -99,7 +99,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
             return MCPToolResult.Success(new
             {
-                materialPath,
+                materialPath = material_path,
                 shader = shader.name,
                 properties
             });
@@ -107,21 +107,21 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("material_assign", "Assign a material to a Renderer component on a GameObject (supports material slots)")]
         public static MCPToolResult AssignMaterial(
-            [MCPToolParam("GameObject name or hierarchy path (e.g. 'Canvas/Panel')", required: true)] string gameObjectPath,
-            [MCPToolParam("Project-relative path to the material asset", required: true)] string materialPath,
+            [MCPToolParam("GameObject name or hierarchy path (e.g. 'Canvas/Panel')", required: true)] string game_object_path,
+            [MCPToolParam("Project-relative path to the material asset", required: true)] string material_path,
             [MCPToolParam("Material slot index (0-based, default '0')")] string slot = "0")
         {
-            var go = ComponentTools.FindGameObject(gameObjectPath);
+            var go = ComponentTools.FindGameObject(game_object_path);
             if (go == null)
-                return MCPToolResult.Error($"GameObject not found: '{gameObjectPath}'.");
+                return MCPToolResult.Error($"GameObject not found: '{game_object_path}'.");
 
             var renderer = go.GetComponent<Renderer>();
             if (renderer == null)
                 return MCPToolResult.Error($"No Renderer component found on '{ComponentTools.GetPath(go)}'. Add a MeshRenderer, SkinnedMeshRenderer, or other Renderer component first.");
 
-            var mat = AssetDatabase.LoadAssetAtPath<Material>(materialPath);
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(material_path);
             if (mat == null)
-                return MCPToolResult.Error($"Material not found at path: '{materialPath}'.");
+                return MCPToolResult.Error($"Material not found at path: '{material_path}'.");
 
             int slotIndex = 0;
             if (!string.IsNullOrEmpty(slot) && !int.TryParse(slot, out slotIndex))
@@ -142,47 +142,47 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 renderer = renderer.GetType().Name,
                 slot = slotIndex,
                 material = mat.name,
-                materialPath
+                materialPath = material_path
             });
         }
 
         [MCPTool("material_duplicate", "Duplicate a material asset to a new path, preserving all properties")]
         public static MCPToolResult DuplicateMaterial(
-            [MCPToolParam("Project-relative path of the source material", required: true)] string sourcePath,
-            [MCPToolParam("Project-relative destination path for the duplicate", required: true)] string destPath)
+            [MCPToolParam("Project-relative path of the source material", required: true)] string source_path,
+            [MCPToolParam("Project-relative destination path for the duplicate", required: true)] string dest_path)
         {
-            var sourceMat = AssetDatabase.LoadAssetAtPath<Material>(sourcePath);
+            var sourceMat = AssetDatabase.LoadAssetAtPath<Material>(source_path);
             if (sourceMat == null)
-                return MCPToolResult.Error($"Source material not found at path: '{sourcePath}'.");
+                return MCPToolResult.Error($"Source material not found at path: '{source_path}'.");
 
-            EnsureFolderExists(Path.GetDirectoryName(destPath));
+            EnsureFolderExists(Path.GetDirectoryName(dest_path));
 
-            bool copied = AssetDatabase.CopyAsset(sourcePath, destPath);
+            bool copied = AssetDatabase.CopyAsset(source_path, dest_path);
             if (!copied)
-                return MCPToolResult.Error($"Failed to copy material from '{sourcePath}' to '{destPath}'.");
+                return MCPToolResult.Error($"Failed to copy material from '{source_path}' to '{dest_path}'.");
 
             AssetDatabase.Refresh();
 
             return MCPToolResult.Success(new
             {
-                source = sourcePath,
-                destination = destPath,
+                source = source_path,
+                destination = dest_path,
                 duplicated = true
             });
         }
 
         [MCPTool("material_swap_shader", "Change the shader on an existing material, preserving compatible properties")]
         public static MCPToolResult SwapShader(
-            [MCPToolParam("Project-relative path to the material asset", required: true)] string materialPath,
-            [MCPToolParam("New shader name (e.g. 'Unlit/Color', 'Universal Render Pipeline/Lit')", required: true)] string shaderName)
+            [MCPToolParam("Project-relative path to the material asset", required: true)] string material_path,
+            [MCPToolParam("New shader name (e.g. 'Unlit/Color', 'Universal Render Pipeline/Lit')", required: true)] string shader_name)
         {
-            var mat = AssetDatabase.LoadAssetAtPath<Material>(materialPath);
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(material_path);
             if (mat == null)
-                return MCPToolResult.Error($"Material not found at path: '{materialPath}'.");
+                return MCPToolResult.Error($"Material not found at path: '{material_path}'.");
 
-            var shader = Shader.Find(shaderName);
+            var shader = Shader.Find(shader_name);
             if (shader == null)
-                return MCPToolResult.Error($"Shader '{shaderName}' not found. Ensure the shader name is correct and the shader is included in the project.");
+                return MCPToolResult.Error($"Shader '{shader_name}' not found. Ensure the shader name is correct and the shader is included in the project.");
 
             var previousShader = mat.shader.name;
             Undo.RecordObject(mat, "MCP Swap Shader");
@@ -192,9 +192,9 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
             return MCPToolResult.Success(new
             {
-                materialPath,
+                materialPath = material_path,
                 previousShader,
-                newShader = shaderName
+                newShader = shader_name
             });
         }
 

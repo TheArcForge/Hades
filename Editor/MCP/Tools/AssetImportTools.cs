@@ -10,12 +10,12 @@ namespace ArcForge.Hades.Editor.MCP.Tools
     {
         [MCPTool("asset_get_import_settings", "Read import settings for any asset (textures, models, audio, etc.)")]
         public static MCPToolResult GetImportSettings(
-            [MCPToolParam("Asset path (e.g. 'Assets/Art/Model.fbx')", required: true)] string assetPath)
+            [MCPToolParam("Asset path (e.g. 'Assets/Art/Model.fbx')", required: true)] string asset_path)
         {
-            var importer = AssetImporter.GetAtPath(assetPath);
+            var importer = AssetImporter.GetAtPath(asset_path);
             if (importer == null)
                 return MCPToolResult.Error(
-                    $"No importer found for '{assetPath}'. The asset may not exist or has no configurable import settings.");
+                    $"No importer found for '{asset_path}'. The asset may not exist or has no configurable import settings.");
 
             var so = new SerializedObject(importer);
             var properties = new List<object>();
@@ -36,7 +36,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
             return MCPToolResult.Success(new
             {
-                assetPath,
+                assetPath = asset_path,
                 importerType = importer.GetType().Name,
                 properties
             });
@@ -44,13 +44,13 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("asset_set_import_settings", "Set import settings on any asset (textures, models, audio) and reimport")]
         public static MCPToolResult SetImportSettings(
-            [MCPToolParam("Asset path (e.g. 'Assets/Art/Model.fbx')", required: true)] string assetPath,
+            [MCPToolParam("Asset path (e.g. 'Assets/Art/Model.fbx')", required: true)] string asset_path,
             [MCPToolParam("JSON object of property names to values (e.g. '{\"m_MaxTextureSize\": 256}')", required: true)] string properties)
         {
-            var importer = AssetImporter.GetAtPath(assetPath);
+            var importer = AssetImporter.GetAtPath(asset_path);
             if (importer == null)
                 return MCPToolResult.Error(
-                    $"No importer found for '{assetPath}'. The asset may not exist or has no configurable import settings.");
+                    $"No importer found for '{asset_path}'. The asset may not exist or has no configurable import settings.");
 
             JObject props;
             try
@@ -98,7 +98,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
             return MCPToolResult.Success(new
             {
-                assetPath,
+                assetPath = asset_path,
                 propertiesSet = set,
                 errors
             });
@@ -107,7 +107,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         [MCPTool("asset_set_clip_import_settings",
             "Configure animation clip settings (loopTime, loopPose, etc.) on an FBX/model asset and reimport")]
         public static MCPToolResult SetClipImportSettings(
-            [MCPToolParam("FBX/model asset path", required: true)] string assetPath,
+            [MCPToolParam("FBX/model asset path", required: true)] string asset_path,
             [MCPToolParam("JSON array of clip configs: [{\"name\": \"Take 001\", \"loopTime\": true, ...}]", required: true)] string clips)
         {
             ClipConfig[] clipConfigs;
@@ -120,14 +120,14 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 return MCPToolResult.Error($"Invalid JSON: {ex.Message}");
             }
 
-            var importer = AssetImporter.GetAtPath(assetPath) as ModelImporter;
+            var importer = AssetImporter.GetAtPath(asset_path) as ModelImporter;
             if (importer == null)
             {
-                var anyImporter = AssetImporter.GetAtPath(assetPath);
+                var anyImporter = AssetImporter.GetAtPath(asset_path);
                 if (anyImporter == null)
-                    return MCPToolResult.Error($"Asset not found at '{assetPath}'.");
+                    return MCPToolResult.Error($"Asset not found at '{asset_path}'.");
                 return MCPToolResult.Error(
-                    $"Asset at '{assetPath}' uses {anyImporter.GetType().Name}, not ModelImporter. " +
+                    $"Asset at '{asset_path}' uses {anyImporter.GetType().Name}, not ModelImporter. " +
                     "This tool only works on model/FBX files.");
             }
 
@@ -137,7 +137,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
             if (existingClips == null || existingClips.Length == 0)
                 return MCPToolResult.Error(
-                    $"No animation clips found in '{assetPath}'. " +
+                    $"No animation clips found in '{asset_path}'. " +
                     "Ensure the model has animations and the rig type is set to Humanoid or Generic.");
 
             var clipNames = new List<string>();
@@ -178,7 +178,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             if (errors.Count > 0 && updated.Count == 0)
                 return MCPToolResult.Error(string.Join("\n", errors));
 
-            return MCPToolResult.Success(new { assetPath, updatedClips = updated, errors });
+            return MCPToolResult.Success(new { assetPath = asset_path, updatedClips = updated, errors });
         }
 
         class ClipConfig

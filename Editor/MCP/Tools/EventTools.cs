@@ -16,53 +16,53 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         [MCPTool("event_add_listener", "Add a persistent listener to a UnityEvent (e.g. Button.onClick). " +
             "Supports void methods and methods with a single argument (string, int, float, bool).")]
         public static MCPToolResult AddListener(
-            [MCPToolParam("GameObject with the event source component", required: true)] string gameObjectPath,
-            [MCPToolParam("Component type containing the event (e.g. 'Button')", required: true)] string componentType,
-            [MCPToolParam("Event field name (e.g. 'm_OnClick')", required: true)] string eventName,
-            [MCPToolParam("Target GameObject path (the object with the method to call)", required: true)] string targetPath,
-            [MCPToolParam("Method name to call on target", required: true)] string targetMethod,
+            [MCPToolParam("GameObject with the event source component", required: true)] string game_object_path,
+            [MCPToolParam("Component type containing the event (e.g. 'Button')", required: true)] string component_type,
+            [MCPToolParam("Event field name (e.g. 'm_OnClick')", required: true)] string event_name,
+            [MCPToolParam("Target GameObject path (the object with the method to call)", required: true)] string target_path,
+            [MCPToolParam("Method name to call on target", required: true)] string target_method,
             [MCPToolParam("Argument value (omit for void methods)")] string argument = null,
-            [MCPToolParam("Argument type: string, int, float, bool (auto-detected if omitted)")] string argumentType = null)
+            [MCPToolParam("Argument type: string, int, float, bool (auto-detected if omitted)")] string argument_type = null)
         {
-            var go = ComponentTools.FindGameObject(gameObjectPath);
+            var go = ComponentTools.FindGameObject(game_object_path);
             if (go == null)
-                return GameObjectNotFoundError(gameObjectPath);
+                return GameObjectNotFoundError(game_object_path);
 
-            var type = ComponentTools.FindComponentType(componentType);
+            var type = ComponentTools.FindComponentType(component_type);
             if (type == null)
-                return MCPToolResult.Error($"Component type not found: '{componentType}'.");
+                return MCPToolResult.Error($"Component type not found: '{component_type}'.");
 
             var component = go.GetComponent(type);
             if (component == null)
-                return MCPToolResult.Error($"Component '{componentType}' not found on '{ComponentTools.GetPath(go)}'.");
+                return MCPToolResult.Error($"Component '{component_type}' not found on '{ComponentTools.GetPath(go)}'.");
 
-            var eventField = FindUnityEventField(type, eventName);
+            var eventField = FindUnityEventField(type, event_name);
             if (eventField == null)
             {
                 var available = ListUnityEventFields(type);
                 return MCPToolResult.Error(
-                    $"UnityEvent field '{eventName}' not found on {componentType}. " +
+                    $"UnityEvent field '{event_name}' not found on {component_type}. " +
                     $"Available events: {string.Join(", ", available)}");
             }
 
             var unityEvent = eventField.GetValue(component) as UnityEventBase;
             if (unityEvent == null)
-                return MCPToolResult.Error($"Could not access event '{eventName}' on {componentType}.");
+                return MCPToolResult.Error($"Could not access event '{event_name}' on {component_type}.");
 
-            var targetGO = GameObjectResolver.FindByPath(targetPath);
+            var targetGO = GameObjectResolver.FindByPath(target_path);
             if (targetGO == null)
-                return GameObjectNotFoundError(targetPath);
+                return GameObjectNotFoundError(target_path);
 
-            var (targetComp, methodInfo) = FindMethod(targetGO, targetMethod, argument != null);
+            var (targetComp, methodInfo) = FindMethod(targetGO, target_method, argument != null);
             if (targetComp == null || methodInfo == null)
             {
                 var available = ListAvailableMethods(targetGO);
                 return MCPToolResult.Error(
-                    $"Method '{targetMethod}' not found on any component of '{targetPath}'. " +
+                    $"Method '{target_method}' not found on any component of '{target_path}'. " +
                     $"Available methods: {string.Join(", ", available)}");
             }
 
-            Undo.RecordObject(component, $"MCP Add Listener {eventName}");
+            Undo.RecordObject(component, $"MCP Add Listener {event_name}");
 
             if (argument == null)
             {
@@ -71,15 +71,15 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             }
             else
             {
-                AddTypedListener(unityEvent, targetComp, targetMethod, argument, argumentType);
+                AddTypedListener(unityEvent, targetComp, target_method, argument, argument_type);
             }
 
             return MCPToolResult.Success(new
             {
                 gameObject = ComponentTools.GetPath(go),
-                eventField = eventName,
+                eventField = event_name,
                 target = ComponentTools.GetPath(targetGO),
-                method = targetMethod,
+                method = target_method,
                 argument = argument,
                 listenerCount = unityEvent.GetPersistentEventCount()
             });
@@ -87,30 +87,30 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("event_remove_listener", "Remove a persistent listener by index from a UnityEvent")]
         public static MCPToolResult RemoveListener(
-            [MCPToolParam("GameObject with the event source component", required: true)] string gameObjectPath,
-            [MCPToolParam("Component type containing the event", required: true)] string componentType,
-            [MCPToolParam("Event field name", required: true)] string eventName,
+            [MCPToolParam("GameObject with the event source component", required: true)] string game_object_path,
+            [MCPToolParam("Component type containing the event", required: true)] string component_type,
+            [MCPToolParam("Event field name", required: true)] string event_name,
             [MCPToolParam("Listener index to remove (0-based)", required: true)] string index)
         {
-            var go = ComponentTools.FindGameObject(gameObjectPath);
+            var go = ComponentTools.FindGameObject(game_object_path);
             if (go == null)
-                return GameObjectNotFoundError(gameObjectPath);
+                return GameObjectNotFoundError(game_object_path);
 
-            var type = ComponentTools.FindComponentType(componentType);
+            var type = ComponentTools.FindComponentType(component_type);
             if (type == null)
-                return MCPToolResult.Error($"Component type not found: '{componentType}'.");
+                return MCPToolResult.Error($"Component type not found: '{component_type}'.");
 
             var component = go.GetComponent(type);
             if (component == null)
-                return MCPToolResult.Error($"Component '{componentType}' not found on '{ComponentTools.GetPath(go)}'.");
+                return MCPToolResult.Error($"Component '{component_type}' not found on '{ComponentTools.GetPath(go)}'.");
 
-            var eventField = FindUnityEventField(type, eventName);
+            var eventField = FindUnityEventField(type, event_name);
             if (eventField == null)
-                return MCPToolResult.Error($"UnityEvent field '{eventName}' not found on {componentType}.");
+                return MCPToolResult.Error($"UnityEvent field '{event_name}' not found on {component_type}.");
 
             var unityEvent = eventField.GetValue(component) as UnityEventBase;
             if (unityEvent == null)
-                return MCPToolResult.Error($"Could not access event '{eventName}'.");
+                return MCPToolResult.Error($"Could not access event '{event_name}'.");
 
             if (!int.TryParse(index, out var idx))
                 return MCPToolResult.Error($"Invalid index: '{index}'. Must be an integer.");
@@ -119,7 +119,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 return MCPToolResult.Error(
                     $"Index {idx} out of range. Event has {unityEvent.GetPersistentEventCount()} listener(s).");
 
-            Undo.RecordObject(component, $"MCP Remove Listener {eventName}[{idx}]");
+            Undo.RecordObject(component, $"MCP Remove Listener {event_name}[{idx}]");
             UnityEventTools.RemovePersistentListener(unityEvent, idx);
 
             return MCPToolResult.Success(new
@@ -131,29 +131,29 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("event_list_listeners", "List all persistent listeners on a UnityEvent field")]
         public static MCPToolResult ListListeners(
-            [MCPToolParam("GameObject with the event source component", required: true)] string gameObjectPath,
-            [MCPToolParam("Component type containing the event", required: true)] string componentType,
-            [MCPToolParam("Event field name", required: true)] string eventName)
+            [MCPToolParam("GameObject with the event source component", required: true)] string game_object_path,
+            [MCPToolParam("Component type containing the event", required: true)] string component_type,
+            [MCPToolParam("Event field name", required: true)] string event_name)
         {
-            var go = ComponentTools.FindGameObject(gameObjectPath);
+            var go = ComponentTools.FindGameObject(game_object_path);
             if (go == null)
-                return GameObjectNotFoundError(gameObjectPath);
+                return GameObjectNotFoundError(game_object_path);
 
-            var type = ComponentTools.FindComponentType(componentType);
+            var type = ComponentTools.FindComponentType(component_type);
             if (type == null)
-                return MCPToolResult.Error($"Component type not found: '{componentType}'.");
+                return MCPToolResult.Error($"Component type not found: '{component_type}'.");
 
             var component = go.GetComponent(type);
             if (component == null)
-                return MCPToolResult.Error($"Component '{componentType}' not found on '{ComponentTools.GetPath(go)}'.");
+                return MCPToolResult.Error($"Component '{component_type}' not found on '{ComponentTools.GetPath(go)}'.");
 
-            var eventField = FindUnityEventField(type, eventName);
+            var eventField = FindUnityEventField(type, event_name);
             if (eventField == null)
-                return MCPToolResult.Error($"UnityEvent field '{eventName}' not found on {componentType}.");
+                return MCPToolResult.Error($"UnityEvent field '{event_name}' not found on {component_type}.");
 
             var unityEvent = eventField.GetValue(component) as UnityEventBase;
             if (unityEvent == null)
-                return MCPToolResult.Error($"Could not access event '{eventName}'.");
+                return MCPToolResult.Error($"Could not access event '{event_name}'.");
 
             var listeners = new List<object>();
             for (int i = 0; i < unityEvent.GetPersistentEventCount(); i++)
@@ -172,7 +172,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             return MCPToolResult.Success(new
             {
                 gameObject = ComponentTools.GetPath(go),
-                eventField = eventName,
+                eventField = event_name,
                 listeners,
                 count = listeners.Count
             });
@@ -180,22 +180,22 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("event_find_all", "Find all UnityEvent fields on a GameObject's components")]
         public static MCPToolResult FindAllEvents(
-            [MCPToolParam("GameObject name or hierarchy path", required: true)] string gameObjectPath,
-            [MCPToolParam("Component type to scan (omit to scan all)")] string componentType = null)
+            [MCPToolParam("GameObject name or hierarchy path", required: true)] string game_object_path,
+            [MCPToolParam("Component type to scan (omit to scan all)")] string component_type = null)
         {
-            var go = ComponentTools.FindGameObject(gameObjectPath);
+            var go = ComponentTools.FindGameObject(game_object_path);
             if (go == null)
-                return GameObjectNotFoundError(gameObjectPath);
+                return GameObjectNotFoundError(game_object_path);
 
             var components = new List<Component>();
-            if (!string.IsNullOrEmpty(componentType))
+            if (!string.IsNullOrEmpty(component_type))
             {
-                var type = ComponentTools.FindComponentType(componentType);
+                var type = ComponentTools.FindComponentType(component_type);
                 if (type == null)
-                    return MCPToolResult.Error($"Component type not found: '{componentType}'.");
+                    return MCPToolResult.Error($"Component type not found: '{component_type}'.");
                 var comp = go.GetComponent(type);
                 if (comp == null)
-                    return MCPToolResult.Error($"Component '{componentType}' not found on '{ComponentTools.GetPath(go)}'.");
+                    return MCPToolResult.Error($"Component '{component_type}' not found on '{ComponentTools.GetPath(go)}'.");
                 components.Add(comp);
             }
             else

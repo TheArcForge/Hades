@@ -18,40 +18,40 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("prefab_create", "Save a scene GameObject as a prefab asset (creates parent directories if needed)")]
         public static MCPToolResult CreatePrefab(
-            [MCPToolParam("Scene GameObject name or path (e.g. 'Player')", required: true)] string gameObjectPath,
-            [MCPToolParam("Asset path for the prefab (e.g. 'Assets/Prefabs/Player.prefab')", required: true)] string assetPath)
+            [MCPToolParam("Scene GameObject name or path (e.g. 'Player')", required: true)] string game_object_path,
+            [MCPToolParam("Asset path for the prefab (e.g. 'Assets/Prefabs/Player.prefab')", required: true)] string asset_path)
         {
-            var go = FindGameObject(gameObjectPath);
+            var go = FindGameObject(game_object_path);
             if (go == null)
-                return GameObjectNotFoundError(gameObjectPath);
+                return GameObjectNotFoundError(game_object_path);
 
             // Ensure parent directories exist
-            var absolutePath = PathSandbox.ResolveWritable(assetPath);
+            var absolutePath = PathSandbox.ResolveWritable(asset_path);
             var directory = Path.GetDirectoryName(absolutePath);
             if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
                 Directory.CreateDirectory(directory);
 
             bool success;
-            var prefab = PrefabUtility.SaveAsPrefabAsset(go, assetPath, out success);
+            var prefab = PrefabUtility.SaveAsPrefabAsset(go, asset_path, out success);
             if (!success || prefab == null)
-                return MCPToolResult.Error($"Failed to save prefab at '{assetPath}'. Ensure the path ends with .prefab and is under the Assets folder.");
+                return MCPToolResult.Error($"Failed to save prefab at '{asset_path}'. Ensure the path ends with .prefab and is under the Assets folder.");
 
-            return MCPToolResult.Success(new { createdAsset = assetPath });
+            return MCPToolResult.Success(new { createdAsset = asset_path });
         }
 
         [MCPTool("prefab_instantiate", "Instantiate a prefab into the scene with optional parent (supports undo)")]
         public static MCPToolResult InstantiatePrefab(
-            [MCPToolParam("Prefab asset path (e.g. 'Assets/Prefabs/Player.prefab')", required: true)] string prefabPath,
+            [MCPToolParam("Prefab asset path (e.g. 'Assets/Prefabs/Player.prefab')", required: true)] string prefab_path,
             [MCPToolParam("Parent GameObject path (omit for root)")] string parent)
         {
-            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefab_path);
             if (prefab == null)
                 return MCPToolResult.Error(
-                    $"Prefab not found at '{prefabPath}'. Ensure the path is a valid project-relative asset path (e.g. 'Assets/Prefabs/MyPrefab.prefab').");
+                    $"Prefab not found at '{prefab_path}'. Ensure the path is a valid project-relative asset path (e.g. 'Assets/Prefabs/MyPrefab.prefab').");
 
             var instance = PrefabUtility.InstantiatePrefab(prefab) as GameObject;
             if (instance == null)
-                return MCPToolResult.Error($"Failed to instantiate prefab at '{prefabPath}'.");
+                return MCPToolResult.Error($"Failed to instantiate prefab at '{prefab_path}'.");
 
             if (!string.IsNullOrEmpty(parent))
             {
@@ -72,11 +72,11 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("prefab_apply_overrides", "Apply all overrides on a prefab instance back to the source prefab asset")]
         public static MCPToolResult ApplyPrefabOverrides(
-            [MCPToolParam("Prefab instance GameObject name or path", required: true)] string gameObjectPath)
+            [MCPToolParam("Prefab instance GameObject name or path", required: true)] string game_object_path)
         {
-            var go = FindGameObject(gameObjectPath);
+            var go = FindGameObject(game_object_path);
             if (go == null)
-                return GameObjectNotFoundError(gameObjectPath);
+                return GameObjectNotFoundError(game_object_path);
 
             if (!PrefabUtility.IsPartOfPrefabInstance(go))
                 return MCPToolResult.Error(
@@ -90,18 +90,18 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("prefab_get_contents", "Inspect a prefab asset's hierarchy without instantiating it in the scene")]
         public static MCPToolResult GetPrefabContents(
-            [MCPToolParam("Prefab asset path (e.g. 'Assets/Prefabs/Player.prefab')", required: true)] string prefabPath)
+            [MCPToolParam("Prefab asset path (e.g. 'Assets/Prefabs/Player.prefab')", required: true)] string prefab_path)
         {
-            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefab_path);
             if (prefab == null)
                 return MCPToolResult.Error(
-                    $"Prefab not found at '{prefabPath}'. Ensure the path is a valid project-relative asset path (e.g. 'Assets/Prefabs/MyPrefab.prefab').");
+                    $"Prefab not found at '{prefab_path}'. Ensure the path is a valid project-relative asset path (e.g. 'Assets/Prefabs/MyPrefab.prefab').");
 
-            var root = PrefabUtility.LoadPrefabContents(prefabPath);
+            var root = PrefabUtility.LoadPrefabContents(prefab_path);
             try
             {
                 var tree = BuildNode(root);
-                return MCPToolResult.Success(new { prefab = prefabPath, hierarchy = tree });
+                return MCPToolResult.Success(new { prefab = prefab_path, hierarchy = tree });
             }
             finally
             {
@@ -116,21 +116,21 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("prefab_edit_property", "Set a serialized property inside a prefab asset (atomic load/edit/save)")]
         public static MCPToolResult EditPrefabProperty(
-            [MCPToolParam("Prefab asset path", required: true)] string prefabPath,
-            [MCPToolParam("Component type name", required: true)] string componentType,
-            [MCPToolParam("Property name", required: true)] string propertyName,
+            [MCPToolParam("Prefab asset path", required: true)] string prefab_path,
+            [MCPToolParam("Component type name", required: true)] string component_type,
+            [MCPToolParam("Property name", required: true)] string property_name,
             [MCPToolParam("Value to set", required: true)] string value)
         {
-            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefab_path);
             if (prefab == null)
-                return MCPToolResult.Error($"Prefab not found at '{prefabPath}'.");
+                return MCPToolResult.Error($"Prefab not found at '{prefab_path}'.");
 
-            var root = PrefabUtility.LoadPrefabContents(prefabPath);
+            var root = PrefabUtility.LoadPrefabContents(prefab_path);
             try
             {
-                var type = ComponentTools.FindComponentType(componentType);
+                var type = ComponentTools.FindComponentType(component_type);
                 if (type == null)
-                    return MCPToolResult.Error($"Component type not found: '{componentType}'.");
+                    return MCPToolResult.Error($"Component type not found: '{component_type}'.");
 
                 var component = root.GetComponent(type);
                 if (component == null)
@@ -138,18 +138,18 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                     var existing = root.GetComponents<Component>()
                         .Where(c => c != null).Select(c => c.GetType().Name).ToArray();
                     return MCPToolResult.Error(
-                        $"Component '{componentType}' not found on prefab root. " +
+                        $"Component '{component_type}' not found on prefab root. " +
                         $"Existing: {string.Join(", ", existing)}");
                 }
 
                 var so = new SerializedObject(component);
-                var prop = so.FindProperty(propertyName);
+                var prop = so.FindProperty(property_name);
                 if (prop == null)
-                    return MCPToolResult.Error($"Property '{propertyName}' not found on {componentType}.");
+                    return MCPToolResult.Error($"Property '{property_name}' not found on {component_type}.");
 
                 ComponentTools.SetSerializedPropertyValue(prop, value);
                 so.ApplyModifiedProperties();
-                PrefabUtility.SaveAsPrefabAsset(root, prefabPath);
+                PrefabUtility.SaveAsPrefabAsset(root, prefab_path);
             }
             finally
             {
@@ -158,9 +158,9 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
             return MCPToolResult.Success(new
             {
-                prefab = prefabPath,
-                component = componentType,
-                property = propertyName,
+                prefab = prefab_path,
+                component = component_type,
+                property = property_name,
                 newValue = value
             });
         }
@@ -168,23 +168,23 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         [MCPTool("prefab_open_editing", "Open a prefab for multi-edit session. " +
             "Use existing component/reference/event tools on the returned root path, then call prefab_save_editing.")]
         public static MCPToolResult OpenPrefabEditing(
-            [MCPToolParam("Prefab asset path", required: true)] string prefabPath)
+            [MCPToolParam("Prefab asset path", required: true)] string prefab_path)
         {
             if (_editingRoot != null)
                 return MCPToolResult.Error(
                     $"A prefab is already open for editing: '{_editingPrefabPath}'. " +
                     "Call prefab_save_editing first.");
 
-            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefab_path);
             if (prefab == null)
-                return MCPToolResult.Error($"Prefab not found at '{prefabPath}'.");
+                return MCPToolResult.Error($"Prefab not found at '{prefab_path}'.");
 
-            _editingRoot = PrefabUtility.LoadPrefabContents(prefabPath);
-            _editingPrefabPath = prefabPath;
+            _editingRoot = PrefabUtility.LoadPrefabContents(prefab_path);
+            _editingPrefabPath = prefab_path;
 
             return MCPToolResult.Success(new
             {
-                prefab = prefabPath,
+                prefab = prefab_path,
                 rootPath = _editingRoot.name,
                 components = _editingRoot.GetComponents<Component>()
                     .Where(c => c != null).Select(c => c.GetType().Name).ToArray()
@@ -218,29 +218,29 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("prefab_create_variant", "Create a prefab variant from a base prefab")]
         public static MCPToolResult CreatePrefabVariant(
-            [MCPToolParam("Base prefab asset path", required: true)] string basePrefabPath,
-            [MCPToolParam("Variant asset path", required: true)] string variantPath)
+            [MCPToolParam("Base prefab asset path", required: true)] string base_prefab_path,
+            [MCPToolParam("Variant asset path", required: true)] string variant_path)
         {
-            var basePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(basePrefabPath);
+            var basePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(base_prefab_path);
             if (basePrefab == null)
-                return MCPToolResult.Error($"Base prefab not found at '{basePrefabPath}'.");
+                return MCPToolResult.Error($"Base prefab not found at '{base_prefab_path}'.");
 
             var instance = PrefabUtility.InstantiatePrefab(basePrefab) as GameObject;
             if (instance == null)
                 return MCPToolResult.Error($"Failed to instantiate base prefab.");
 
-            var directory = System.IO.Path.GetDirectoryName(variantPath);
+            var directory = System.IO.Path.GetDirectoryName(variant_path);
             if (!string.IsNullOrEmpty(directory))
                 EnsureFolderExists(directory);
 
             bool success;
-            PrefabUtility.SaveAsPrefabAssetAndConnect(instance, variantPath, InteractionMode.AutomatedAction, out success);
+            PrefabUtility.SaveAsPrefabAssetAndConnect(instance, variant_path, InteractionMode.AutomatedAction, out success);
             Object.DestroyImmediate(instance);
 
             if (!success)
-                return MCPToolResult.Error($"Failed to save variant at '{variantPath}'.");
+                return MCPToolResult.Error($"Failed to save variant at '{variant_path}'.");
 
-            return MCPToolResult.Success(new { basePrefab = basePrefabPath, variant = variantPath });
+            return MCPToolResult.Success(new { basePrefab = base_prefab_path, variant = variant_path });
         }
 
         // ── Helpers ──

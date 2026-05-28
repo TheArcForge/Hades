@@ -1,8 +1,8 @@
 # Hades — Roadmap Document
 
-**Version:** 1.3
-**Status:** Active development — Phase 8 next (first-run reliability from external tester feedback)
-**Last updated:** 2026-05-27
+**Version:** 1.4
+**Status:** Active development — Phase 10 next (public release v1.0)
+**Last updated:** 2026-05-28
 **Companion to:** Vision document, Architecture document, Plugin document
 
 ---
@@ -1668,15 +1668,15 @@ The approach for C# indexing must balance speed and quality. Roslyn semantic ana
 
 ### Done criteria
 
-- [ ] **MetaScanner:** Lightweight scanner creates `Asset` nodes (Texture, Mesh, AnimationClip, AnimatorController, AudioClip, Font, Sprite, Model) from `.meta` files — GUID + path + type, no binary parsing
-- [ ] **pending_edges near-zero:** After MetaScanner runs, `pending_edges` drops from ~67k to near-zero (only truly missing references remain)
-- [ ] **Queries on unscanned types work:** `find_references_to` on a `.png` returns all prefabs/materials referencing it; `trace_dependencies` on a UI prefab includes sprites, fonts, audio
-- [ ] **UnityEngine.dll base types indexed:** Precomputed JSON of public types from `UnityEngine.CoreModule`, `UnityEngine.UI`, etc. seeded as `ScriptType` nodes with `source = "builtin"` flag; resolves ~5k `inherits_from`/`implements` pending edges
-- [ ] **C# reference graph:** `find_references_to` on a script/type returns all C# types that reference it (field types, method parameters, construction, inheritance, interface implementation, static calls)
-- [ ] **C# reference approach validated:** Speed benchmark on large-scale project (13k+ types) — full scan completes in acceptable time; incremental updates for single-file changes are sub-second
-- [ ] **Search improvements:** `search_by_name` supports filtering by path prefix (e.g., `Assets/` only, exclude `Packages/`); option for case-sensitive or whole-word matching
-- [ ] **Scanned roots surfaced:** `get_project_summary` reports which directories/asset types are indexed and which aren't, so the agent knows when to widen search
-- [ ] **Parameter naming consistency:** All 89 MCP tools use a single parameter naming convention (snake_case), with migration path for any camelCase holdovers from UniClaude
+- [x] **MetaScanner:** Lightweight scanner creates `Asset` nodes (Texture, Mesh, AnimationClip, AnimatorController, AudioClip, Font, Sprite, Model) from `.meta` files — GUID + path + type, no binary parsing
+- [x] **pending_edges near-zero:** After MetaScanner runs, `pending_edges` drops from ~67k to near-zero (only truly missing references remain)
+- [x] **Queries on unscanned types work:** `find_references_to` on a `.png` returns all prefabs/materials referencing it; `trace_dependencies` on a UI prefab includes sprites, fonts, audio
+- [x] **UnityEngine.dll base types indexed:** Runtime reflection of Unity assemblies seeded as `ScriptType` nodes with `tier = "builtin"` flag; resolves `inherits_from`/`implements` pending edges. Cached by Unity version.
+- [x] **C# reference graph:** `find_references_to` on a script/type returns all C# types that reference it (field types, method parameters, construction, inheritance, interface implementation, casts, attributes, generic arguments, local variables). Tree-sitter C# grammar approach chosen (AD-1).
+- [x] **C# reference approach validated:** Tree-sitter (Option A) chosen. ~85-90% reference coverage; fast incremental updates. Known gaps: `using` aliases, extension methods, implicit conversions, `var` inference. See implementation notes.
+- [x] **Search improvements:** `search_by_name` supports filtering by `path_prefix` (e.g., `Assets/` only, exclude `Packages/`) and `match_mode` (`contains`/`exact`/`prefix`). LIMIT 200.
+- [x] **Scanned roots surfaced:** `get_project_summary` reports `asset_coverage` section with indexed type counts, pending edge count, and coverage percentage
+- [x] **Parameter naming consistency:** All 89 MCP tools use snake_case. 33 camelCase parameters renamed across 12 tool files. Clean break — no backwards-compatible fallback.
 
 ### Scope: what's in
 
@@ -1804,6 +1804,30 @@ The developer searches for `%Manager%` with `path_filter: "Assets/"`. Results ex
 ### Regression coverage
 
 All Phase 0–8 tests must continue to pass. MetaScanner adds nodes that didn't previously exist — this may cause some snapshot-based tests to show higher node counts, which is expected and correct. C# reference edges are additive and don't change existing edge types.
+
+### Phase 9 implementation notes
+
+Issues and decisions from Phase 9 development, documented for future reference:
+
+1. **Tree-sitter chosen over Roslyn for C# reference graph (AD-1).** Tree-sitter C# grammar (`tree-sitter-c-sharp@0.23.5`) provides fast AST-based parsing via the existing Node.js scanner architecture. Estimated 85-90% reference coverage. Known gaps: `using` aliases, extension methods, implicit conversions, `var` type inference. These are acceptable because the graph is supplementary to grep, not a replacement for Roslyn's semantic model.
+
+2. **MetaScanner implemented as single unified scanner.** Rather than per-type scanners (TextureScanner, MeshScanner, etc.), a single `meta-scanner.js` module maps 34 file extensions to 16 Unity node types via an `EXTENSION_TO_TYPE` lookup. This is simpler and easier to extend. The scanner reads `.meta` files for GUID extraction, creates Asset nodes, and skips files without valid GUIDs.
+
+3. **Unity builtin types seeded via runtime reflection, not precomputed JSON.** The plan specified shipping a static JSON file. The implementation uses `SeedBuiltinTypes()` which reflects on loaded Unity assemblies (`UnityEngine.*`, `UnityEditor.*`) at graph build time. Results are cached by Unity version in the `scanned_assets` table. This is more maintainable — automatically adapts to the user's Unity version without shipping version-specific JSON files.
+
+4. **Jest VM module conflicts with tree-sitter native bindings.** When running all test suites in a single Jest process with `--experimental-vm-modules`, tree-sitter's native C++ addon corrupts across VM contexts. Lazy init, fresh-per-call parsers, `--maxWorkers=1`, and Jest `projects` config all failed. Fixed by splitting `npm test` into two separate Jest invocations — one excluding `integration.test.js`, one running only `integration.test.js`. The `createParser()` per-call pattern is also retained as defense-in-depth.
+
+5. **Scanner version bumped from 2 to 3.** The tree-sitter parser produces different output than the regex parser (adds `codeReferences`, different AST structure). Bumping `scannerVersion` to 3 ensures all existing scanned assets are re-scanned on next build, picking up the new reference data.
+
+6. **`code_references` edge type distinct from PrefabScanner's `references`.** C# cross-file type references use the `code_references` edge type in `pending_edges`, with `reference_kind` (field, parameter, constructor, cast, attribute, return_type, local_var, generic_arg) stored in the `target_namespace` column. This avoids conflating code-level references with asset-pointer references from prefabs/materials.
+
+7. **snake_case rename was a clean break.** 33 parameters across 12 tool files were renamed from camelCase to snake_case. The plan suggested backwards-compatible dual-name support; the implementation chose a clean break instead. Rationale: agents learn parameter names from the tool schema on each session — no persistent muscle memory to break.
+
+8. **81 Scanner tests pass (76 + 5).** Test suite split: 76 tests in the first Jest run (meta-scanner, ts-parser, db-writer, discovery, hasher, meta-resolver, meta-integration), 5 tests in the second run (integration tests that import the full pipeline). All green.
+
+9. **`find_references_to` enhanced with ScriptType child traversal.** When `find_references_to` targets a Script node, it now also queries `code_references` edges targeting the Script's child `ScriptType` nodes. This means querying a `.cs` file returns both asset-pointer references (from prefabs) and code-level references (from other C# files). A `seenIds` HashSet prevents duplicate results.
+
+10. **`SearchByNameAdvanced` added to GraphDatabase.** Supports `matchMode` (contains/exact/prefix), `typeFilter`, `pathPrefix`, and LIMIT 200. Uses `LIKE` patterns for contains/prefix modes and `=` for exact mode.
 
 ### Bridge to next phase
 
@@ -2020,8 +2044,8 @@ Hades version progresses with each phase:
 - Phase 5 complete (5a/5b/5c): v0.6.0 ✅
 - Phase 6 complete (polish, tester-ready): v0.9.0 ✅
 - Phase 7 complete (friends-and-family): v0.9.0 ✅ *(same version — no new features, only distribution prep)*
-- Phase 8 complete (first-run reliability): **v0.9.1**
-- Phase 9 complete (graph coverage): **v0.9.5**
+- Phase 8 complete (first-run reliability): v0.9.1 ✅
+- Phase 9 complete (graph coverage): v0.9.5 ✅
 - Phase 10 complete (public release): **v1.0.0**
 - Phase 11: v1.x and v2.x as evolution dictates
 

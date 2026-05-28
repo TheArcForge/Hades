@@ -527,6 +527,71 @@ namespace ArcForge.Hades.Editor.Graph
             }
         }
 
+        public List<NodeRecord> SearchByNameAdvanced(
+            string namePattern, string typeFilter = null,
+            string pathPrefix = null, string matchMode = "contains")
+        {
+            var results = new List<NodeRecord>();
+            var sql = new System.Text.StringBuilder("SELECT * FROM nodes WHERE 1=1");
+            var bindings = new List<(int pos, string val)>();
+            int paramIndex = 1;
+
+            string nameValue;
+            switch (matchMode?.ToLowerInvariant() ?? "contains")
+            {
+                case "exact":
+                    sql.Append(" AND name = ?");
+                    nameValue = namePattern;
+                    break;
+                case "prefix":
+                    sql.Append(" AND name LIKE ?");
+                    nameValue = namePattern + "%";
+                    break;
+                default:
+                    sql.Append(" AND name LIKE ?");
+                    nameValue = "%" + namePattern + "%";
+                    break;
+            }
+            bindings.Add((paramIndex++, nameValue));
+
+            if (!string.IsNullOrEmpty(typeFilter))
+            {
+                sql.Append(" AND type = ?");
+                bindings.Add((paramIndex++, typeFilter));
+            }
+
+            if (!string.IsNullOrEmpty(pathPrefix))
+            {
+                sql.Append(" AND path LIKE ?");
+                bindings.Add((paramIndex++, pathPrefix + "%"));
+            }
+
+            sql.Append(" ORDER BY name LIMIT 200");
+
+            using (var stmt = new SQLitePreparedStatement(_connection, sql.ToString()))
+            {
+                foreach (var (pos, val) in bindings)
+                    stmt.Bind(pos, val);
+                while (stmt.Step() == SQLite3.Result.Row)
+                    results.Add(ReadNodeFromStatement(stmt));
+            }
+            return results;
+        }
+
+        public List<NodeRecord> FindChildNodes(long parentId, string childType)
+        {
+            var results = new List<NodeRecord>();
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "SELECT n.* FROM nodes n JOIN edges e ON n.id = e.target_id WHERE e.source_id = ? AND e.type = 'defines' AND n.type = ?;"))
+            {
+                stmt.Bind(1, parentId);
+                stmt.Bind(2, childType);
+                while (stmt.Step() == SQLite3.Result.Row)
+                    results.Add(ReadNodeFromStatement(stmt));
+            }
+            return results;
+        }
+
         public long GetNodeCount(string type = null)
         {
             if (type != null)
@@ -539,6 +604,11 @@ namespace ArcForge.Hades.Editor.Graph
             if (type != null)
                 return _connection.ExecuteScalar<long>("SELECT COUNT(*) FROM edges WHERE type = ?;", type);
             return _connection.ExecuteScalar<long>("SELECT COUNT(*) FROM edges;");
+        }
+
+        public long GetPendingEdgeCount()
+        {
+            return _connection.ExecuteScalar<long>("SELECT COUNT(*) FROM pending_edges;");
         }
 
         public List<NodeRecord> GetRecentlyChanged(int hours)

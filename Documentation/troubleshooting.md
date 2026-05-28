@@ -55,6 +55,8 @@ For more serious issues requiring manual intervention:
 
 Hades indexes the following asset types into the knowledge graph:
 
+**Scanned via C# scanners (Unity API):**
+
 - Scenes (`.unity`)
 - Prefabs (`.prefab`)
 - ScriptableObjects (`.asset`)
@@ -62,19 +64,26 @@ Hades indexes the following asset types into the knowledge graph:
 - Shaders (`.shader`, `.shadergraph`)
 - Addressable groups and labels
 - Project Settings files
-- C# scripts (`.cs`)
 
-The following asset types are **not** currently indexed:
+**Scanned via Node.js scanner (file I/O):**
 
-- Textures and sprites
-- 3D models and meshes
-- Audio clips
-- Animation clips and Animator Controllers
-- Fonts
+- C# scripts (`.cs`) — type declarations, methods, fields, and cross-file references via tree-sitter
+- Textures (`.png`, `.jpg`, `.jpeg`, `.tga`, `.bmp`, `.psd`, `.gif`, `.hdr`, `.exr`, `.tif`, `.tiff`)
+- Models (`.fbx`, `.obj`, `.blend`, `.dae`, `.3ds`, `.max`, `.ma`, `.mb`)
+- Audio clips (`.wav`, `.mp3`, `.ogg`, `.aif`, `.aiff`)
+- Animation clips (`.anim`)
+- Animator Controllers (`.controller`)
+- Fonts (`.ttf`, `.otf`, `.fontsettings`)
+- Sprite Atlases (`.spriteatlas`)
+- Signal Assets (`.signal`)
+- Playable Assets (`.playable`)
+
+**Not currently indexed:**
+
 - Video clips
 - Binary and proprietary assets
 
-Unindexed types are planned for Phase 9 (MetaScanner). References to these assets in the graph appear as unresolved edges — this is expected and does not indicate a problem. The "Resolved X/Y pending edges" log line reflects this: the gap between the two numbers is almost entirely unindexed asset types.
+The MetaScanner (added in v0.9.5) creates Asset nodes for non-script types by reading `.meta` files for GUID, path, and type. This brings pending edges to near-zero — most cross-asset references now resolve fully. A small number of pending edges (typically < 10) may remain for assets in packages or external references.
 
 ---
 

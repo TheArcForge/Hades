@@ -61,6 +61,34 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 }));
             }
 
+            // Asset coverage section
+            var assetTypes = new[] {
+                "Texture", "Model", "AnimationClip", "AnimatorController",
+                "AudioClip", "Font", "SpriteAtlas", "RenderTexture", "Cubemap",
+                "AvatarMask", "PhysicsMaterial", "Flare", "GUISkin", "AudioMixer",
+                "SignalAsset", "PlayableAsset"
+            };
+
+            var indexedTypes = new Dictionary<string, long>();
+            foreach (var assetType in assetTypes)
+            {
+                if (counts.TryGetValue(assetType, out var count) && count > 0)
+                    indexedTypes[assetType] = count;
+            }
+
+            var pendingCount = db.GetPendingEdgeCount();
+            var totalIndexed = counts.Values.Sum();
+            var coveragePercent = totalIndexed > 0 && pendingCount == 0 ? 100.0
+                : totalIndexed > 0 ? Math.Round(100.0 * totalIndexed / (totalIndexed + pendingCount), 1)
+                : 0.0;
+
+            result["asset_coverage"] = new JObject
+            {
+                ["indexed_types"] = JObject.FromObject(indexedTypes),
+                ["pending_edge_count"] = pendingCount,
+                ["coverage_percent"] = coveragePercent
+            };
+
             return MCPToolResult.SuccessWithConfidence(result, BuildConfidence());
         }
 
@@ -137,7 +165,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 ["last_full_rebuild"] = db.GetMetadata("last_full_rebuild_at"),
                 ["last_incremental_update"] = db.GetMetadata("last_incremental_at"),
                 ["type_counts"] = JObject.FromObject(db.GetTypeCounts()),
-                ["version"] = "0.4.0",
+                ["version"] = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(GraphQueryTools).Assembly)?.version ?? "unknown",
                 ["memory_files"] = Asphodel.AsphodeInitializer.Manager?.ListFiles()?.Count ?? 0
             };
 
@@ -275,17 +303,44 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                     .Where(n => n.Path == target_path).ToList();
 
             var references = new List<JObject>();
+            var seenIds = new HashSet<long>();
+
             foreach (var target in targets)
             {
                 var refs = db.FindNodesWithEdgeTo(target.Id);
                 foreach (var refNode in refs)
                 {
-                    references.Add(new JObject
+                    if (seenIds.Add(refNode.Id))
                     {
-                        ["name"] = refNode.Name,
-                        ["type"] = refNode.Type,
-                        ["path"] = refNode.Path
-                    });
+                        references.Add(new JObject
+                        {
+                            ["name"] = refNode.Name,
+                            ["type"] = refNode.Type,
+                            ["path"] = refNode.Path
+                        });
+                    }
+                }
+
+                // If target is a Script, also find references to its child ScriptType nodes
+                if (target.Type == "Script")
+                {
+                    var childTypes = db.FindChildNodes(target.Id, "ScriptType");
+                    foreach (var childType in childTypes)
+                    {
+                        var childRefs = db.FindNodesWithEdgeTo(childType.Id);
+                        foreach (var r in childRefs)
+                        {
+                            if (seenIds.Add(r.Id))
+                            {
+                                references.Add(new JObject
+                                {
+                                    ["name"] = r.Name,
+                                    ["type"] = r.Type,
+                                    ["path"] = r.Path
+                                });
+                            }
+                        }
+                    }
                 }
             }
 
@@ -339,23 +394,28 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         }
 
         [MCPTool("search_by_name",
-            "Searches across all graph nodes by name pattern (SQL LIKE syntax: % for wildcard). Optionally filter by node type.")]
+            "Searches across all graph nodes by name pattern. Optionally filter by node type and path prefix.")]
         public static MCPToolResult SearchByName(
-            [MCPToolParam("Name pattern with SQL LIKE wildcards (e.g. Player%)", required: true)] string name_pattern,
-            [MCPToolParam("Filter by node type (e.g. Prefab, Script, Scene). Empty for all types.", required: false)] string type_filter = "")
+            [MCPToolParam("Name to search for", required: true)] string name_pattern,
+            [MCPToolParam("Filter by node type (e.g. Prefab, Script, Texture). Empty for all types.", required: false)] string type_filter = "",
+            [MCPToolParam("Filter by path prefix (e.g. Assets/Scripts/). Empty for all paths.", required: false)] string path_prefix = "",
+            [MCPToolParam("Match mode: contains (default), exact, or prefix", required: false)] string match_mode = "contains")
         {
             var db = GraphDatabase.Instance;
             if (db == null) return MCPToolResult.Error("Graph database not initialized");
 
             var filter = string.IsNullOrEmpty(type_filter) ? null : type_filter;
-            var nodes = db.SearchByName(name_pattern, filter);
+            var prefix = string.IsNullOrEmpty(path_prefix) ? null : path_prefix;
+            var matches = db.SearchByNameAdvanced(name_pattern, filter, prefix, match_mode);
 
             var result = new JObject
             {
                 ["pattern"] = name_pattern,
-                ["type_filter"] = type_filter ?? "all",
-                ["count"] = nodes.Count,
-                ["matches"] = new JArray(nodes.Select(n => new JObject
+                ["type_filter"] = filter ?? "all",
+                ["path_prefix"] = prefix ?? "all",
+                ["match_mode"] = match_mode,
+                ["count"] = matches.Count,
+                ["matches"] = new JArray(matches.Select(n => new JObject
                 {
                     ["name"] = n.Name,
                     ["type"] = n.Type,

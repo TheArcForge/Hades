@@ -76,6 +76,8 @@ namespace ArcForge.Hades.Editor.Graph
 
                 try
                 {
+                    SeedBuiltinTypes();
+
                     _db.RunInTransaction(() =>
                     {
                         _db.Execute("DELETE FROM pending_edges;");
@@ -159,6 +161,7 @@ namespace ArcForge.Hades.Editor.Graph
                 });
 
                 EnsureProjectNode();
+                SeedBuiltinTypes();
                 _sessionNodeMap = BuildSessionMapFromExistingNodes();
 
                 Debug.Log($"[Hades] Rebuild started: {total} scannable assets (package nodes preserved)");
@@ -240,6 +243,7 @@ namespace ArcForge.Hades.Editor.Graph
                 });
 
                 EnsureProjectNode();
+                SeedBuiltinTypes();
                 _buildLog?.EndStep();
 
                 // --- Phase A: Node.js script scan ---
@@ -834,14 +838,19 @@ namespace ArcForge.Hades.Editor.Graph
                 }
 
                 if (targetNode == null && !string.IsNullOrEmpty(pe.TargetTypeName)
-                    && (pe.EdgeType == "inherits_from" || pe.EdgeType == "implements"))
+                    && (pe.EdgeType == "inherits_from" || pe.EdgeType == "implements" || pe.EdgeType == "code_references"))
                 {
                     targetNode = _db.FindNodeByNameAndType(pe.TargetTypeName, "ScriptType");
                 }
 
                 if (targetNode != null)
                 {
-                    _db.InsertEdge(pe.SourceNodeId, targetNode.Id, pe.EdgeType, null);
+                    string propertiesJson = null;
+                    if (pe.EdgeType == "code_references" && !string.IsNullOrEmpty(pe.TargetNamespace))
+                    {
+                        propertiesJson = $"{{\"reference_kind\":\"{pe.TargetNamespace}\"}}";
+                    }
+                    _db.InsertEdge(pe.SourceNodeId, targetNode.Id, pe.EdgeType, propertiesJson);
                     toDelete.Add(pe.Id);
                     resolved++;
                 }
@@ -896,6 +905,93 @@ namespace ArcForge.Hades.Editor.Graph
                 if (transient > 0)
                     _buildLog?.Detail("Edges still pending", transient);
             }
+        }
+
+        // -------------------------------------------------------------------
+        // Builtin Unity type seeding via reflection
+        // -------------------------------------------------------------------
+
+        void SeedBuiltinTypes()
+        {
+            var currentVersion = UnityEngine.Application.unityVersion;
+            var cachedVersion = _db.GetMetadata("builtin_unity_version");
+
+            if (cachedVersion == currentVersion)
+            {
+                Debug.Log($"[Hades] Builtin types already seeded for Unity {currentVersion}");
+                return;
+            }
+
+            Debug.Log($"[Hades] Seeding builtin types for Unity {currentVersion}...");
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
+            _db.DeleteNodesByTier("builtin");
+
+            var assemblies = System.AppDomain.CurrentDomain.GetAssemblies()
+                .Where(a =>
+                {
+                    var name = a.GetName().Name;
+                    return name.StartsWith("UnityEngine") || name.StartsWith("UnityEditor");
+                })
+                .ToArray();
+
+            int typeCount = 0;
+            int edgeCount = 0;
+
+            _db.RunInTransaction(() =>
+            {
+                foreach (var assembly in assemblies)
+                {
+                    var assemblyName = assembly.GetName().Name;
+                    System.Type[] types;
+                    try { types = assembly.GetExportedTypes(); }
+                    catch { continue; }
+
+                    foreach (var type in types)
+                    {
+                        if (type.IsGenericTypeDefinition) continue;
+                        if (type.IsNested) continue;
+
+                        var node = new NodeRecord("ScriptType")
+                        {
+                            Name = type.Name,
+                            Properties = new Dictionary<string, object>
+                            {
+                                ["source"] = "builtin",
+                                ["namespace"] = type.Namespace ?? "",
+                                ["assembly"] = assemblyName
+                            }
+                        };
+
+                        var nodeId = _db.InsertNode(node, "builtin");
+                        typeCount++;
+
+                        if (type.BaseType != null && type.BaseType != typeof(object))
+                        {
+                            var baseTypeName = type.BaseType.Name;
+                            _db.InsertPendingEdge(nodeId, "inherits_from", baseTypeName, type.BaseType.Namespace, null);
+                            edgeCount++;
+                        }
+
+                        var directInterfaces = type.GetInterfaces();
+                        if (type.BaseType != null)
+                        {
+                            var baseInterfaces = type.BaseType.GetInterfaces();
+                            directInterfaces = directInterfaces.Except(baseInterfaces).ToArray();
+                        }
+                        foreach (var iface in directInterfaces)
+                        {
+                            _db.InsertPendingEdge(nodeId, "implements", iface.Name, iface.Namespace, null);
+                            edgeCount++;
+                        }
+                    }
+                }
+
+                _db.SetMetadata("builtin_unity_version", currentVersion);
+            });
+
+            sw.Stop();
+            Debug.Log($"[Hades] Seeded {typeCount} builtin types, {edgeCount} edges in {sw.ElapsedMilliseconds}ms");
         }
 
         // -------------------------------------------------------------------

@@ -23,8 +23,10 @@ Do NOT activate for narrow implementation questions about a specific existing sy
 
 Before making recommendations:
 
-1. **Check existing patterns in the graph:**
-   - Call `get_project_summary()` to understand project scale, render pipeline, assembly count, and asset volumes — a 200-prefab project warrants different advice than a 20-prefab one
+1. **Check existing patterns in the graph (always use Hades tools first, not grep/find):**
+   - Call `get_project_summary()` to understand project scale, render pipeline, assembly count, asset coverage, and asset volumes — a 200-prefab project warrants different advice than a 20-prefab one
+   - Call `search_by_name("<keyword>", path_prefix="Assets/Scripts")` to find scripts in a specific directory, or use `match_mode="exact"` for precise lookups
+   - Call `find_references_to("<script_path>")` to discover all dependents — returns both asset references (prefabs, scenes) and C# code references (fields, parameters, inheritance, constructors)
    - Call `find_components_using_pattern("Pool")` or `find_components_using_pattern("Factory")` to discover whether spawn infrastructure already exists
    - Call `find_components_using_pattern("GameEvent")` or `find_components_using_pattern("EventChannel")` to detect event architecture
    - Call `trace_dependencies("<CentralSystem>")` on any system the new feature depends on to surface tight coupling early

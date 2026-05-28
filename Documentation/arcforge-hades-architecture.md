@@ -348,12 +348,16 @@ The set of node types is closed (not arbitrary strings) and is extended only via
 - `ScriptableObjectType` — a class inheriting from `UnityEngine.ScriptableObject`
 - `Material` — a `.mat` asset
 - `Shader` — a `.shader` or `.shadergraph` asset
-- `Texture` — image assets (png, jpg, tga, etc.)
-- `AudioClip` — audio assets
+- `Texture` — image assets (png, jpg, tga, bmp, psd, gif, hdr, exr, tif, tiff)
+- `AudioClip` — audio assets (wav, mp3, ogg, aif, aiff)
 - `AnimationClip` — `.anim` assets
 - `AnimatorController` — `.controller` assets
 - `Mesh` — model assets (a mesh extracted from a model asset)
-- `Model` — `.fbx`, `.obj`, etc.
+- `Model` — `.fbx`, `.obj`, `.blend`, `.dae`, `.3ds`, `.max`, `.ma`, `.mb`
+- `Font` — font assets (`.ttf`, `.otf`, `.fontsettings`)
+- `SignalAsset` — Timeline signal assets (`.signal`)
+- `PlayableAsset` — Timeline playable assets (`.playable`)
+- `SpriteAtlas` — sprite atlas assets (`.spriteatlas`)
 - `RenderPipelineAsset` — URP/HDRP/custom SRP asset
 - `AddressableGroup` — addressable group definition
 - `AddressableEntry` — individual addressable entry within a group
@@ -389,7 +393,7 @@ Similarly closed set. Currently defined:
 **Type relationships:**
 
 - `instance_of` — links instance node to its type node. Component instance → ScriptType. ScriptableObject instance → ScriptableObjectType.
-- `inherits_from` — type-level inheritance. PrefabVariant → Prefab base. ScriptType → ScriptType base.
+- `inherits_from` — type-level inheritance. PrefabVariant → Prefab base. ScriptType → ScriptType base class. Populated by the tree-sitter parser (user scripts) and builtin type seeding (Unity types).
 
 **Asset relationships:**
 
@@ -409,6 +413,8 @@ Similarly closed set. Currently defined:
 **Script-level:**
 
 - `defines` — Script → ScriptType. ScriptType → ScriptMethod.
+- `code_references` — ScriptType → ScriptType. Cross-file type references extracted by the tree-sitter C# parser. Properties JSON includes `reference_kind` (one of: `field`, `parameter`, `constructor`, `cast`, `attribute`, `return_type`, `local_var`, `generic_arg`). Resolved during `ResolvePendingEdges()` by matching type names.
+- `implements` — ScriptType → ScriptType. Interface implementation relationships extracted by the tree-sitter parser.
 - `calls` — ScriptMethod → ScriptMethod. (Optional, only populated if Roslyn analysis is enabled; expensive.)
 
 This list, like node types, is closed and expanded via migration.
@@ -474,17 +480,21 @@ A second optimization: when scanning multiple scenes in a row in closed-scene mo
 
 **`PrefabScanner`** is similar to `SceneScanner` and follows the same two-mode pattern. For prefabs currently open in the prefab stage (detected via `PrefabStageUtility.GetCurrentPrefabStage()`), the scanner walks the in-memory state directly. For other prefabs, it uses `PrefabUtility.LoadPrefabContents()` to load and `PrefabUtility.UnloadPrefabContents()` to release. It detects prefab variants by checking `PrefabUtility.GetCorrespondingObjectFromOriginalSource()` on the prefab root. For variants, it produces a `PrefabVariant` node and an `inherits_from` edge to the base prefab. Override information is recorded in the edge properties.
 
-**Script scanning (Node.js)** — `.cs` files are scanned by a standalone Node.js process in `Scanner~/`, not by a C# `IAssetScanner`. This architectural exception exists because script scanning is pure file I/O + regex — it needs no Unity APIs (`SerializedObject`, `AssetDatabase`, scene loading). Running on V8 instead of Mono yields a 15-30x speedup due to V8's JIT-compiled regex engine vs Mono's interpreted one.
+**Script scanning (Node.js)** — `.cs` files are scanned by a standalone Node.js process in `Scanner~/`, not by a C# `IAssetScanner`. This architectural exception exists because script scanning is pure file I/O — it needs no Unity APIs (`SerializedObject`, `AssetDatabase`, scene loading). Running on V8 instead of Mono yields a 15-30x speedup.
 
-The Node.js scanner (`Scanner~/index.js`) replicates the same four regex patterns the original C# `ScriptScanner` used: namespace extraction, type declarations (class/struct/interface/enum with base types), method signatures, and field declarations. It resolves GUIDs by reading `.meta` files directly (no `AssetDatabase.AssetPathToGUID()` call needed). Content-hash caching via the `scanned_assets` table ensures only changed files are re-parsed on subsequent boots.
+The Node.js scanner (`Scanner~/index.js`) uses a **tree-sitter C# grammar** for AST-based parsing (since v0.9.5). The tree-sitter parser extracts: namespace declarations, type declarations (class/struct/interface/enum with base types and interfaces), method signatures, field declarations, and **cross-file type references**. Reference extraction walks the full AST to find type usage in fields, parameters, constructors, casts, attributes, return types, local variables, and generic arguments. These produce `code_references` pending edges that are resolved during `ResolvePendingEdges()`.
 
-For full scans with 1000+ files, the scanner parallelizes parsing across CPU cores using Node.js `worker_threads`. Workers handle file reading, GUID resolution, and regex parsing; the main thread handles all SQLite writes in a single transaction via `better-sqlite3`.
+The tree-sitter parser replaced the original regex-based parser (`parser.js`, still present as fallback). The regex parser extracted the same structural information (namespace, type, method, field) but could not perform cross-file reference analysis.
+
+GUIDs are resolved by reading `.meta` files directly (no `AssetDatabase.AssetPathToGUID()` call needed). Content-hash caching via the `scanned_assets` table ensures only changed files are re-parsed on subsequent boots.
+
+**MetaScanner** — alongside script scanning, the Node.js scanner also runs a MetaScanner pass that creates Asset nodes for non-script types (textures, models, audio, animation, fonts, sprite atlases, signals, playables) by reading `.meta` files. This brings the graph's pending edge count to near-zero by providing target nodes for cross-asset references. The MetaScanner reads GUID, file path, and infers the Unity node type from file extension (34 extensions mapped to 16 node types).
+
+For full scans with 1000+ files, the scanner parallelizes parsing across CPU cores using Node.js `worker_threads`. Workers handle file reading, GUID resolution, and tree-sitter parsing; the main thread handles all SQLite writes in a single transaction via `better-sqlite3`.
 
 `GraphBuilder` spawns the Node.js process synchronously via `ProcessResolver.Run()` with a 5-minute timeout. If Node.js is not installed, script scanning is skipped with a warning — all other scanners continue normally. Exit code 2 (database locked) triggers a single retry after 1 second.
 
-The scanner uses version 2 (the original C# scanner was version 1). When projects upgrade from the C# scanner to the Node.js scanner, the version mismatch in `scanned_assets` triggers a full re-scan automatically.
-
-Roslyn deep mode (semantic analysis for `calls` edges) is a separate initiative not yet implemented.
+The scanner uses version 3 (version 1 was the original C# scanner, version 2 was the Node.js regex scanner). When projects upgrade, the version mismatch in `scanned_assets` triggers a full re-scan automatically.
 
 **`ScriptableObjectScanner`** distinguishes the type and the instance. For each `ScriptableObject` derivative type discovered (via `TypeCache.GetTypesDerivedFrom<ScriptableObject>()`), it creates a `ScriptableObjectType` node. For each `.asset` file containing a ScriptableObject instance, it loads the asset, identifies its type, creates a `ScriptableObject` node with an `instance_of` edge to the type node, and records serialized field values in properties.
 
@@ -498,13 +508,21 @@ Roslyn deep mode (semantic analysis for `calls` edges) is a separate initiative 
 
 **`RenderPipelineScanner`** detects which render pipeline is active and produces a `RenderPipelineAsset` node with its features and quality settings.
 
-Other scanners (Texture, AudioClip, AnimationClip, AnimatorController, Mesh, Model) are mostly metadata extraction with limited graph relationships.
+Asset types that don't require Unity APIs for node creation (Texture, AudioClip, AnimationClip, AnimatorController, Model, Font, SignalAsset, PlayableAsset, SpriteAtlas) are handled by the **MetaScanner** in the Node.js scanner pipeline, not by C# `IAssetScanner` implementations. The MetaScanner reads `.meta` files to extract GUIDs and infers node types from file extensions (34 extensions mapped to 16 node types). This is a lightweight approach that creates Asset nodes sufficient for reference resolution without needing Unity's import pipeline.
 
 #### 2.3.4 Scanner versioning
 
 Each scanner has a `Version` integer. When a scanner's output format changes (e.g., we add new edge types it emits), the version is bumped. The `scanned_assets` table records the scanner version that produced each asset's data. On startup, if the registered scanner version is higher than the recorded version, the asset is automatically re-scanned.
 
 This is the safety net for graph correctness when scanners evolve.
+
+#### 2.3.5 Unity builtin types
+
+During graph rebuild, `GraphBuilder.SeedBuiltinTypes()` uses runtime reflection to enumerate public types from loaded Unity assemblies (`UnityEngine`, `UnityEditor`, and related). Each type is inserted as a `ScriptType` node with `source=builtin` in its properties. Inheritance (`inherits_from`) and interface implementation (`implements`) edges are created between builtin types.
+
+This provides resolution targets for `inherits_from` and `implements` pending edges when user scripts inherit from Unity base classes (e.g., `MonoBehaviour`, `ScriptableObject`, `Editor`). Without these nodes, those edges would remain unresolved. The seeding produces approximately 4,000 type nodes and 3,600 edges, varying by Unity version.
+
+Builtin type nodes are re-seeded on every full rebuild (they are not cached across sessions). The operation takes approximately 200-400ms.
 
 ### 2.4 Incremental updates
 
@@ -590,7 +608,7 @@ Hades exposes 89 MCP tools total: 21 graph/observability/memory tools built nati
 - `get_scene_summary(scene_path: string)` — high-level overview of a scene's structure.
 - `get_prefab_inheritance(prefab_path: string)` — variant chain for a prefab.
 - `analyze_render_pipeline()` — current pipeline, custom features, render features.
-- `search_by_name(name_pattern: string, type_filter: string)` — search across nodes by name.
+- `search_by_name(name_pattern: string, type_filter: string, path_prefix: string, match_mode: string)` — search across nodes by name. `path_prefix` filters results to a directory subtree. `match_mode` supports `contains` (default), `exact`, and `startswith`.
 - `get_recently_changed(hours: int)` — assets changed in the last N hours.
 
 Each tool has a clear input schema, a clear output schema, and clear documentation in the MCP `tools/list` response.

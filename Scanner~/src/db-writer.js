@@ -267,6 +267,49 @@ export class DbWriter {
   }
 
   /**
+   * Bulk-insert asset nodes from MetaScanner results in a single transaction.
+   * Skips assets whose guid already exists in the nodes table.
+   * @param {Array<{ guid: string, name: string, path: string, type: string }>} assets
+   */
+  insertMetaAssets(assets) {
+    const stmtCheck = this.#db.prepare('SELECT 1 FROM nodes WHERE guid = ? LIMIT 1');
+    const insert = this.#stmtInsertNode;
+    const tier = this.#defaultTier;
+    const now = Math.floor(Date.now() / 1000);
+
+    const tx = this.#db.transaction((items) => {
+      for (const asset of items) {
+        if (stmtCheck.get(asset.guid)) continue;
+
+        insert.run({
+          type: asset.type,
+          tier,
+          guid: asset.guid,
+          fileId: null,
+          parentNodeId: null,
+          name: asset.name,
+          path: asset.path,
+          sourceRange: null,
+          properties: JSON.stringify({ source: 'meta' }),
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    });
+    tx(assets);
+  }
+
+  /**
+   * Run a raw SELECT query (for testing only).
+   * @param {string} sql
+   * @param {...any} params
+   * @returns {any[]}
+   */
+  query(sql, ...params) {
+    return this.#db.prepare(sql).all(...params);
+  }
+
+  /**
    * Upserts a metadata key/value pair.
    * @param {string} key
    * @param {string} value

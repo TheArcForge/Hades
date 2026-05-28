@@ -130,7 +130,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         [MCPTool("scene_reparent_gameobject", "Move a GameObject under a new parent (supports undo)")]
         public static MCPToolResult ReparentGameObject(
             [MCPToolParam("GameObject name or path to move", required: true)] string path,
-            [MCPToolParam("New parent GameObject path (empty string for root)", required: true)] string newParent)
+            [MCPToolParam("New parent GameObject path (empty string for root)", required: true)] string new_parent)
         {
             var go = GameObjectResolver.FindByPath(path);
             if (go == null)
@@ -141,14 +141,14 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             }
 
             Transform newParentTransform = null;
-            if (!string.IsNullOrEmpty(newParent))
+            if (!string.IsNullOrEmpty(new_parent))
             {
-                var parentGo = GameObjectResolver.FindByPath(newParent);
+                var parentGo = GameObjectResolver.FindByPath(new_parent);
                 if (parentGo == null)
                 {
                     var rootNames = GetRootObjectNames();
                     return MCPToolResult.Error(
-                        $"GameObject not found: {newParent}. Root objects in scene: {string.Join(", ", rootNames)}");
+                        $"GameObject not found: {new_parent}. Root objects in scene: {string.Join(", ", rootNames)}");
                 }
                 newParentTransform = parentGo.transform;
             }
@@ -160,7 +160,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         [MCPTool("scene_rename_gameobject", "Rename a GameObject (supports undo)")]
         public static MCPToolResult RenameGameObject(
             [MCPToolParam("GameObject name or path to rename", required: true)] string path,
-            [MCPToolParam("New name for the GameObject", required: true)] string newName)
+            [MCPToolParam("New name for the GameObject", required: true)] string new_name)
         {
             var go = GameObjectResolver.FindByPath(path);
             if (go == null)
@@ -171,7 +171,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             }
 
             Undo.RecordObject(go, $"MCP Rename {go.name}");
-            go.name = newName;
+            go.name = new_name;
             return MCPToolResult.Success(new { path = GetPath(go) });
         }
 

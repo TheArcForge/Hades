@@ -1,5 +1,5 @@
 import { parentPort } from 'worker_threads';
-import { parseFile } from './parser.js';
+import { parseFile } from './ts-parser.js';
 import { resolveGuid } from './meta-resolver.js';
 import { computeContentHash } from './hasher.js';
 

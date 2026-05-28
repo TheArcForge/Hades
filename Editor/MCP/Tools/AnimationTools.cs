@@ -15,17 +15,17 @@ namespace ArcForge.Hades.Editor.MCP.Tools
     {
         [MCPTool("animation_assign_controller", "Assign an AnimatorController to a GameObject (adds Animator if needed)")]
         public static MCPToolResult AssignController(
-            [MCPToolParam("GameObject name or hierarchy path", required: true)] string gameObjectPath,
-            [MCPToolParam("AnimatorController asset path (e.g. 'Assets/Animations/Player.controller')", required: true)] string controllerPath)
+            [MCPToolParam("GameObject name or hierarchy path", required: true)] string game_object_path,
+            [MCPToolParam("AnimatorController asset path (e.g. 'Assets/Animations/Player.controller')", required: true)] string controller_path)
         {
-            var go = ComponentTools.FindGameObject(gameObjectPath);
+            var go = ComponentTools.FindGameObject(game_object_path);
             if (go == null)
-                return GameObjectNotFoundError(gameObjectPath);
+                return GameObjectNotFoundError(game_object_path);
 
-            var controller = AssetDatabase.LoadAssetAtPath<RuntimeAnimatorController>(controllerPath);
+            var controller = AssetDatabase.LoadAssetAtPath<RuntimeAnimatorController>(controller_path);
             if (controller == null)
                 return MCPToolResult.Error(
-                    $"AnimatorController not found at '{controllerPath}'. " +
+                    $"AnimatorController not found at '{controller_path}'. " +
                     "Ensure the path ends with .controller and is under the Assets folder.");
 
             var animator = go.GetComponent<Animator>();
@@ -41,24 +41,24 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             return MCPToolResult.Success(new
             {
                 gameObject = ComponentTools.GetPath(go),
-                controller = controllerPath,
+                controller = controller_path,
                 addedAnimator = go.GetComponent<Animator>() == animator
             });
         }
 
         [MCPTool("animation_assign_clip", "Assign an AnimationClip to a named state in an AnimatorController")]
         public static MCPToolResult AssignClip(
-            [MCPToolParam("AnimatorController asset path", required: true)] string controllerPath,
-            [MCPToolParam("State name in the controller (e.g. 'Idle', 'Walk')", required: true)] string stateName,
-            [MCPToolParam("AnimationClip asset path", required: true)] string clipPath)
+            [MCPToolParam("AnimatorController asset path", required: true)] string controller_path,
+            [MCPToolParam("State name in the controller (e.g. 'Idle', 'Walk')", required: true)] string state_name,
+            [MCPToolParam("AnimationClip asset path", required: true)] string clip_path)
         {
-            var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(controllerPath);
+            var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(controller_path);
             if (controller == null)
-                return MCPToolResult.Error($"AnimatorController not found at '{controllerPath}'.");
+                return MCPToolResult.Error($"AnimatorController not found at '{controller_path}'.");
 
-            var clip = AssetDatabase.LoadAssetAtPath<AnimationClip>(clipPath);
+            var clip = AssetDatabase.LoadAssetAtPath<AnimationClip>(clip_path);
             if (clip == null)
-                return MCPToolResult.Error($"AnimationClip not found at '{clipPath}'.");
+                return MCPToolResult.Error($"AnimationClip not found at '{clip_path}'.");
 
             var stateNames = new List<string>();
             foreach (var layer in controller.layers)
@@ -66,11 +66,11 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 foreach (var childState in layer.stateMachine.states)
                 {
                     stateNames.Add(childState.state.name);
-                    if (childState.state.name == stateName)
+                    if (childState.state.name == state_name)
                     {
                         if (childState.state.motion is BlendTree)
                             return MCPToolResult.Error(
-                                $"State '{stateName}' uses a BlendTree, not a single clip. " +
+                                $"State '{state_name}' uses a BlendTree, not a single clip. " +
                                 "BlendTree editing is not supported by this tool.");
 
                         Undo.RecordObject(childState.state, "MCP Assign AnimationClip");
@@ -80,16 +80,16 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
                         return MCPToolResult.Success(new
                         {
-                            controller = controllerPath,
-                            state = stateName,
-                            clip = clipPath
+                            controller = controller_path,
+                            state = state_name,
+                            clip = clip_path
                         });
                     }
                 }
             }
 
             return MCPToolResult.Error(
-                $"State '{stateName}' not found in controller. " +
+                $"State '{state_name}' not found in controller. " +
                 $"Available states: {string.Join(", ", stateNames)}");
         }
 
@@ -282,16 +282,16 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             "Batch modify an existing AnimatorController: add/remove parameters, states, transitions")]
         public static MCPToolResult EditController(
             [MCPToolParam("AnimatorController asset path", required: true)] string path,
-            [MCPToolParam("JSON array of parameters to add")] string addParameters,
-            [MCPToolParam("JSON array of parameter names to remove")] string removeParameters,
-            [MCPToolParam("JSON array of states to add")] string addStates,
-            [MCPToolParam("JSON array of state names to remove")] string removeStates,
-            [MCPToolParam("JSON array of transitions to add")] string addTransitions,
-            [MCPToolParam("JSON array of {from, to} to remove")] string removeTransitions)
+            [MCPToolParam("JSON array of parameters to add")] string add_parameters,
+            [MCPToolParam("JSON array of parameter names to remove")] string remove_parameters,
+            [MCPToolParam("JSON array of states to add")] string add_states,
+            [MCPToolParam("JSON array of state names to remove")] string remove_states,
+            [MCPToolParam("JSON array of transitions to add")] string add_transitions,
+            [MCPToolParam("JSON array of {from, to} to remove")] string remove_transitions)
         {
-            var hasAnyOp = !string.IsNullOrEmpty(addParameters) || !string.IsNullOrEmpty(removeParameters)
-                || !string.IsNullOrEmpty(addStates) || !string.IsNullOrEmpty(removeStates)
-                || !string.IsNullOrEmpty(addTransitions) || !string.IsNullOrEmpty(removeTransitions);
+            var hasAnyOp = !string.IsNullOrEmpty(add_parameters) || !string.IsNullOrEmpty(remove_parameters)
+                || !string.IsNullOrEmpty(add_states) || !string.IsNullOrEmpty(remove_states)
+                || !string.IsNullOrEmpty(add_transitions) || !string.IsNullOrEmpty(remove_transitions);
 
             if (!hasAnyOp)
                 return MCPToolResult.Error("At least one add/remove parameter must be provided.");
@@ -310,11 +310,11 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
             // ── Removals first ──
 
-            if (!string.IsNullOrEmpty(removeParameters))
+            if (!string.IsNullOrEmpty(remove_parameters))
             {
                 try
                 {
-                    var names = JsonConvert.DeserializeObject<string[]>(removeParameters);
+                    var names = JsonConvert.DeserializeObject<string[]>(remove_parameters);
                     foreach (var name in names)
                     {
                         var idx = Array.FindIndex(controller.parameters, p => p.name == name);
@@ -327,14 +327,14 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                             errors.Add($"Parameter '{name}' not found (skip).");
                     }
                 }
-                catch (JsonException ex) { errors.Add($"Invalid removeParameters JSON: {ex.Message}"); }
+                catch (JsonException ex) { errors.Add($"Invalid remove_parameters JSON: {ex.Message}"); }
             }
 
-            if (!string.IsNullOrEmpty(removeStates))
+            if (!string.IsNullOrEmpty(remove_states))
             {
                 try
                 {
-                    var names = JsonConvert.DeserializeObject<string[]>(removeStates);
+                    var names = JsonConvert.DeserializeObject<string[]>(remove_states);
                     foreach (var name in names)
                     {
                         var found = false;
@@ -352,14 +352,14 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                             errors.Add($"State '{name}' not found (skip).");
                     }
                 }
-                catch (JsonException ex) { errors.Add($"Invalid removeStates JSON: {ex.Message}"); }
+                catch (JsonException ex) { errors.Add($"Invalid remove_states JSON: {ex.Message}"); }
             }
 
-            if (!string.IsNullOrEmpty(removeTransitions))
+            if (!string.IsNullOrEmpty(remove_transitions))
             {
                 try
                 {
-                    var defs = JsonConvert.DeserializeObject<TransitionRemoveDef[]>(removeTransitions);
+                    var defs = JsonConvert.DeserializeObject<TransitionRemoveDef[]>(remove_transitions);
                     foreach (var def in defs)
                     {
                         var removedCount = RemoveTransitions(sm, def.From, def.To);
@@ -369,34 +369,34 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                             errors.Add($"No transition from '{def.From}' to '{def.To}' found (skip).");
                     }
                 }
-                catch (JsonException ex) { errors.Add($"Invalid removeTransitions JSON: {ex.Message}"); }
+                catch (JsonException ex) { errors.Add($"Invalid remove_transitions JSON: {ex.Message}"); }
             }
 
             // ── Additions ──
 
-            if (!string.IsNullOrEmpty(addParameters))
+            if (!string.IsNullOrEmpty(add_parameters))
             {
                 try
                 {
-                    var paramDefs = JsonConvert.DeserializeObject<ParamDef[]>(addParameters);
+                    var paramDefs = JsonConvert.DeserializeObject<ParamDef[]>(add_parameters);
                     foreach (var p in paramDefs)
                     {
                         AddParameter(controller, p, errors);
                         added.Add($"parameter:{p.Name}");
                     }
                 }
-                catch (JsonException ex) { errors.Add($"Invalid addParameters JSON: {ex.Message}"); }
+                catch (JsonException ex) { errors.Add($"Invalid add_parameters JSON: {ex.Message}"); }
             }
 
             var stateMap = new Dictionary<string, AnimatorState>(StringComparer.OrdinalIgnoreCase);
             foreach (var cs in sm.states)
                 stateMap[cs.state.name] = cs.state;
 
-            if (!string.IsNullOrEmpty(addStates))
+            if (!string.IsNullOrEmpty(add_states))
             {
                 try
                 {
-                    var stateDefs = JsonConvert.DeserializeObject<StateDef[]>(addStates);
+                    var stateDefs = JsonConvert.DeserializeObject<StateDef[]>(add_states);
                     foreach (var s in stateDefs)
                     {
                         if (stateMap.ContainsKey(s.Name))
@@ -418,21 +418,21 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                         added.Add($"state:{s.Name}");
                     }
                 }
-                catch (JsonException ex) { errors.Add($"Invalid addStates JSON: {ex.Message}"); }
+                catch (JsonException ex) { errors.Add($"Invalid add_states JSON: {ex.Message}"); }
             }
 
-            if (!string.IsNullOrEmpty(addTransitions))
+            if (!string.IsNullOrEmpty(add_transitions))
             {
                 try
                 {
-                    var transDefs = JsonConvert.DeserializeObject<TransitionDef[]>(addTransitions);
+                    var transDefs = JsonConvert.DeserializeObject<TransitionDef[]>(add_transitions);
                     foreach (var t in transDefs)
                     {
                         AddTransition(sm, stateMap, controller, t, errors);
                         added.Add($"transition:{t.From}->{t.To}");
                     }
                 }
-                catch (JsonException ex) { errors.Add($"Invalid addTransitions JSON: {ex.Message}"); }
+                catch (JsonException ex) { errors.Add($"Invalid add_transitions JSON: {ex.Message}"); }
             }
 
             EditorUtility.SetDirty(controller);

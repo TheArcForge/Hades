@@ -16,16 +16,16 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("component_add", "Add a component to a GameObject by type name (supports undo)")]
         public static MCPToolResult AddComponent(
-            [MCPToolParam("GameObject name or path (e.g. 'Canvas/Panel/Button')", required: true)] string gameObjectPath,
-            [MCPToolParam("Component type name (e.g. 'BoxCollider', 'Rigidbody')", required: true)] string typeName)
+            [MCPToolParam("GameObject name or path (e.g. 'Canvas/Panel/Button')", required: true)] string game_object_path,
+            [MCPToolParam("Component type name (e.g. 'BoxCollider', 'Rigidbody')", required: true)] string type_name)
         {
-            var go = FindGameObject(gameObjectPath);
+            var go = FindGameObject(game_object_path);
             if (go == null)
-                return GameObjectNotFoundError(gameObjectPath);
+                return GameObjectNotFoundError(game_object_path);
 
-            var type = FindComponentType(typeName);
+            var type = FindComponentType(type_name);
             if (type == null)
-                return MCPToolResult.Error($"Component type not found: '{typeName}'. Ensure the type name is correct and the assembly containing it is loaded.");
+                return MCPToolResult.Error($"Component type not found: '{type_name}'. Ensure the type name is correct and the assembly containing it is loaded.");
 
             Undo.AddComponent(go, type);
             return MCPToolResult.Success(new { added = type.Name, to = GetPath(go) });
@@ -33,11 +33,11 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("component_find", "Find all GameObjects with a specific component type")]
         public static MCPToolResult FindComponents(
-            [MCPToolParam("Component type name (e.g. 'Camera', 'UIDocument')", required: true)] string typeName)
+            [MCPToolParam("Component type name (e.g. 'Camera', 'UIDocument')", required: true)] string type_name)
         {
-            var type = FindComponentType(typeName);
+            var type = FindComponentType(type_name);
             if (type == null)
-                return MCPToolResult.Error($"Component type not found: '{typeName}'. Ensure the type name is correct and the assembly containing it is loaded.");
+                return MCPToolResult.Error($"Component type not found: '{type_name}'. Ensure the type name is correct and the assembly containing it is loaded.");
 
             var components = UnityEngine.Object.FindObjectsByType(type, FindObjectsSortMode.None);
             var results = components
@@ -51,16 +51,16 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("component_remove", "Remove a component from a GameObject by type name (supports undo)")]
         public static MCPToolResult RemoveComponent(
-            [MCPToolParam("GameObject name or path (e.g. 'Canvas/Panel/Button')", required: true)] string gameObjectPath,
-            [MCPToolParam("Component type name to remove (e.g. 'BoxCollider')", required: true)] string typeName)
+            [MCPToolParam("GameObject name or path (e.g. 'Canvas/Panel/Button')", required: true)] string game_object_path,
+            [MCPToolParam("Component type name to remove (e.g. 'BoxCollider')", required: true)] string type_name)
         {
-            var go = FindGameObject(gameObjectPath);
+            var go = FindGameObject(game_object_path);
             if (go == null)
-                return GameObjectNotFoundError(gameObjectPath);
+                return GameObjectNotFoundError(game_object_path);
 
-            var type = FindComponentType(typeName);
+            var type = FindComponentType(type_name);
             if (type == null)
-                return MCPToolResult.Error($"Component type not found: '{typeName}'. Ensure the type name is correct and the assembly containing it is loaded.");
+                return MCPToolResult.Error($"Component type not found: '{type_name}'. Ensure the type name is correct and the assembly containing it is loaded.");
 
             var component = go.GetComponent(type);
             if (component == null)
@@ -70,7 +70,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                     .Select(c => c.GetType().Name)
                     .ToArray();
                 return MCPToolResult.Error(
-                    $"Component '{typeName}' not found on GameObject '{GetPath(go)}'. " +
+                    $"Component '{type_name}' not found on GameObject '{GetPath(go)}'. " +
                     $"Existing components: {string.Join(", ", existing)}");
             }
 
@@ -80,11 +80,11 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("component_get_all", "List all components on a GameObject with type names and enabled state")]
         public static MCPToolResult GetComponents(
-            [MCPToolParam("GameObject name or path (e.g. 'Canvas/Panel/Button')", required: true)] string gameObjectPath)
+            [MCPToolParam("GameObject name or path (e.g. 'Canvas/Panel/Button')", required: true)] string game_object_path)
         {
-            var go = FindGameObject(gameObjectPath);
+            var go = FindGameObject(game_object_path);
             if (go == null)
-                return GameObjectNotFoundError(gameObjectPath);
+                return GameObjectNotFoundError(game_object_path);
 
             var components = go.GetComponents<Component>()
                 .Where(c => c != null)
@@ -104,17 +104,17 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("component_get_property", "Read a serialized property value from a component")]
         public static MCPToolResult GetComponentProperty(
-            [MCPToolParam("GameObject name or path", required: true)] string gameObjectPath,
-            [MCPToolParam("Component type name (e.g. 'Transform')", required: true)] string typeName,
-            [MCPToolParam("Serialized property name (e.g. 'm_LocalPosition')", required: true)] string propertyName)
+            [MCPToolParam("GameObject name or path", required: true)] string game_object_path,
+            [MCPToolParam("Component type name (e.g. 'Transform')", required: true)] string type_name,
+            [MCPToolParam("Serialized property name (e.g. 'm_LocalPosition')", required: true)] string property_name)
         {
-            var go = FindGameObject(gameObjectPath);
+            var go = FindGameObject(game_object_path);
             if (go == null)
-                return GameObjectNotFoundError(gameObjectPath);
+                return GameObjectNotFoundError(game_object_path);
 
-            var type = FindComponentType(typeName);
+            var type = FindComponentType(type_name);
             if (type == null)
-                return MCPToolResult.Error($"Component type not found: '{typeName}'.");
+                return MCPToolResult.Error($"Component type not found: '{type_name}'.");
 
             var component = go.GetComponent(type);
             if (component == null)
@@ -124,12 +124,12 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                     .Select(c => c.GetType().Name)
                     .ToArray();
                 return MCPToolResult.Error(
-                    $"Component '{typeName}' not found on '{GetPath(go)}'. " +
+                    $"Component '{type_name}' not found on '{GetPath(go)}'. " +
                     $"Existing components: {string.Join(", ", existing)}");
             }
 
             var serializedObject = new SerializedObject(component);
-            var resolvedName = ResolvePropertyName(serializedObject, propertyName, out var resolveError);
+            var resolvedName = ResolvePropertyName(serializedObject, property_name, out var resolveError);
             if (resolvedName == null)
                 return MCPToolResult.Error(resolveError);
             var property = serializedObject.FindProperty(resolvedName);
@@ -138,8 +138,8 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             return MCPToolResult.Success(new
             {
                 gameObject = GetPath(go),
-                component = typeName,
-                property = propertyName,
+                component = type_name,
+                property = property_name,
                 propertyType = property.propertyType.ToString(),
                 value
             });
@@ -147,18 +147,18 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
         [MCPTool("component_set_property", "Set a serialized property value on a component")]
         public static MCPToolResult SetComponentProperty(
-            [MCPToolParam("GameObject name or path", required: true)] string gameObjectPath,
-            [MCPToolParam("Component type name (e.g. 'Transform')", required: true)] string typeName,
-            [MCPToolParam("Serialized property name (e.g. 'm_LocalPosition')", required: true)] string propertyName,
+            [MCPToolParam("GameObject name or path", required: true)] string game_object_path,
+            [MCPToolParam("Component type name (e.g. 'Transform')", required: true)] string type_name,
+            [MCPToolParam("Serialized property name (e.g. 'm_LocalPosition')", required: true)] string property_name,
             [MCPToolParam("Value to set (string, number, bool, or JSON for Vector3/Color)", required: true)] string value)
         {
-            var go = FindGameObject(gameObjectPath);
+            var go = FindGameObject(game_object_path);
             if (go == null)
-                return GameObjectNotFoundError(gameObjectPath);
+                return GameObjectNotFoundError(game_object_path);
 
-            var type = FindComponentType(typeName);
+            var type = FindComponentType(type_name);
             if (type == null)
-                return MCPToolResult.Error($"Component type not found: '{typeName}'.");
+                return MCPToolResult.Error($"Component type not found: '{type_name}'.");
 
             var component = go.GetComponent(type);
             if (component == null)
@@ -168,12 +168,12 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                     .Select(c => c.GetType().Name)
                     .ToArray();
                 return MCPToolResult.Error(
-                    $"Component '{typeName}' not found on '{GetPath(go)}'. " +
+                    $"Component '{type_name}' not found on '{GetPath(go)}'. " +
                     $"Existing components: {string.Join(", ", existing)}");
             }
 
             var serializedObject = new SerializedObject(component);
-            var resolvedName = ResolvePropertyName(serializedObject, propertyName, out var resolveError);
+            var resolvedName = ResolvePropertyName(serializedObject, property_name, out var resolveError);
             if (resolvedName == null)
                 return MCPToolResult.Error(resolveError);
             var property = serializedObject.FindProperty(resolvedName);
@@ -185,14 +185,14 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             }
             catch (Exception ex)
             {
-                return MCPToolResult.Error($"Failed to set property '{propertyName}': {ex.Message}");
+                return MCPToolResult.Error($"Failed to set property '{property_name}': {ex.Message}");
             }
 
             return MCPToolResult.Success(new
             {
                 gameObject = GetPath(go),
-                component = typeName,
-                property = propertyName,
+                component = type_name,
+                property = property_name,
                 newValue = value
             });
         }
@@ -201,12 +201,12 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             "Accepts a JSON array where each entry specifies a GameObject, component type, and a dictionary of property name-value pairs.")]
         public static MCPToolResult SetProperties(
             [MCPToolParam("JSON array of operations. Each: { gameObject (required), component (required), " +
-                "properties: { propertyName: value } }", required: true)] string operationsJson)
+                "properties: { propertyName: value } }", required: true)] string operations_json)
         {
             PropertyOperationDef[] ops;
             try
             {
-                ops = JsonConvert.DeserializeObject<PropertyOperationDef[]>(operationsJson);
+                ops = JsonConvert.DeserializeObject<PropertyOperationDef[]>(operations_json);
             }
             catch (Exception ex)
             {
@@ -319,16 +319,16 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         [MCPTool("component_list_properties", "List all serialized properties on a component with " +
             "both serialized names and display names, types, and current values")]
         public static MCPToolResult ListComponentProperties(
-            [MCPToolParam("GameObject name or path", required: true)] string gameObjectPath,
-            [MCPToolParam("Component type name (e.g. 'Camera', 'Transform')", required: true)] string typeName)
+            [MCPToolParam("GameObject name or path", required: true)] string game_object_path,
+            [MCPToolParam("Component type name (e.g. 'Camera', 'Transform')", required: true)] string type_name)
         {
-            var go = FindGameObject(gameObjectPath);
+            var go = FindGameObject(game_object_path);
             if (go == null)
-                return GameObjectNotFoundError(gameObjectPath);
+                return GameObjectNotFoundError(game_object_path);
 
-            var type = FindComponentType(typeName);
+            var type = FindComponentType(type_name);
             if (type == null)
-                return MCPToolResult.Error($"Component type not found: '{typeName}'.");
+                return MCPToolResult.Error($"Component type not found: '{type_name}'.");
 
             var component = go.GetComponent(type);
             if (component == null)
@@ -336,7 +336,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 var existing = go.GetComponents<Component>()
                     .Where(c => c != null).Select(c => c.GetType().Name).ToArray();
                 return MCPToolResult.Error(
-                    $"Component '{typeName}' not found on '{GetPath(go)}'. " +
+                    $"Component '{type_name}' not found on '{GetPath(go)}'. " +
                     $"Existing components: {string.Join(", ", existing)}");
             }
 
@@ -360,7 +360,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             return MCPToolResult.Success(new
             {
                 gameObject = GetPath(go),
-                component = typeName,
+                component = type_name,
                 properties,
                 count = properties.Count
             });

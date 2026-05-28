@@ -110,9 +110,11 @@ Hades/                          (repository root = Unity Package root)
 │   ├── tests/
 │   ├── tsconfig.json
 │   └── vitest.config.ts
-├── Scanner~/                   # Node.js .cs file scanner (tilde-suffix: invisible to Unity)
+├── Scanner~/                   # Node.js scanner (tilde-suffix: invisible to Unity)
 │   ├── src/
-│   │   ├── parser.js           # Regex-based C# parser (namespace, type, method)
+│   │   ├── ts-parser.js        # Tree-sitter C# parser (AST-based, cross-file references)
+│   │   ├── parser.js           # Regex-based C# parser (legacy fallback)
+│   │   ├── meta-scanner.js     # MetaScanner: .meta file reader for non-script assets
 │   │   ├── meta-resolver.js    # GUID extraction from .meta files
 │   │   ├── hasher.js           # MD5 content hashing
 │   │   ├── db-writer.js        # better-sqlite3 wrapper (graph.db writes)
@@ -120,7 +122,7 @@ Hades/                          (repository root = Unity Package root)
 │   │   └── worker.js           # worker_threads for parallel parsing
 │   ├── tests/
 │   ├── index.js                # CLI entry point
-│   └── package.json            # better-sqlite3 + Jest dependencies
+│   └── package.json            # better-sqlite3 + tree-sitter + Jest dependencies
 ├── Editor/                     # Unity C# code
 │   ├── MCP/
 │   │   ├── MCPServer.cs
@@ -154,7 +156,7 @@ Hades/                          (repository root = Unity Package root)
 ```json
 {
   "name": "arcforge-hades",
-  "version": "0.6.0",
+  "version": "0.9.5",
   "description": "Unity-aware AI infrastructure for Claude Code: project knowledge graph, observability, memory, and 22 skills.",
   "author": { "name": "ArcForge" },
   "license": "MIT",
