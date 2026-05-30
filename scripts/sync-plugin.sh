@@ -14,8 +14,20 @@ fi
 
 echo "Syncing plugin to: $TARGET"
 
-# Clean target, preserving .git/ if it exists
+# Clean target, preserving .git/ and plugin-repo-only files
+PRESERVE_DIR=""
 if [[ -d "$TARGET" ]]; then
+  PRESERVE_DIR=$(mktemp -d)
+  # Back up plugin-repo-only files before cleaning
+  for f in .github .gitignore .gitattributes CONTRIBUTING.md; do
+    if [[ -e "$TARGET/$f" ]]; then
+      cp -R "$TARGET/$f" "$PRESERVE_DIR/"
+    fi
+  done
+  if [[ -f "$TARGET/.claude-plugin/marketplace.json" ]]; then
+    mkdir -p "$PRESERVE_DIR/.claude-plugin"
+    cp "$TARGET/.claude-plugin/marketplace.json" "$PRESERVE_DIR/.claude-plugin/"
+  fi
   find "$TARGET" -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
 fi
 mkdir -p "$TARGET"
@@ -24,9 +36,22 @@ mkdir -p "$TARGET"
 cp -R "$REPO_ROOT/.claude-plugin" "$TARGET/"
 cp "$REPO_ROOT/.mcp.json" "$TARGET/"
 
+# Restore plugin-repo-only files
+if [[ -n "$PRESERVE_DIR" ]]; then
+  for f in .github .gitignore .gitattributes CONTRIBUTING.md; do
+    if [[ -e "$PRESERVE_DIR/$f" ]]; then
+      cp -R "$PRESERVE_DIR/$f" "$TARGET/"
+    fi
+  done
+  if [[ -f "$PRESERVE_DIR/.claude-plugin/marketplace.json" ]]; then
+    cp "$PRESERVE_DIR/.claude-plugin/marketplace.json" "$TARGET/.claude-plugin/"
+  fi
+  rm -rf "$PRESERVE_DIR"
+fi
+
 # Skills and Commands
-rsync -a "$REPO_ROOT/Skills~/" "$TARGET/Skills~/"
-rsync -a "$REPO_ROOT/Commands~/" "$TARGET/Commands~/"
+rsync -a "$REPO_ROOT/skills/" "$TARGET/skills/"
+rsync -a "$REPO_ROOT/commands/" "$TARGET/commands/"
 
 # Bridge — compiled output only (zero runtime deps)
 mkdir -p "$TARGET/Bridge~/launcher/dist" "$TARGET/Bridge~/hub/dist"
@@ -48,7 +73,7 @@ cp "$REPO_ROOT/scripts/plugin-CLAUDE.md" "$TARGET/CLAUDE.md"
 # Summary
 echo ""
 echo "Plugin synced:"
-echo "  Skills:   $(ls -d "$TARGET/Skills~/"*/ 2>/dev/null | wc -l | tr -d ' ')"
-echo "  Commands: $(ls "$TARGET/Commands~/"*.md 2>/dev/null | wc -l | tr -d ' ')"
+echo "  Skills:   $(ls -d "$TARGET/skills/"*/ 2>/dev/null | wc -l | tr -d ' ')"
+echo "  Commands: $(ls "$TARGET/commands/"*.md 2>/dev/null | wc -l | tr -d ' ')"
 echo "  Bridge:   launcher/dist + hub/dist (zero deps)"
 echo "  Scanner:  source only (npm install needed for runtime)"

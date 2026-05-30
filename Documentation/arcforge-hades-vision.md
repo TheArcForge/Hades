@@ -435,7 +435,7 @@ The full plugin architecture — what the plugin contains (22 skills, 6 commands
 
 1. Add Hades Unity Package via UPM git URL → Hades Scanner runs in the project, MCP server starts inside Unity
 2. Install the Claude Code plugin — two options:
-   - **Marketplace:** `/plugin install hades@TheArcForge/Hades` (persists across sessions)
+   - **Marketplace (recommended):** `/plugin marketplace add TheArcForge/hades-plugin` then `/plugin install hades` (persists across sessions)
    - **Local:** `claude --plugin-dir /path/to/hades-plugin` (per-session only)
 
 Step 1 is per-project. Step 2 is per-user. Both are needed for the full experience.

@@ -11,11 +11,7 @@ This guide walks you through installing and verifying Hades from scratch. Follow
 | **Claude Code** | Run `claude --version` in your terminal. Install from [claude.ai/download](https://claude.ai/download) if missing. |
 | **A Unity project** | Any project works. A small one is fine for first-time setup. |
 
-You should have received a zip file:
-
-- **hades-plugin.zip** — the Claude Code plugin (installs into your Claude Code environment)
-
-The Unity package installs directly from GitHub — no zip required.
+Both the Unity package and the Claude Code plugin install directly from GitHub — no downloads required.
 
 ## Step 1: Install the Unity Package
 
@@ -64,17 +60,10 @@ If you can't reach GitHub from your machine, you can install from a local copy i
 
 ## Step 2: Install the Claude Code Plugin
 
-1. Unzip **hades-plugin.zip** to a permanent location. For example:
-   ```
-   ~/Tools/hades-plugin
-   ```
-   This folder must also stay in place — Claude Code references it by path.
+The plugin installs in Step 3 below via the marketplace command — no separate download needed. If you need to validate the plugin manually, you can clone the repo and run:
 
-2. That's it — no install command needed. You'll point Claude Code to this folder when you launch it (next step).
-
-**Verification:** You can check the plugin is valid by running:
 ```bash
-claude plugin validate ~/Tools/hades-plugin
+claude plugin validate /path/to/hades-plugin
 ```
 You should see "Validation passed".
 
@@ -87,13 +76,21 @@ You should see "Validation passed".
    cd ~/Projects/YourUnityProject
    ```
 
-3. Start Claude Code with the plugin:
+3. Start Claude Code with the plugin. Choose the install method that suits you:
+
+   **Option A: Persistent install (recommended)** — add the plugin once via the self-hosted marketplace and it loads automatically every session:
+   ```
+   /plugin marketplace add TheArcForge/hades-plugin
+   /plugin install hades
+   ```
+
+   **Option B: Per-session** — pass the plugin directory each time you launch Claude Code:
    ```bash
    claude --plugin-dir ~/Tools/hades-plugin
    ```
    Replace the path with wherever you unzipped the plugin. The `--plugin-dir` flag tells Claude Code to load skills, commands, and the MCP server from that folder.
 
-   > **Tip:** You'll need `--plugin-dir` each time you start Claude Code. To save typing, add an alias to your shell profile:
+   > **Tip:** If you prefer Option B but want to save typing, add an alias to your shell profile:
    > ```bash
    > alias claude-unity='claude --plugin-dir ~/Tools/hades-plugin'
    > ```

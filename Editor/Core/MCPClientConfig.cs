@@ -299,12 +299,12 @@ namespace ArcForge.Hades.Editor.Core
             // Try the package location first (when installed via UPM)
             var packageRoot = Path.GetFullPath(
                 Path.Combine(Application.dataPath, "..", "Packages", "com.arcforge.hades"));
-            var skillsDir = Path.Combine(packageRoot, "Skills~");
+            var skillsDir = Path.Combine(packageRoot, "skills");
             if (Directory.Exists(skillsDir)) return skillsDir;
 
             // Fallback: dev repo root (when running from source)
             var devRoot = PathSandbox.ProjectRoot;
-            skillsDir = Path.Combine(devRoot, "Skills~");
+            skillsDir = Path.Combine(devRoot, "skills");
             if (Directory.Exists(skillsDir)) return skillsDir;
 
             return null;

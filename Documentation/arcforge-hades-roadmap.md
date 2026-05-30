@@ -1,8 +1,8 @@
 # Hades — Roadmap Document
 
 **Version:** 1.4
-**Status:** Active development — Phase 10 next (public release v1.0)
-**Last updated:** 2026-05-28
+**Status:** Active development — Phase 10 in progress (public release v1.0)
+**Last updated:** 2026-05-29
 **Companion to:** Vision document, Architecture document, Plugin document
 
 ---
@@ -856,7 +856,7 @@ The differentiator versus competitors' libraries is **integration**. Every Hades
 - [ ] Compatibility check: agent client warns if MCP version mismatch *(deferred — requires bridge-side version negotiation)*
 - [x] Skills are activatable via Claude Code based on description matching
 - [x] All planned slash commands work (`/hades:status`, `/hades:rebuild-graph`, `/hades:show-traces`, `/hades:validate-memory`, `/hades:show-proposals`, `/hades:export-traces`)
-- [x] Plugin structure validated: `plugin.json`, `Skills~/`, `Commands~/` all correctly configured and discoverable by Claude Code
+- [x] Plugin structure validated: `plugin.json`, `skills/`, `commands/` all correctly configured and discoverable by Claude Code
 
 ### Scope: what's in
 
@@ -905,7 +905,7 @@ For each migrated skill: rewrite to integrate Graph queries and Asphodel reads w
 - All commands described in Architecture §5.7
 
 **Distribution:**
-- Plugin structure in main repo: `.claude-plugin/plugin.json`, `Skills~/`, `Commands~/`
+- Plugin structure in main repo: `.claude-plugin/plugin.json`, `skills/`, `commands/`
 - CI for plugin validation (manifest correctness, skill structure)
 
 ### Scope: what's out
@@ -1027,7 +1027,7 @@ Issues encountered during Phase 4 development, documented for future reference:
 
 2. **UniClaude workflow skills assumed non-existent MCP tools.** The original scene-authoring, prefab-workflow, and animation-workflow skills were built around MCP editor-action tools (`scene_create_gameobject`, `component_add`, `prefab_create`, `animation_create_controller`, etc.) that exist in UniClaude but not in Hades. Hades provides graph *query* tools, not editor *action* tools. All three workflow skills were rewritten to teach C# Editor scripting patterns (EditorSceneManager, PrefabUtility, AnimatorController APIs) instead of tool sequences. This was the right call — the rewritten skills are more durable since they don't depend on a specific tool inventory.
 
-3. **Plugin directory paths diverged from design spec.** The Phase 4 design spec referenced `.claude-plugin/skills/` paths. The actual Claude Code plugin format uses `Skills~/` and `Commands~/` at repo root (tilde-suffix directories are ignored by Unity's asset pipeline). Updated `plugin.json` to reference `"skills": "Skills~/"`. The spec's path assumptions were outdated by the time implementation began.
+3. **Plugin directory paths diverged from design spec.** The Phase 4 design spec referenced `.claude-plugin/skills/` paths. The actual Claude Code plugin format originally used `Skills~/` and `Commands~/` at repo root (tilde-suffix directories are ignored by Unity's asset pipeline). In Phase 10, these were renamed to the standard `skills/` and `commands/` paths that Claude Code auto-discovers by convention. The explicit `"skills"` and `"commands"` fields were removed from `plugin.json`.
 
 4. **`marketplace.json` eliminated.** The design spec assumed a separate `marketplace.json` file for Anthropic marketplace metadata. The current plugin format puts all metadata in `plugin.json` (`name`, `version`, `description`, `author`, `keywords`, etc.). Deleted `marketplace.json` — it was a Phase 0 artifact based on early plugin format research.
 
@@ -1461,7 +1461,7 @@ Phase 7 was validated by deploying to an external developer working on a large-s
 ### Done criteria
 
 - [x] Sync script (`scripts/sync-plugin.sh`) implemented — produces plugin repo content (872KB, 62 files) from main repo, copies `plugin-README.md` and `plugin-CLAUDE.md` as the plugin repo's `README.md` and `CLAUDE.md`
-- [x] Plugin manifest fix: added `"commands": "./Commands~/"` to `plugin.json` (commands weren't being discovered)
+- [x] Plugin manifest fix: added `"commands"` to `plugin.json` (commands weren't being discovered) — later removed when directories renamed to standard `commands/` path in Phase 10
 - [x] Agent routing — three-layer guidance so agents use Hades MCP tools instead of defaulting to bash:
   - MCP `instructions` field in initialize response (universal, both Claude Code and Desktop)
   - `CLAUDE.md` auto-generated to Unity project root on server start (Claude Code)
@@ -1865,7 +1865,7 @@ After Phase 10, Hades is:
 ### Scope: what's in
 
 **Plugin repository:**
-- Create `TheArcForge/hades-plugin` with plugin-relevant subset: `.claude-plugin/`, `.mcp.json`, `Skills~/`, `Commands~/`, `Bridge~/` (dist only), `Scanner~/` (source, no tests)
+- Create `TheArcForge/hades-plugin` with plugin-relevant subset: `.claude-plugin/`, `.mcp.json`, `skills/`, `commands/`, `Bridge~/` (dist only), `Scanner~/` (source, no tests)
 - Sync script (`scripts/sync-plugin.sh`) wired to CI
 
 **CI workflows:**
@@ -2046,10 +2046,11 @@ Hades version progresses with each phase:
 - Phase 7 complete (friends-and-family): v0.9.0 ✅ *(same version — no new features, only distribution prep)*
 - Phase 8 complete (first-run reliability): v0.9.1 ✅
 - Phase 9 complete (graph coverage): v0.9.5 ✅
+- Phase 10 in progress (public release): v0.9.9
 - Phase 10 complete (public release): **v1.0.0**
 - Phase 11: v1.x and v2.x as evolution dictates
 
-Versions 0.1.0–0.6.0 are internal milestones. v0.9.0–0.9.5 are external-tester betas incorporating feedback. v1.0.0 is the first publicly announced release. Both `package.json` (UPM) and `plugin.json` (Claude Code) track these tags in lockstep.
+Versions 0.1.0–0.6.0 are internal milestones. v0.9.0–0.9.9 are external-tester betas incorporating feedback. v1.0.0 is the first publicly announced release. Both `package.json` (UPM) and `plugin.json` (Claude Code) track these tags in lockstep.
 
 ### 14.5 Anthropic plugin marketplace submission
 

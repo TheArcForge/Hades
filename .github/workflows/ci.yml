@@ -30,3 +30,23 @@ jobs:
       - name: Build
         working-directory: Bridge~
         run: npm run build
+
+  scanner-tests:
+    name: Scanner (Node.js) Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "Scanner~/package-lock.json"
+
+      - name: Install dependencies
+        working-directory: Scanner~
+        run: npm ci
+
+      - name: Run tests
+        working-directory: Scanner~
+        run: node --experimental-vm-modules node_modules/.bin/jest --testPathIgnorePatterns '/tests/integration\.test\.js$' && node --experimental-vm-modules node_modules/.bin/jest tests/integration.test.js

@@ -18,7 +18,7 @@ Hades is delivered as a single repository that is simultaneously a Unity Package
 
 ### 1.1 Skills (22)
 
-Skills are markdown files in `Skills~/` that activate based on context matching. They provide Unity-specific decision frameworks, code patterns, and architectural guidance.
+Skills are markdown files in `skills/` that activate based on context matching. They provide Unity-specific decision frameworks, code patterns, and architectural guidance.
 
 **Architecture decision skills (6):**
 - `unity-architect` — top-level routing: components, data, scenes, prefabs, performance
@@ -56,7 +56,7 @@ Skills are installed at user scope — available across all Unity projects on th
 
 ### 1.2 Slash commands (6)
 
-Commands in `Commands~/` are user-invocable slash commands:
+Commands in `commands/` are user-invocable slash commands:
 
 - `/hades:status` — current Hades state: graph version, trace count, memory file count
 - `/hades:rebuild-graph` — triggers a full graph rebuild
@@ -80,13 +80,13 @@ Hades/                          (repository root = Unity Package root)
 ├── .claude-plugin/
 │   └── plugin.json             # Plugin manifest
 ├── .mcp.json                   # MCP server declaration (launcher)
-├── Skills~/                    # 22 skills (tilde-suffix: invisible to Unity)
+├── skills/                     # 22 skills
 │   ├── unity-architect/
 │   │   └── SKILL.md
 │   ├── component-design/
 │   │   └── SKILL.md
 │   └── ... (20 more)
-├── Commands~/                  # 6 slash commands (tilde-suffix: invisible to Unity)
+├── commands/                   # 6 slash commands
 │   ├── hades-status.md
 │   ├── hades-rebuild-graph.md
 │   └── ... (4 more)
@@ -147,7 +147,7 @@ Hades/                          (repository root = Unity Package root)
 
 ### 2.2 Tilde-suffix convention
 
-`Skills~/`, `Commands~/`, `Bridge~/`, and `Scanner~/` use Unity's tilde-suffix convention. Unity's asset pipeline ignores directories ending in `~`, but they remain tracked in git and accessible to Claude Code's plugin system. This allows a single repository to serve both ecosystems without asset import conflicts.
+`skills/` and `commands/` now use standard plugin directory names (no tilde) — Claude Code auto-discovers them by convention. `Bridge~/` and `Scanner~/` still use the tilde suffix because they contain JavaScript/TypeScript source that would trigger Unity import warnings if exposed to the asset pipeline.
 
 ### 2.3 Plugin manifest
 
@@ -155,16 +155,19 @@ Hades/                          (repository root = Unity Package root)
 
 ```json
 {
-  "name": "arcforge-hades",
-  "version": "0.9.5",
-  "description": "Unity-aware AI infrastructure for Claude Code: project knowledge graph, observability, memory, and 22 skills.",
-  "author": { "name": "ArcForge" },
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "hades",
+  "displayName": "Hades",
+  "version": "0.9.9",
+  "description": "Unity-aware AI infrastructure for Claude Code: project knowledge graph, observability, memory, 89 MCP tools, and 22 skills.",
+  "author": {
+    "name": "ArcForge",
+    "url": "https://github.com/TheArcForge"
+  },
   "license": "MIT",
   "homepage": "https://github.com/TheArcForge/Hades",
   "repository": "https://github.com/TheArcForge/Hades",
-  "keywords": ["unity", "game-development", "mcp", "knowledge-graph"],
-  "skills": "./Skills~/",
-  "commands": "./Commands~/"
+  "keywords": ["unity", "game-development", "mcp", "knowledge-graph"]
 }
 ```
 
@@ -335,10 +338,12 @@ This installs the C# Editor Package: Graph scanner, Charon observability, Asphod
 
 Two install methods:
 
-- **From GitHub (future/marketplace):**
+- **Marketplace (recommended):**
   ```
-  /plugin install hades@TheArcForge/Hades
+  /plugin marketplace add TheArcForge/hades-plugin
+  /plugin install hades
   ```
+  Persists across sessions — you only do this once.
 
 - **From local folder:**
   ```
@@ -442,8 +447,8 @@ Anthropic's marketplace may expect a repo containing only plugin files, not a fu
 arcforge/hades-plugin/
 ├── .claude-plugin/plugin.json
 ├── .mcp.json
-├── Skills~/
-├── Commands~/
+├── skills/
+├── commands/
 ├── Bridge~/
 ├── Scanner~/
 ├── CLAUDE.md
@@ -500,7 +505,7 @@ Future consideration: `plugin.json` could declare a `"minMcpVersion"` field. The
 3. Is the MCP server connected? Run `/mcp` — look for `hades` server status. If "failed", check `~/.arcforge/hades-hub/hub.json` — does it exist? Is the PID alive?
 
 **If Claude Code was launched from a different directory (e.g., another repo, home directory):**
-1. Is the plugin installed? Run `/plugin list` — look for `arcforge-hades`. Without the plugin, Claude Code has no way to discover or connect to the Hub from an unrelated directory. Run `/plugin install hades@TheArcForge/Hades` to fix.
+1. Is the plugin installed? Run `/plugin list` — look for `hades`. Without the plugin, Claude Code has no way to discover or connect to the Hub from an unrelated directory. Run `/plugin marketplace add TheArcForge/hades-plugin` then `/plugin install hades` to fix.
 2. Once the plugin is installed, follow checks 2–3 above.
 
 **If Unity is running but tools are empty:** the hub may not have matched your working directory to the Unity project. Run a tool to see the error message listing available instances, or launch Claude Code from within the Unity project directory.

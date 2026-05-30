@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    name: Release Plugin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "Bridge~/package-lock.json"
+
+      - name: Install and build Bridge
+        run: cd Bridge~ && npm ci && npm run build
+
+      - name: Sync plugin to output directory
+        run: bash scripts/sync-plugin.sh ./plugin-output
+
+      - name: Validate plugin output
+        run: |
+          echo "Validating plugin output..."
+
+          SKILL_COUNT=$(find ./plugin-output/skills -name "SKILL.md" | wc -l | tr -d ' ')
+          echo "Skills found: $SKILL_COUNT"
+          [ "$SKILL_COUNT" -eq 22 ] || { echo "FAIL: expected 22 skills, got $SKILL_COUNT"; exit 1; }
+
+          CMD_COUNT=$(ls ./plugin-output/commands/*.md 2>/dev/null | wc -l | tr -d ' ')
+          echo "Commands found: $CMD_COUNT"
+          [ "$CMD_COUNT" -eq 6 ] || { echo "FAIL: expected 6 commands, got $CMD_COUNT"; exit 1; }
+
+          python3 -c "import json; json.load(open('./plugin-output/.claude-plugin/plugin.json'))" || { echo "FAIL: plugin.json is not valid JSON"; exit 1; }
+
+          METAS=$(find ./plugin-output -name "*.meta" -not -path "./.git/*" | wc -l | tr -d ' ')
+          [ "$METAS" -eq 0 ] || { echo "FAIL: found $METAS .meta files in plugin output"; exit 1; }
+
+          CS=$(find ./plugin-output -name "*.cs" -not -path "./.git/*" | wc -l | tr -d ' ')
+          [ "$CS" -eq 0 ] || { echo "FAIL: found $CS .cs files in plugin output"; exit 1; }
+
+          NM=$(find ./plugin-output -name "node_modules" -type d -not -path "./.git/*" | wc -l | tr -d ' ')
+          [ "$NM" -eq 0 ] || { echo "FAIL: found node_modules in plugin output"; exit 1; }
+
+          test -f ./plugin-output/Bridge~/launcher/dist/index.js || { echo "FAIL: Bridge launcher dist missing"; exit 1; }
+          test -f ./plugin-output/Bridge~/hub/dist/index.js || { echo "FAIL: Bridge hub dist missing"; exit 1; }
+
+          echo "All validation checks passed."
+
+      - name: Clone plugin repo
+        run: |
+          git clone https://x-access-token:${{ secrets.PLUGIN_REPO_TOKEN }}@github.com/TheArcForge/hades-plugin.git plugin-clone
+
+      - name: Copy plugin output into clone
+        run: |
+          rsync -a --delete \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.gitignore' \
+            --exclude='.gitattributes' \
+            --exclude='CONTRIBUTING.md' \
+            --exclude='.claude-plugin/marketplace.json' \
+            ./plugin-output/ ./plugin-clone/
+
+      - name: Update marketplace version
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          cd plugin-clone
+          if [ -f .claude-plugin/marketplace.json ]; then
+            python3 -c "
+import json, sys
+with open('.claude-plugin/marketplace.json', 'r') as f:
+    data = json.load(f)
+for p in data.get('plugins', []):
+    p['version'] = '$VERSION'
+with open('.claude-plugin/marketplace.json', 'w') as f:
+    json.dump(data, f, indent=2)
+    f.write('\n')
+"
+            echo "Updated marketplace.json version to $VERSION"
+          fi
+
+      - name: Commit and tag
+        run: |
+          TAG="${{ github.ref_name }}"
+          cd plugin-clone
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Release $TAG — synced from TheArcForge/Hades"
+          git tag "$TAG"
+
+      - name: Push to plugin repo
+        run: |
+          cd plugin-clone
+          git remote set-url origin https://x-access-token:${{ secrets.PLUGIN_REPO_TOKEN }}@github.com/TheArcForge/hades-plugin.git
+          git push origin main --tags
