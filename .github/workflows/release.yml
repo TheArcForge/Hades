@@ -4,6 +4,16 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run — build, sync, validate, and auth-check the push without updating the plugin repo"
+        type: boolean
+        default: true
+      version:
+        description: "Version to simulate (no leading v), e.g. 1.0.0-rc.1"
+        required: false
+        default: "0.0.0-dryrun"
 
 jobs:
   release:
@@ -11,6 +21,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Determine release parameters
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "TAG=v${{ inputs.version }}" >> "$GITHUB_ENV"
+            echo "DRY_RUN=${{ inputs.dry_run }}" >> "$GITHUB_ENV"
+          else
+            echo "TAG=${{ github.ref_name }}" >> "$GITHUB_ENV"
+            echo "DRY_RUN=false" >> "$GITHUB_ENV"
+          fi
+          echo "Triggered by: ${{ github.event_name }}"
 
       - uses: actions/setup-node@v4
         with:
@@ -69,7 +90,6 @@ jobs:
 
       - name: Update marketplace version
         run: |
-          TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
           cd plugin-clone
           if [ -f .claude-plugin/marketplace.json ]; then
@@ -81,16 +101,21 @@ jobs:
 
       - name: Commit and tag
         run: |
-          TAG="${{ github.ref_name }}"
           cd plugin-clone
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "Release $TAG — synced from TheArcForge/Hades"
-          git tag "$TAG"
+          git commit -m "Release $TAG — synced from TheArcForge/Hades" || echo "No changes to commit"
+          git tag -f "$TAG"
 
       - name: Push to plugin repo
         run: |
           cd plugin-clone
           git remote set-url origin https://x-access-token:${{ secrets.PLUGIN_REPO_TOKEN }}@github.com/TheArcForge/hades-plugin.git
-          git push origin main --tags
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "DRY RUN — authenticating with the plugin repo and validating the push without updating any refs:"
+            git push --dry-run origin main --tags
+            echo "Dry run complete. No commits or tags were pushed to the plugin repo."
+          else
+            git push origin main --tags
+          fi
