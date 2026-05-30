@@ -33,12 +33,16 @@ Thumbs.db
 *.swp
 *.swo
 
-# Node
+# Node — dependencies are never committed
 Bridge~/node_modules/
 Bridge~/hub/node_modules/
-Bridge~/dist/
 Scanner~/node_modules/
 Dashboard~/node_modules/
+
+# Note: compiled output IS committed on purpose (shipped prebuilt, zero native deps):
+#   Bridge~/launcher/dist, Bridge~/hub/dist  -> consumed by the Claude Code plugin
+#   Dashboard~/dist                          -> served by the Unity Editor at runtime
+# Scanner~ ships as source (native tree-sitter deps are built per-platform via npm install).
 
 # Hades runtime artifacts (machine-specific)
 .arcforge/graph.db
