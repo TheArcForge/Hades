@@ -73,16 +73,9 @@ jobs:
           VERSION="${TAG#v}"
           cd plugin-clone
           if [ -f .claude-plugin/marketplace.json ]; then
-            python3 -c "
-import json, sys
-with open('.claude-plugin/marketplace.json', 'r') as f:
-    data = json.load(f)
-for p in data.get('plugins', []):
-    p['version'] = '$VERSION'
-with open('.claude-plugin/marketplace.json', 'w') as f:
-    json.dump(data, f, indent=2)
-    f.write('\n')
-"
+            tmp=$(mktemp)
+            jq --arg v "$VERSION" '.plugins |= map(.version = $v)' .claude-plugin/marketplace.json > "$tmp"
+            mv "$tmp" .claude-plugin/marketplace.json
             echo "Updated marketplace.json version to $VERSION"
           fi
 
