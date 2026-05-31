@@ -21,6 +21,27 @@ Hades lets your agent **know and analyze**. When it asks "what references `Playe
 | **89 MCP Tools** | 21 graph/charon/memory tools + 68 editor-action tools (scenes, components, prefabs, materials, animation, assets). |
 | **6 Commands** | `/hades:status`, `/hades:rebuild-graph`, `/hades:show-traces`, `/hades:validate-memory`, `/hades:show-proposals`, `/hades:export-traces` |
 
+### How the pieces fit together
+
+```mermaid
+flowchart TD
+    Agent["AI Agent<br/>(Claude Code)"]
+    Agent <-->|"89 MCP tools (via Bridge)"| Hades
+
+    subgraph Hades["Hades — inside the Unity Editor"]
+        Graph["Graph<br/>project knowledge graph"]
+        Asphodel["Asphodel<br/>persistent memory"]
+        Charon["Charon<br/>observability"]
+    end
+
+    Graph -->|"indexes"| Unity["Unity Project<br/>scenes · prefabs · scripts · assets"]
+    Asphodel -->|"stored as"| Mem[".arcforge/memory/*.md"]
+    Graph -.->|"traced by"| Charon
+    Asphodel -.->|"traced by"| Charon
+```
+
+Your agent talks to Hades through the **89 MCP tools** (carried over the Bridge launcher and hub). Inside the Unity Editor, **Graph** indexes your project's structure, **Asphodel** persists project memory as version-controlled markdown, and **Charon** traces every operation so nothing is hidden.
+
 ## See it in action
 
 Open Claude Code from your Unity project directory and ask:
