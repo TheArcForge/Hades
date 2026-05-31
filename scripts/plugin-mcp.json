@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "hades": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/Bridge~/launcher/dist/index.js"]
+    }
+  }
+}

@@ -32,9 +32,10 @@ if [[ -d "$TARGET" ]]; then
 fi
 mkdir -p "$TARGET"
 
-# Plugin manifest and MCP config
+# Plugin manifest and MCP config (.mcp.json from a tracked template, not the
+# gitignored machine-specific runtime file at the repo root)
 cp -R "$REPO_ROOT/.claude-plugin" "$TARGET/"
-cp "$REPO_ROOT/.mcp.json" "$TARGET/"
+cp "$REPO_ROOT/scripts/plugin-mcp.json" "$TARGET/.mcp.json"
 
 # Restore plugin-repo-only files
 if [[ -n "$PRESERVE_DIR" ]]; then
