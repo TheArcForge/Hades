@@ -1,8 +1,8 @@
 # Hades — Roadmap Document
 
-**Version:** 1.4
-**Status:** Active development — Phase 10 in progress (public release v1.0)
-**Last updated:** 2026-05-29
+**Version:** 1.5
+**Status:** Active development — Phase 9.5 (field-report hardening, v1.0 blockers) gating Phase 10 public release
+**Last updated:** 2026-06-01
 **Companion to:** Vision document, Architecture document, Plugin document
 
 ---
@@ -41,7 +41,7 @@ Concretely, this means:
 
 ### 1.3 Single ship event at the end
 
-Hades is shipped publicly as a complete product after Phase 7 (the pre-prod to prod phase). Phases 0-6 are internal milestones with their own version tags but no public announcements, marketing, or release events. Phase 6 produces a v0.9 external tester beta; Phase 7 is the v1.0 public release. Phase 8 is post-launch evolution.
+Hades is shipped publicly as a complete product after Phase 7 (the pre-prod to prod phase). Phases 0-6 are internal milestones with their own version tags but no public announcements, marketing, or release events. Phase 6 produces a v0.9 beta; Phase 7 is the v1.0 public release. Phase 8 is post-launch evolution.
 
 The reason: an integrated three-layer product is what differentiates Hades. Shipping just the Graph (after Phase 1) would position Hades as "another knowledge graph for Unity" — competitive with existing tools but not differentiated. Shipping just Graph + Charon would position it as "Unity tooling with observability" — interesting but not the full vision. The complete value proposition requires all three layers + skills, which materializes after Phase 5, and is polished and validated through Phases 6 and 7.
 
@@ -983,7 +983,7 @@ The agent should:
 **Implicitly verifies:** Phase 1 (graph queries for AudioSource/AudioMixer), Phase 2 (traces capture skill activation), Phase 3 (memory read for conventions), Phase 4 (skill correctly integrates all layers).
 **Pass criteria:** the audio architecture aligns with the project's existing patterns (SO event channels, existing AudioSources acknowledged). Recommendation is recognizable as project-aware, not generic.
 
-**Actual result (2026-05-13):** Unbiased agent (no hints about Hades) made 20 tool calls, 13 of which were Hades MCP tools (`get_project_summary`, `search_by_name` ×8, `get_scene_summary`, `analyze_render_pipeline`). Correctly identified: URP project, no audio infrastructure, no gameplay scripts yet. Asked 5 targeted clarifying questions (genre, audio categories, scale, built-in vs middleware, scope) before recommending. Agent was project-aware but the test project (Hades-Unity-Client) is a dev sandbox, not a game — so the "scattered AudioSources + SO event channels" scenario couldn't materialize. Skill activation not testable via subagent dispatch (skills auto-activate in Claude Code's plugin system).
+**Actual result (2026-05-13):** Unbiased agent (no hints about Hades) made 20 tool calls, 13 of which were Hades MCP tools (`get_project_summary`, `search_by_name` ×8, `get_scene_summary`, `analyze_render_pipeline`). Correctly identified: URP project, no audio infrastructure, no gameplay scripts yet. Asked 5 targeted clarifying questions (genre, audio categories, scale, built-in vs middleware, scope) before recommending. Agent was project-aware but the test project (the dev sandbox) is not a game — so the "scattered AudioSources + SO event channels" scenario couldn't materialize. Skill activation not testable via subagent dispatch (skills auto-activate in Claude Code's plugin system).
 
 **Scenario 11: Architecture decision support** ✅ (correct behavior, but test project doesn't fit scenario premise)
 
@@ -1003,7 +1003,7 @@ The agent should:
 **Implicitly verifies:** All phases working together.
 **Pass criteria:** the recommendation references the project's actual constraints (mobile, performance) and clean-slate state, not just a generic comparison.
 
-**Actual result (2026-05-13):** Unbiased agent (no hints about Hades) made 3 tool calls (basic file reading, no Hades MCP tools). Correctly pushed back on the premise: "Neither — Hades is an AI infrastructure plugin, not a multiplayer game." This is the right answer for this project. The test project (Hades-Unity-Client) is a dev sandbox; the networking decision framework couldn't be exercised because multiplayer doesn't apply. Need a real game project to fully validate this scenario.
+**Actual result (2026-05-13):** Unbiased agent (no hints about Hades) made 3 tool calls (basic file reading, no Hades MCP tools). Correctly pushed back on the premise: "Neither — Hades is an AI infrastructure plugin, not a multiplayer game." This is the right answer for this project. The test project is a dev sandbox; the networking decision framework couldn't be exercised because multiplayer doesn't apply. Need a real game project to fully validate this scenario.
 
 **Scenario 12: Code review with severity tiering** ✅
 
@@ -1033,7 +1033,7 @@ Issues encountered during Phase 4 development, documented for future reference:
 
 5. **Happy Path testing methodology required correction.** The first round of Happy Path agents were given full context about Hades tools and skills, effectively handing them the answer sheet. This tested whether agents *could* use the tools, not whether they would *discover* them organically. Re-dispatched with truly unbiased prompts (only the developer's question and project path). The unbiased results are more informative: 2 of 3 agents spontaneously discovered and used Hades MCP tools.
 
-6. **Test project limits domain skill validation.** Hades-Unity-Client is a development sandbox for the Hades package, not a game. Scenarios 10 (audio) and 11 (networking) couldn't fully exercise their respective skill decision frameworks because there's no gameplay context (no AudioSources, no player controllers, no game managers). The audio agent correctly asked clarifying questions; the networking agent correctly pushed back on the premise. Both are valid outcomes for this project, but neither demonstrates the full "project-aware recommendation" flow. Full validation of domain skills requires testing against a real game project.
+6. **Test project limits domain skill validation.** The test project is a development sandbox for the Hades package, not a game. Scenarios 10 (audio) and 11 (networking) couldn't fully exercise their respective skill decision frameworks because there's no gameplay context (no AudioSources, no player controllers, no game managers). The audio agent correctly asked clarifying questions; the networking agent correctly pushed back on the premise. Both are valid outcomes for this project, but neither demonstrates the full "project-aware recommendation" flow. Full validation of domain skills requires testing against a real game project.
 
 7. **Skill activation not testable via subagent dispatch.** Skills auto-activate in Claude Code's plugin system when the user's task matches the SKILL.md `description` field. Subagent dispatch (used for Happy Path testing) doesn't have this mechanism — subagents see MCP tools but not skills. This means Happy Path testing validated MCP tool discovery and project-awareness, but not skill activation or skill-guided workflows. Skill activation should be validated manually in a real Claude Code session.
 
@@ -1316,7 +1316,7 @@ All prior phase tests pass. Phase 5 adds substantial new tests but should not br
 
 ### Bridge to next phase
 
-Phase 5 delivers the core product. Phase 6 resolves accumulated polish items — documentation drift, validation gaps, bug fixes, performance benchmarking — and produces a v0.9.0 beta suitable for external testers. Phase 7 then takes v0.9 to v1.0 public release.
+Phase 5 delivers the core product. Phase 6 resolves accumulated polish items — documentation drift, validation gaps, bug fixes, performance benchmarking — and produces a v0.9.0 beta suitable for early external users. Phase 7 then takes v0.9 to v1.0 public release.
 
 ---
 
@@ -1326,7 +1326,7 @@ Phase 5 delivers the core product. Phase 6 resolves accumulated polish items —
 
 Phase 6 takes the functionally complete Phase 5 product and resolves every known rough edge standing between "works for the author" and "works for an external developer." This phase does not add features; it fixes documentation drift, validates the Hub end-to-end, runs skipped acceptance scenarios, benchmarks performance at scale, writes user-facing guides, and synchronizes version numbers.
 
-The target state after Phase 6: a fully functional v0.9.0 beta that an external developer can install and use without hand-holding. This is the external tester gate.
+The target state after Phase 6: a fully functional v0.9.0 beta that an external developer can install and use without hand-holding. This is the beta gate.
 
 ### Done criteria
 
@@ -1392,7 +1392,7 @@ The target state after Phase 6: a fully functional v0.9.0 beta that an external 
 *Mitigation:* Architecture §2.6 has explicit targets. If exceeded, optimize hot paths identified in Charon traces. Acceptable degradation is documented; unacceptable degradation blocks the phase.
 
 **Risk: Documentation refresh takes longer than expected.** Quality external-facing docs are real work.
-*Mitigation:* Focus on the README and troubleshooting guide — the two documents an external tester needs on day one. Architecture-level docs can be polished incrementally.
+*Mitigation:* Focus on the README and troubleshooting guide — the two documents an external user needs on day one. Architecture-level docs can be polished incrementally.
 
 ### Implementation hints
 
@@ -1454,7 +1454,7 @@ Phase 6 produces a validated v0.9.0 beta. Phase 7 takes this to v1.0 public rele
 
 ### Strategic intent
 
-Phase 7 prepared Hades for its first external testers. This phase handled plugin distribution, agent routing (ensuring agents use Hades MCP tools instead of defaulting to bash), tester documentation, and repository cleanup.
+Phase 7 prepared Hades for its first external users. This phase handled plugin distribution, agent routing (ensuring agents use Hades MCP tools instead of defaulting to bash), onboarding documentation, and repository cleanup.
 
 Phase 7 was validated by deploying to an external developer working on a large-scale real Unity project. The feedback confirmed the core thesis: Hades's typed Unity-asset navigation is materially better than grep, and the graph delivers real value. It also surfaced four reproducible bugs and a set of agent UX gaps — these drive Phases 8 and 9.
 
@@ -1466,12 +1466,12 @@ Phase 7 was validated by deploying to an external developer working on a large-s
   - MCP `instructions` field in initialize response (universal, both Claude Code and Desktop)
   - `CLAUDE.md` auto-generated to Unity project root on server start (Claude Code)
   - 22 skills copied to `~/.claude/skills/hades-*/` on server start (Claude Desktop)
-- [x] Tester documentation: `Documentation/getting-started.md` (full walkthrough), `scripts/plugin-README.md`, `scripts/plugin-CLAUDE.md`
+- [x] User documentation: `Documentation/getting-started.md` (full walkthrough), `scripts/plugin-README.md`, `scripts/plugin-CLAUDE.md`
 - [x] Main `README.md` updated with local install instructions (`--plugin-dir`)
 - [x] Repo cleanup: removed 49MB stale `Bridge~/hub/node_modules/` and 61MB `Scanner~/node_modules/` from git tracking, updated `.gitignore`
 - [x] Dry-run validation: plugin install via `--plugin-dir`, MCP tools working, agent routing confirmed (agent says "I'll query the Hades knowledge graph" instead of using bash)
 - [x] All four documentation docs refreshed (Architecture, Roadmap, Plugin, Vision) to reflect current state
-- [x] External tester smoke-test completed on a large-scale real Unity project
+- [x] Field smoke-test completed on a large-scale real Unity project
 
 ### Scope: what was delivered
 
@@ -1479,13 +1479,13 @@ Phase 7 was validated by deploying to an external developer working on a large-s
 
 **Agent routing:** MCP `instructions` field in `MCPDispatcher.HandleInitialize()`, auto-generated `CLAUDE.md` at project root, skills copied to `~/.claude/skills/hades-*/` for Claude Desktop.
 
-**Tester documentation:** `Documentation/getting-started.md` (full walkthrough), `scripts/plugin-README.md`, `scripts/plugin-CLAUDE.md`.
+**User documentation:** `Documentation/getting-started.md` (full walkthrough), `scripts/plugin-README.md`, `scripts/plugin-CLAUDE.md`.
 
 **Repo cleanup:** Removed 110MB of stale `node_modules/` from git tracking.
 
-### Phase 7 validation results (2026-05-27)
+### Phase 7 validation results
 
-First external tester feedback on a large-scale production project (10k+ assets, 13k+ C# types). Key findings:
+First field feedback on a large-scale production project (on the order of 10k+ assets, 13k+ C# types). Key findings:
 
 **What worked well:**
 - `search_by_name` — fast, accurate, typed results. Standout tool.
@@ -1515,7 +1515,7 @@ Phase 7 validated that Hades works on real projects and identified the gaps stan
 
 ### Strategic intent
 
-Phase 8 addresses every bug and UX issue that hits during install and first use. The external tester feedback (Phase 7) revealed a cross-cutting pattern: **operations that fail or partially complete report success or are silenced**, leaving users to investigate manually. This is unacceptable for first-run experience — the highest-stakes window for building trust.
+Phase 8 addresses every bug and UX issue that hits during install and first use. The field feedback (Phase 7) revealed a cross-cutting pattern: **operations that fail or partially complete report success or are silenced**, leaving users to investigate manually. This is unacceptable for first-run experience — the highest-stakes window for building trust.
 
 All four bugs share the "looks like failure" anti-pattern. The fixes are individually small but collectively transform the install path from "works if you know the workarounds" to "works on first try."
 
@@ -1530,7 +1530,7 @@ This phase also addresses the Hub/Unity recovery gap (one-shot registration with
 - [x] **Hub recovery:** Unity re-registers with the Hub when `hub.json` changes (FileSystemWatcher or re-Register on failed heartbeat), eliminating the one-heartbeat-interval dead-air gap
 - [x] **Build observability:** Each graph build step distinguishes *succeeded* / *expected-unresolvable* / *actually broken* in its output; exit codes from subprocesses are not overloaded with environmental errors
 - [x] All fixes have automated tests
-- [ ] Clean install tested end-to-end on macOS (the tester's platform) — all four bugs confirmed resolved
+- [ ] Clean install tested end-to-end on macOS (the field platform) — all four bugs confirmed resolved
 
 ### Scope: what's in
 
@@ -1577,7 +1577,7 @@ This phase also addresses the Hub/Unity recovery gap (one-shot registration with
 
 ### Dependencies
 
-- Phase 7 complete (external tester feedback received)
+- Phase 7 complete (field feedback received)
 
 ### Risk assessment
 
@@ -1593,7 +1593,7 @@ This phase also addresses the Hub/Unity recovery gap (one-shot registration with
 ### Implementation hints
 
 - Bug 2: The probe for `node_modules/better-sqlite3/package.json` is more robust than `Directory.Exists` — it catches partial installs, empty directories, and version mismatches.
-- Bug 3: The key insight from the tester is that Claude Code's *init timeout* is shorter than its *per-request timeout*. Answering `initialize` from the launcher eliminates the race entirely — the Hub only matters for `tools/list` and `tools/call`, which have 30s per-request budgets.
+- Bug 3: The key insight from the field is that Claude Code's *init timeout* is shorter than its *per-request timeout*. Answering `initialize` from the launcher eliminates the race entirely — the Hub only matters for `tools/list` and `tools/call`, which have 30s per-request budgets.
 - Bug 4: `ScannerRegistry` already knows which extensions it covers. Use it to classify pending edges: if the target GUID resolves to a `.meta` whose main asset extension isn't in any scanner's `SupportedAssetType`, it's permanently unresolvable.
 - Hub recovery: `HubClient` already reads `hub.json` on every heartbeat. Comparing `(pid, port)` from the file against the last-known values is a 2-line change that detects a Hub restart.
 
@@ -1652,7 +1652,7 @@ Issues and decisions from Phase 8 development, documented for future reference:
 
 ### Bridge to next phase
 
-Phase 8 makes the install path robust. Phase 9 expands the graph's coverage to close the gaps the external tester identified — unscanned asset types and C# code-level references.
+Phase 8 makes the install path robust. Phase 9 expands the graph's coverage to close the gaps field testing identified — unscanned asset types and C# code-level references.
 
 ---
 
@@ -1660,7 +1660,7 @@ Phase 8 makes the install path robust. Phase 9 expands the graph's coverage to c
 
 ### Strategic intent
 
-Phase 9 addresses the two biggest functional gaps the external tester identified: **unscanned asset types** (textures, meshes, animations, audio, fonts) leaving 67k dead-end edges, and **no C# code-level reference graph** making `find_references_to` useless on scripts. These are the gaps that limit Hades from "good Unity asset navigator" to "complete project understanding tool."
+Phase 9 addresses the two biggest functional gaps field testing identified: **unscanned asset types** (textures, meshes, animations, audio, fonts) leaving 67k dead-end edges, and **no C# code-level reference graph** making `find_references_to` useless on scripts. These are the gaps that limit Hades from "good Unity asset navigator" to "complete project understanding tool."
 
 The C# reference graph is the single highest-impact improvement identified in external testing. When a developer asks "where is this class used?", the answer is almost always in other C# files — and today Hades returns 0 results. Solving this transforms `find_references_to` from a prefab-only tool into the universal "what depends on this?" query the Vision document promises.
 
@@ -1832,6 +1832,208 @@ Issues and decisions from Phase 9 development, documented for future reference:
 ### Bridge to next phase
 
 Phase 9 delivers a complete graph that covers all asset types and C# code-level references. Phase 10 handles the public release: repo split, CI, marketplace submission, version bump to v1.0.0.
+
+---
+
+## 11.5 Phase 9.5: Field-report hardening (v1.0 blockers)
+
+### Strategic intent
+
+Phase 9.5 exists because field testing of Hades 0.9.9 against a large production project (on the order of **~600k nodes / ~660k edges**, ~40-minute build) produced a field report that proves the headline capabilities of Phases 8 and 9 **do not function on a normally-launched (Finder/Dock) Unity Editor.**
+
+This is corrective, not net-new. The same gaps were flagged in Phase 7 and routed to Phases 8 and 9:
+
+- **Phase 8** treated the *symptom* of the scanner's `npm install` failing, but missed the *root cause*: `ProcessResolver.Run` never propagates `PATH` to child processes. Under Unity's GUI-minimal environment (Finder/Dock launch on macOS), npm's internal `#!/usr/bin/env node` lookup fails (`env: node: No such file or directory`), so the C# / meta scanner, the package scan, **and** the Charon dashboard all silently fail to install. The reason we never caught it: we launch Unity from a terminal, which leaks the full login-shell `PATH`.
+- **Phase 9** built the tree-sitter C# reference graph and the MetaScanner, but neither runs on a real machine because of that same PATH bug — compounded by a second blocker: on **Node 25**, tree-sitter / better-sqlite3 native addons fail to compile because V8's bundled headers now require C++20 while the bindings default to C++17 (`CXXFLAGS="-std=c++20"` fixes it).
+
+The net effect is that the v1.0 README markets capability ("Where do we use `PlayerController`?", "scenes, prefabs, **scripts**, and dependencies") that returns a confident, wrong `0` in the field. **This phase is the true v1.0 gate.** Field testing root-caused and fix-verified the repair end-to-end (reachable `node` + `CXXFLAGS=-std=c++20 npm install` → `ScriptType` nodes with paths, `Script` nodes, pending `code_references`, and `Texture` nodes all appeared as expected), so the path forward is known.
+
+A secondary theme runs through the report and is the team's own standing principle: **operations that fail or partially complete must not report success or a confident empty result.** Several tools (`find_references_to`, `query_graph` `where`, `find_orphan_scripts`) silently mislead in the degraded state — this phase closes those.
+
+The user also requested that, while addressing the post-rebuild WAL-checkpoint freeze, the phase **investigate general Graph performance** for speed insights (the ~40-minute build, the single giant scan transaction, checkpoint cadence, index usage, and the `trace_dependencies` wildcard-scan latency carried over from Phase 6).
+
+### Done criteria
+
+- [x] **PATH propagation (root cause):** `ProcessResolver.Run` injects the resolved tool directory **and** node's directory into the child process `PATH`, so every `ProcessResolver.Run` call site (graph scanner, package scan, Charon dashboard) resolves `node` under Unity's GUI-minimal PATH. Verified by launching Unity from Finder/Dock (not a terminal) and confirming a clean scanner install + C# nodes present. *(Code complete; field re-run user-side.)*
+- [x] **Binary resolution hardened:** the PATH propagation removes the `env node` shebang failure at its source (node's dir is on the child PATH), so no separate `node <npm-cli.js>` invocation is needed. The resolver additionally probes common install locations (`/opt/homebrew/bin`, `/usr/local/bin`, `~/.nvm/versions/node/*/bin`, Volta/fnm) as a fallback and resolves via the user's actual `$SHELL` (POSIX shells) rather than a hardcoded `bash -lc`.
+- [x] **Node 25 native build:** the scanner / dashboard `npm install` invocation forces `CXXFLAGS=-std=c++20` (CXX only — `CFLAGS` breaks tree-sitter's C sources) via `ProcessResolver.NativeBuildEnv`, so native addons compile out of the box on current Node releases. Build node and run node are the same binary (ABI / `NODE_MODULE_VERSION` pinning).
+- [x] **No silent-wrong-answers when degraded:** when the build log records `DEGRADED: C# nodes missing` (persisted as `csharp_scan_status` metadata), `find_references_to` / `trace_dependencies` on a `.cs` target return an explicit "C# scanning unavailable" status instead of `reference_count: 0` / "Asset not found".
+- [x] **`query_graph` `where` honored:** the `where` clause is wired into the executor for `name`/`path` exact filters; queries containing an unsupported `where` key are rejected rather than silently ignored; `returned_count` reflects the actual filtered/returned set, not the unfiltered table total.
+- [x] **`find_orphan_scripts` made safe:** excludes Unity builtins (empty path) and non-removable package types (non-`Assets/` path); early-returns an "unavailable" status when the build is in `DEGRADED: C# nodes missing`, so it can never imply a builtin is "unused and safe to remove."
+- [x] **WAL-checkpoint freeze fixed:** an explicit `PRAGMA wal_checkpoint(TRUNCATE)` (`GraphDatabase.Checkpoint()`) runs **under** the progress bar ("Finalizing (checkpointing database)…") before `ClearProgressBar()` in both `RebuildParallel` and `ScanPackages`; trailing metadata writes (`ClearCurrentOperation`) are ordered ahead of the checkpoint. *(Asset-scan transaction left as a single transaction by design — see implementation notes: the explicit final checkpoint resolves the freeze, and batching would trade rebuild atomicity for only a lower transient WAL peak.)*
+- [x] **`traces.db` bounded:** a configurable size cap (`CharonMaxSizeMb`, default 500) trims oldest traces (`CharonDatabase.EnforceSizeLimit`) and reclaims space via `VACUUM` + `wal_checkpoint(TRUNCATE)` after a large prune; `Flush()` wrapped in a single transaction; the size check runs at startup (off the hot path), not in `TickFlush`. Spans cascade via existing `ON DELETE CASCADE`.
+- [x] **Graph performance investigation:** findings recorded in the implementation notes below. Dominant build cost is the main-thread scene/prefab scan (field log: ≈0.5s per asset across a few thousand assets), i.e. Unity parse + per-asset work — not SQLite/checkpoint. Low-risk DB win applied: `InsertNode`/`InsertEdge` now read the new rowid via the direct `SQLite3.LastInsertRowid(handle)` C call instead of a throwaway `SELECT last_insert_rowid()` statement (~1.25M fewer statements per full build). Deeper hot-path / parse-side work logged for Phase 11.
+- [x] **Reporting bugs fixed:** `get_project_summary.asset_coverage.indexed_types` is derived from actual node-type counts (no longer a fixed whitelist that returned `{}`), and a new `script_type_count` reports `ScriptType` nodes so `script_count: 0` (one node per `.cs` file) no longer reads as "no scripts" when builtin/scanned types exist. Long rebuilds now surface a structured `status: "busy"` (`reason: "rebuild_in_progress"`) to MCP clients instead of "No Unity instance found": a thread-safe `GraphBuilder.IsBusy` flag (mirrors `_status`) is read on the transport's background thread in `MCPServer.EnqueueAndWait`, which short-circuits with an immediate busy response rather than enqueuing a call that would stall behind the blocked main thread until the 30s timeout. `hades_rebuild_graph` no longer presents as a hard MCP timeout — it schedules the rebuild via `EditorApplication.delayCall` and returns `status: "rebuild_started"` immediately, so the response flushes before the main-thread block begins; clients poll `hades_status` to confirm completion.
+- [x] **`.meta` console spam resolved (author-side):** the loose asset files shipped without `.meta` (`skills/` ×22, `commands/` ×6, `Documentation/` ×1, `scripts/` ×1, top-level `CODE_OF_CONDUCT.md` / `CONTRIBUTING.md` / `SECURITY.md`) have committed `.meta` files generated by the package author in local/embedded mode. (User-owned step — completed by the user.)
+- [ ] **Field repro re-run:** on a real GUI-launched Unity, the report's reproduction calls (§7) pass — `find_references_to` on a `.cs` returns real C# references, content-asset nodes exist, `pending_edges` drops sharply, and no degraded warnings remain.
+
+### Scope: what's in
+
+- **`ProcessResolver` hardening** — PATH propagation to children, `node`-direct npm invocation, broadened binary discovery, `$SHELL`-aware resolution. Single fix benefits scanner, package scan, and dashboard.
+- **Scanner / dashboard build robustness** — `CXXFLAGS=-std=c++20` in the install invocation; ABI pinning of build vs run node; preflight diagnostic when native compilation fails.
+- **Degraded-state honesty** — explicit "C# scanning unavailable" statuses; `query_graph` `where` execution + correct `count`; `find_orphan_scripts` builtin exclusion + degraded gating.
+- **Finalization / DB lifecycle** — explicit checkpoint under progress bar, batched asset-scan transaction, ordered trailing writes.
+- **Charon retention** — `CharonMaxSizeMb` cap, space reclaim, transactional `Flush`, off-hot-path size checks, WAL truncation.
+- **Graph performance investigation** — profiling the large-project build, transaction/checkpoint cadence, query-plan/index review, `trace_dependencies` wildcard pre-scan; apply low-risk wins, document the rest.
+- **Reporting fixes** — `indexed_types`, `script_count`, busy/rebuilding status, rebuild-call timeout behavior.
+- **`.meta` generation (author-side, user-owned)** for the loose asset files.
+
+### Scope: what's out
+
+- Roslyn deep mode / method call graphs (Phase 11).
+- Closing the remaining static-analysis blind spots — `using` aliases, extension methods, implicit conversions, DI/reflection (Phase 11; tracked in Architecture §2.9).
+- The remaining ~33% asset-edge backlog beyond what the repaired scanner resolves (re-measure post-fix; residual is Phase 11).
+- A fully async/non-blocking rebuild (this phase improves the *finalization* freeze and surfaces a busy status; a background rebuild architecture is Phase 11).
+- Vendoring prebuilt native binaries for all Node ABIs (consider in Phase 11 if compile-on-install proves fragile).
+
+### Dependencies
+
+- Phase 9 complete (the C# reference graph and MetaScanner exist as code — this phase makes them actually run in the field).
+- A large, GUI-launched Unity project for validation (the field report's project, or an equivalent), since the bugs are invisible on small / terminal-launched setups.
+
+### Risk assessment
+
+**Risk: the PATH fix passes on the dev machine but fails on another environment.** The whole class of bug is environment-specific (Finder/Dock vs terminal, zsh vs bash, Homebrew vs nvm vs Volta).
+*Mitigation:* validate specifically from Finder/Dock launch; broaden binary discovery beyond `bash -lc`; add a clear preflight diagnostic so a failure is self-explaining rather than silent.
+
+**Risk: forcing `-std=c++20` breaks a different toolchain / older Node.** Older Node majors compiled fine at C++17.
+*Mitigation:* C++20 is backward-compatible for these sources; CXX-only (never CFLAGS). If a regression appears, gate the flag by detected Node major.
+
+**Risk: explicit `wal_checkpoint(TRUNCATE)` lengthens the visible finalize step.** Moving the stall under the progress bar trades a hidden freeze for a visible wait.
+*Mitigation:* this is the intended UX trade — a labeled "flushing database…" beats a silent multi-minute freeze. Transaction batching keeps the per-checkpoint cost bounded.
+
+**Risk: `traces.db` size-pruning / VACUUM is itself a heavy op that could stall.** VACUUM rewrites the whole file.
+*Mitigation:* run off the hot path (init + low-frequency timer), prefer `auto_vacuum=INCREMENTAL` set at creation; reserve full `VACUUM` for one-time large prunes under an indicator.
+
+**Risk: scope creep into a general perf rewrite.** "Investigate performance" can balloon.
+*Mitigation:* time-box to investigation + low-risk wins; everything structural is logged for Phase 11. The phase gate is correctness in the field, not peak throughput.
+
+### Implementation hints
+
+- **`ProcessResolver.Run` (Editor/Core/ProcessResolver.cs):** before `Process.Start`, set `psi.EnvironmentVariables["PATH"]` to `{resolved tool dir}{sep}{node dir}{sep}{inherited PATH}`. Resolve node via the same `FindExecutable("node")` the resolver already uses. This single change covers `GraphBuilder.RunNodeScanner`, `GraphBuilder.ScanPackages`, and `CharonDashboard.EnsureDashboardBuilt` (~:197).
+- **Build flag:** set `CXXFLAGS=-std=c++20` in the `ProcessStartInfo.EnvironmentVariables` for the `npm install` runs in `Scanner~` and `Dashboard~`. Do **not** set `CFLAGS`.
+- **Degraded signal:** the build log already records `DEGRADED: C# nodes missing` / `Package C# nodes missing`. Surface that state into the graph metadata so MCP tools can branch on it; `find_references_to` / `trace_dependencies` read it and return an explicit status.
+- **WAL finalize (GraphBuilder.cs ~:285 scan txn, ~:312 edge txn, ~:330-336 finally):** batch the asset scan (the older `RebuildGraph` path at ~:170-185 already batches by 50 — apply the same to the `RebuildParallel` path), run `wal_checkpoint(PASSIVE)` between batches, and a final `wal_checkpoint(TRUNCATE)` before `ClearProgressBar()`. Move `ClearCurrentOperation` (a `DELETE` that commits) ahead of the checkpoint.
+- **Charon (CharonEmitter.cs:79-145, CharonInitializer.cs:32/:42, CharonDatabase.cs:54, HadesSettings.cs:59):** wrap `Flush()` in one transaction; add a size-based prune alongside the existing time-based `PruneOlderThan`; expose `CharonMaxSizeMb`; spans cascade via existing `ON DELETE CASCADE`.
+- **Perf investigation:** start from the two transaction boundaries and the checkpoint cadence; use `EXPLAIN QUERY PLAN` on the hot tool queries; revisit the `trace_dependencies` wildcard `search_by_name('%')` pre-scan (Phase 6 note 4) that scanned 163k nodes for a 0ms traversal.
+- **`.meta` (author-side):** reference the package in local/embedded mode (`"com.arcforge.hades": "file:../path/to/Hades"`), open in Unity once to generate `.meta` for the loose files, commit them. (Alternative considered and rejected for now: relocating `skills/`/`commands/`/`Documentation/`/`scripts/` into `~`-suffixed folders would hide them from Unity but also from anyone browsing the package as assets.)
+
+### Tests added
+
+**Automated:**
+- `ProcessResolver`: child `PATH` includes resolved tool dir + node dir; given a minimal/`env -i`-style environment, a `node`-dependent command still resolves.
+- Degraded-state tools: with C# nodes absent, `find_references_to` on a `.cs` returns the "unavailable" status, not `0`.
+- `query_graph`: `where` filters the result set; `count` equals returned/filtered count; unsupported `where` is rejected rather than ignored.
+- `find_orphan_scripts`: builtin/package types never appear; tool is gated under degraded builds.
+- Charon retention: a `traces.db` seeded over `CharonMaxSizeMb` is trimmed and the file actually shrinks (page_count drops); `Flush` writes in a single transaction.
+
+**Performance benchmarks / manual:**
+- On a large GUI-launched project: clean scanner install from Finder/Dock launch; `find_references_to` on a `.cs` returns C# refs; content-asset nodes present; `pending_edges` drops sharply; post-rebuild finalize shows a labeled flush rather than a silent freeze.
+- Build-time profile captured before/after batching + checkpoint changes.
+
+### Happy Path scenarios
+
+**Scenario 22.5a: It just works from the Dock**
+
+A developer launches Unity the normal way (Finder/Dock, not a terminal) on a large project and installs Hades. The graph builds, the scanner installs cleanly on current Node, and asking *"Where do we use `BattleController`?"* returns the real C# references — not `0`.
+**Demonstrates:** the root-cause PATH + build fixes make the marketed capability real in the field.
+**Pass criteria:** no terminal-launch workaround, no manual `npm install`; results match a `grep -rl` ground truth.
+
+**Scenario 22.5b: Honest when blind**
+
+On a machine where C# scanning genuinely could not run, the agent asks `find_references_to` on a script and receives an explicit "C# scanning unavailable" status, not a confident `0`. The agent falls back to grep and says so.
+**Demonstrates:** the degraded state is surfaced, never silently wrong.
+**Pass criteria:** no tool returns a confident empty/zero result while the build log says `DEGRADED`.
+
+**Scenario 22.5c: No more mystery freeze**
+
+After a rebuild on a large project, instead of a multi-minute silent freeze, the editor shows "Finalizing — flushing database…" and returns promptly; `traces.db` stays under its cap across sessions.
+**Demonstrates:** the WAL-finalize + Charon retention fixes.
+**Pass criteria:** the post-rebuild stall is labeled and bounded; `traces.db` does not grow without limit.
+
+### Regression coverage
+
+All Phase 0–9 tests must continue to pass. The degraded-state and `query_graph` `where` changes alter tool *outputs* in failure / filtered cases — update any snapshot tests that previously encoded the silent-`0` or unfiltered-`count` behavior, since those encoded bugs.
+
+### Phase 9.5 implementation notes
+
+**Keystone fix — `ProcessResolver` PATH propagation.** The root cause of the
+field report's two biggest blockers was that `ProcessResolver.Run` started child
+processes with `UseShellExecute=false` but never set the child `PATH`. Under a
+Finder/Dock-launched Unity (GUI-minimal `PATH`), npm's `#!/usr/bin/env node`
+shebang then failed with `env: node: No such file or directory`. Terminal-launched
+Unity masked the bug by inheriting a login `PATH` — which is why Phases 8/9
+"fixes" never worked in the field. `ApplyChildPath` now prepends the resolved
+tool dir + node's dir + common install dirs ahead of the inherited `PATH`. One
+change fixes the graph scanner, package scan, and Charon dashboard (all route
+through `ProcessResolver.Run`). The Node 25 C++20 build fix piggybacks on the same
+call via `ProcessResolver.NativeBuildEnv` (`CXXFLAGS=-std=c++20`).
+
+**Degraded-state signal.** The build records C# scan success/failure into
+`graph_metadata` as `csharp_scan_status` (`ok`/`degraded`). `GraphQueryTools`
+reads it at query time so `.cs` queries return an explicit "unavailable" status
+instead of a confident `0` — the distinction the report called for.
+
+**WAL finalize freeze.** Confirmed exactly as the field report diagnosed (§8): with
+WAL + `synchronous=NORMAL` and no explicit checkpoint, the deferred WAL→DB flush
+landed on the next write *after* `ClearProgressBar()` — `ClearCurrentOperation`'s
+`DELETE`, or the next MCP read — as a silent multi-minute stall. Fix: reorder so
+`ClearCurrentOperation` runs first, then an explicit `wal_checkpoint(TRUNCATE)`
+**under** a "Finalizing (checkpointing database)…" bar, then clear the bar
+(`RebuildParallel` and `ScanPackages`).
+
+**Decision — asset-scan transaction left un-batched.** The field report also suggested
+batching the single giant asset-scan transaction (`RebuildParallel`) and running
+`wal_checkpoint(PASSIVE)` between batches. Evaluated and deferred: the explicit
+final `TRUNCATE` checkpoint already moves the freeze under visible progress, and a
+single transaction preserves rebuild atomicity (all-or-nothing) with one fsync at
+commit (cheap under WAL+NORMAL). Batching would only lower the *transient* WAL
+peak during the scan — not a reported problem — at the cost of atomicity and extra
+checkpoint passes. Logged for Phase 11 if peak WAL ever becomes an issue.
+
+**`traces.db` bounding.** Implemented per the field report's §8.1 spec:
+`CharonMaxSizeMb` (default 500), `EnforceSizeLimit` trims oldest traces (spans
+cascade) to ~90% of budget in one pass then `VACUUM` + `wal_checkpoint(TRUNCATE)`
+to actually reclaim disk, run at startup off the hot path. `CharonEmitter.Flush`
+is now a single transaction instead of dozens of per-trace commits.
+
+**Performance investigation (the "boost our speed" ask).** Build time is **not**
+SQLite-bound. The field log shows the main-thread scene/prefab scan alone
+dominated the build (**≈0.5 s/asset across a few thousand assets**) —
+overwhelmingly Unity's YAML/prefab parsing and per-asset `AssetDatabase` work
+inside `ScanAsset`, not the DB writes. The one clear, low-risk DB win was applied: `InsertNode`/`InsertEdge`
+read the new rowid via the direct `SQLite3.LastInsertRowid(_connection.Handle)` C
+call instead of preparing+stepping+finalizing a throwaway `SELECT
+last_insert_rowid()` for every row (~1.25M fewer statements per full build).
+A fuller prepared-statement *reuse* rewrite of the insert path was deliberately
+**not** done: the vendored `SQLitePreparedStatement` binds strings with
+`SQLITE_STATIC` (no copy), which is sound for read paths that bind-then-step once
+but risky for ~1.25M bulk writes, and the expected gain is marginal on a
+parse-bound workload.
+
+A second, larger scanner-side win was then applied to the scene/prefab path
+itself. Both `SceneScanner` and `PrefabScanner` previously resolved a component's
+backing MonoScript GUID with `AssetDatabase.FindAssets("t:MonoScript <name>") +
+LoadAssetAtPath + GetClass()` for **every non-builtin component instance** —
+potentially 100k+ asset-database searches across a large project even though the
+`Type → script-GUID` map is constant for a rebuild. They also re-resolved the
+same referenced-asset GUID once per reference. A shared per-rebuild memo
+(`ScanResolver`, cleared at each rebuild start and reset on domain reload)
+collapses both to once per distinct `Type` / referenced object. The serialized-
+reference resolution was kept behaviour-preserving on purpose: rather than swap to
+`TryGetGUIDAndLocalFileIdentifier` (which would have started emitting edges for
+`Packages/` and built-in resources, changing output), the cache retains the prior
+`GetAssetPath` + `Assets/`-only filter and simply stops recomputing it per
+reference. This attacks the redundant per-component/per-reference `AssetDatabase`
+cost; the irreducible remainder is Unity's own scene/prefab deserialization
+(`OpenScene` / `LoadPrefabContents`), which can only be bypassed by parsing the
+`.unity` / `.prefab` YAML directly — a higher-risk rewrite deferred to Phase 11.
+Deeper build-speed work (profiling the parse side, an async / non-blocking
+rebuild, direct YAML parsing) is Phase 11.
+
+### Bridge to next phase
+
+Phase 9.5 makes Phases 8 and 9 real on a normally-launched Editor and removes the confident-wrong-answer class of bug. With the field blockers closed, Phase 10 (public release) can proceed on a product whose headline claims hold up on a clean, GUI-launched install.
 
 ---
 
@@ -2042,7 +2244,7 @@ Hades version progresses with each phase:
 - Phase 3 complete: v0.4.0 ✅
 - Phase 4 complete: v0.5.0 ✅
 - Phase 5 complete (5a/5b/5c): v0.6.0 ✅
-- Phase 6 complete (polish, tester-ready): v0.9.0 ✅
+- Phase 6 complete (polish, beta-ready): v0.9.0 ✅
 - Phase 7 complete (friends-and-family): v0.9.0 ✅ *(same version — no new features, only distribution prep)*
 - Phase 8 complete (first-run reliability): v0.9.1 ✅
 - Phase 9 complete (graph coverage): v0.9.5 ✅
@@ -2050,7 +2252,7 @@ Hades version progresses with each phase:
 - Phase 10 complete (public release): **v1.0.0**
 - Phase 11: v1.x and v2.x as evolution dictates
 
-Versions 0.1.0–0.6.0 are internal milestones. v0.9.0–0.9.9 are external-tester betas incorporating feedback. v1.0.0 is the first publicly announced release. Both `package.json` (UPM) and `plugin.json` (Claude Code) track these tags in lockstep.
+Versions 0.1.0–0.6.0 are internal milestones. v0.9.0–0.9.9 are beta releases incorporating field feedback. v1.0.0 is the first publicly announced release. Both `package.json` (UPM) and `plugin.json` (Claude Code) track these tags in lockstep.
 
 ### 14.5 Anthropic plugin marketplace submission
 
@@ -2067,7 +2269,7 @@ After Phase 10, Hades is:
 - A coherent product with three integrated layers (Graph, Charon, Asphodel) plus 22 Skills and 6 slash commands
 - 89+ MCP tools (21 native + 68 migrated editor-action tools), with comprehensive graph coverage across all Unity asset types and C# code-level references
 - Documented for users with setup guide, troubleshooting guide, and architecture docs
-- Battle-tested on real Unity projects through dogfooding and large-scale external tester validation
+- Battle-tested on real Unity projects through dogfooding and large-scale field validation
 - Open source under MIT license
 - Free of dependencies on Anthropic auth that could be revoked
 
@@ -2123,7 +2325,7 @@ When a Unity project lives in a subdirectory of the git repo (e.g., `MyRepo/MyUn
 
 **Resolution:** The fix is now dual-path. (1) Hub parent match strategy: the Hub matches the CWD as a parent of a registered project path, so Claude Code launched from the repo root finds the correct Unity instance via the Hub. (2) `MCPClientConfig.WriteProjectMcpJson()` writes `.mcp.json` to the Unity project root pointing at the Hub launcher, giving Claude Code a project-local config to discover directly when launched from that directory. Together these cover the full range of CWD scenarios. See **Plugin document** §3.5.
 
-### External tester bugs (Phase 7 feedback, 2026-05-27)
+### Field bugs (Phase 7 feedback)
 
 **Status:** Tracked in Phase 8 (first-run reliability) and Phase 9 (graph coverage)
 
@@ -2141,7 +2343,7 @@ Four reproducible bugs discovered during the first external smoke-test on a larg
 
 This roadmap is a sequence of phases, each building on the last, each producing something coherent on its own, accumulating into a complete product that realizes the Vision.
 
-The roadmap has evolved through contact with reality. Phases 0–6 built the components. Phase 7 validated with an external tester and revealed that the install path needed hardening (Phase 8) and the graph needed broader coverage (Phase 9) before public release (Phase 10). This is the process working as intended — external feedback reshaping priorities before they calcify.
+The roadmap has evolved through contact with reality. Phases 0–6 built the components. Phase 7 validated in the field and revealed that the install path needed hardening (Phase 8) and the graph needed broader coverage (Phase 9) before public release (Phase 10). This is the process working as intended — field feedback reshaping priorities before they calcify.
 
 The roadmap is honest about what's hard. Phase 1 was the highest-risk: the Graph thesis validated. Phase 9 is the next critical bet: whether C# code-level reference indexing can be made both fast and accurate enough to transform `find_references_to` from a prefab-only tool into the universal dependency query. Phase 8 is unglamorous but essential — first impressions determine adoption.
 

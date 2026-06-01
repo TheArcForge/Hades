@@ -98,9 +98,12 @@ namespace ArcForge.Hades.Editor.Tests.Graph
         public void IsNodeModulesValid_ReturnsTrue_WhenBetterSqlitePresent()
         {
             var tempDir = Path.Combine(Path.GetTempPath(), $"hades_npm_test_{System.Guid.NewGuid()}");
-            var markerDir = Path.Combine(tempDir, "node_modules", "better-sqlite3");
-            Directory.CreateDirectory(markerDir);
-            File.WriteAllText(Path.Combine(markerDir, "package.json"), "{}");
+            var sqliteDir = Path.Combine(tempDir, "node_modules", "better-sqlite3");
+            var treeSitterDir = Path.Combine(tempDir, "node_modules", "tree-sitter");
+            Directory.CreateDirectory(sqliteDir);
+            Directory.CreateDirectory(treeSitterDir);
+            File.WriteAllText(Path.Combine(sqliteDir, "package.json"), "{}");
+            File.WriteAllText(Path.Combine(treeSitterDir, "package.json"), "{}");
             try
             {
                 Assert.IsTrue(GraphBuilder.IsNodeModulesValid(tempDir));

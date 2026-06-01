@@ -194,7 +194,7 @@ namespace ArcForge.Hades.Editor.Charon
             if (needsInstall)
             {
                 EditorUtility.DisplayProgressBar("Hades Dashboard", "Installing dependencies (first time only)...", 0.3f);
-                var result = ProcessResolver.Run("npm", "install", dashboardDir);
+                var result = ProcessResolver.Run("npm", "install", dashboardDir, 120000, ProcessResolver.NativeBuildEnv);
                 if (!result.Success)
                 {
                     EditorUtility.ClearProgressBar();

@@ -132,6 +132,18 @@ namespace ArcForge.Hades.Editor.Charon
             });
         }
 
+        /// <summary>
+        /// Runs <paramref name="action"/> inside a single transaction. Lets the
+        /// emitter batch an entire flush (many trace upserts + span inserts) into
+        /// one commit instead of dozens, which avoids stacking autocheckpoint
+        /// passes against a large file on the main thread. Nested calls (e.g.
+        /// InsertSpans) use savepoints, so this composes safely.
+        /// </summary>
+        public void RunInTransaction(Action action)
+        {
+            _connection.RunInTransaction(action);
+        }
+
         public TraceRecord GetTrace(string traceId)
         {
             using (var stmt = new SQLitePreparedStatement(_connection,
@@ -215,6 +227,47 @@ namespace ArcForge.Hades.Editor.Charon
         {
             var cutoff = DateTimeOffset.UtcNow.AddDays(-retentionDays).ToUnixTimeMilliseconds();
             return _connection.Execute("DELETE FROM traces WHERE start_time < ?;", cutoff);
+        }
+
+        /// <summary>
+        /// Enforces a hard on-disk size cap for the trace DB. Time-based pruning
+        /// alone let traces.db grow into the multi-GB range on a large, heavily-used
+        /// project; this is the backstop.
+        /// When the file exceeds <paramref name="maxBytes"/>, drops the oldest
+        /// traces (spans cascade-delete) down to ~90% of the budget in a single
+        /// pass, then checkpoints and VACUUMs to actually reclaim disk space.
+        /// Returns the number of traces deleted. Runs at startup, never mid-rebuild.
+        /// </summary>
+        public int EnforceSizeLimit(string dbPath, long maxBytes)
+        {
+            if (maxBytes <= 0) return 0;
+
+            long sizeBytes;
+            try { sizeBytes = new System.IO.FileInfo(dbPath).Length; }
+            catch { return 0; }
+
+            if (sizeBytes <= maxBytes) return 0;
+
+            var total = _connection.ExecuteScalar<long>("SELECT COUNT(*) FROM traces;");
+            if (total == 0) return 0;
+
+            // Estimate how many of the newest traces fit in ~90% of the budget and
+            // drop the rest. Trace size is roughly uniform, so scaling by the
+            // size ratio gets us under the cap in one pass without per-row probing.
+            long keep = (long)(total * ((double)maxBytes / sizeBytes) * 0.9);
+            long toDelete = total - keep;
+            if (toDelete <= 0) return 0;
+
+            var deleted = _connection.Execute(@"
+                DELETE FROM traces WHERE trace_id IN (
+                    SELECT trace_id FROM traces ORDER BY start_time ASC LIMIT ?);", toDelete);
+
+            if (deleted > 0)
+            {
+                _connection.Execute("PRAGMA wal_checkpoint(TRUNCATE);");
+                _connection.Execute("VACUUM;");
+            }
+            return deleted;
         }
 
         public void InsertEvalDataset(EvalDataset dataset)

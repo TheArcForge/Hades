@@ -94,52 +94,59 @@ namespace ArcForge.Hades.Editor.Charon
                 traceSpans[span.TraceId].Add(span);
             }
 
-            foreach (var kv in traceSpans)
+            // Batch the whole flush into one transaction. Previously each trace did
+            // its own GetTrace + InsertTrace/UpdateTraceEnd + InsertSpans commits, so
+            // a single flush triggered dozens of autocheckpoint passes against a
+            // large traces.db on the main thread — a freeze source on its own.
+            _database.RunInTransaction(() =>
             {
-                var traceId = kv.Key;
-                var traceSpanList = kv.Value;
-
-                TraceState state;
-                ActiveTraces.TryGetValue(traceId, out state);
-
-                long startTime = state?.StartTime ?? traceSpanList[0].StartTime;
-                string rootName = state?.RootSpanName ?? traceSpanList[0].Name;
-
-                long? endTime = null;
-                var status = SpanStatus.Ok;
-                foreach (var s in traceSpanList)
+                foreach (var kv in traceSpans)
                 {
-                    if (s.EndTime.HasValue && (!endTime.HasValue || s.EndTime.Value > endTime.Value))
-                        endTime = s.EndTime;
-                    if (s.Status == SpanStatus.Error)
-                        status = SpanStatus.Error;
-                }
+                    var traceId = kv.Key;
+                    var traceSpanList = kv.Value;
 
-                var existingTrace = _database.GetTrace(traceId);
-                if (existingTrace == null)
-                {
-                    _database.InsertTrace(new TraceRecord
+                    TraceState state;
+                    ActiveTraces.TryGetValue(traceId, out state);
+
+                    long startTime = state?.StartTime ?? traceSpanList[0].StartTime;
+                    string rootName = state?.RootSpanName ?? traceSpanList[0].Name;
+
+                    long? endTime = null;
+                    var status = SpanStatus.Ok;
+                    foreach (var s in traceSpanList)
                     {
-                        TraceId = traceId,
-                        RootSpanName = rootName,
-                        StartTime = startTime,
-                        EndTime = endTime,
-                        Status = status,
-                        SpanCount = traceSpanList.Count
-                    });
-                }
-                else
-                {
-                    var totalSpans = existingTrace.SpanCount + traceSpanList.Count;
-                    if (endTime.HasValue)
-                        _database.UpdateTraceEnd(traceId, endTime.Value, status, totalSpans);
-                }
+                        if (s.EndTime.HasValue && (!endTime.HasValue || s.EndTime.Value > endTime.Value))
+                            endTime = s.EndTime;
+                        if (s.Status == SpanStatus.Error)
+                            status = SpanStatus.Error;
+                    }
 
-                _database.InsertSpans(traceSpanList);
+                    var existingTrace = _database.GetTrace(traceId);
+                    if (existingTrace == null)
+                    {
+                        _database.InsertTrace(new TraceRecord
+                        {
+                            TraceId = traceId,
+                            RootSpanName = rootName,
+                            StartTime = startTime,
+                            EndTime = endTime,
+                            Status = status,
+                            SpanCount = traceSpanList.Count
+                        });
+                    }
+                    else
+                    {
+                        var totalSpans = existingTrace.SpanCount + traceSpanList.Count;
+                        if (endTime.HasValue)
+                            _database.UpdateTraceEnd(traceId, endTime.Value, status, totalSpans);
+                    }
 
-                if (IsTraceComplete(traceId, traceSpanList))
-                    ActiveTraces.TryRemove(traceId, out _);
-            }
+                    _database.InsertSpans(traceSpanList);
+
+                    if (IsTraceComplete(traceId, traceSpanList))
+                        ActiveTraces.TryRemove(traceId, out _);
+                }
+            });
 
             _lastFlushTime = CurrentTimeSeconds();
         }

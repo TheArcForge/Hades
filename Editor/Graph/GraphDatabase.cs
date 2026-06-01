@@ -207,6 +207,20 @@ namespace ArcForge.Hades.Editor.Graph
             _connection.Execute("DELETE FROM graph_metadata WHERE key = 'current_operation';");
         }
 
+        /// <summary>
+        /// Forces a WAL checkpoint, flushing the write-ahead log back into the main
+        /// database file and truncating the WAL. After a large rebuild the WAL can
+        /// grow to hundreds of MB; if we let SQLite auto-checkpoint it lazily on the
+        /// next write, that write blocks the main thread for minutes with no progress
+        /// bar (the "mystery freeze" from the field report). Calling this explicitly
+        /// while a progress bar is still visible keeps the freeze observable and
+        /// bounded. TRUNCATE mode also resets the WAL file size to zero on disk.
+        /// </summary>
+        public void Checkpoint()
+        {
+            _connection.ExecuteScalar<string>("PRAGMA wal_checkpoint(TRUNCATE);");
+        }
+
         // --- Low-level SQL helpers (public for GraphBuilder, tools, and tests) ---
 
         public T ExecuteScalar<T>(string sql, params object[] args)
@@ -244,7 +258,12 @@ namespace ArcForge.Hades.Editor.Graph
                 now,
                 now);
 
-            return _connection.ExecuteScalar<long>("SELECT last_insert_rowid();");
+            // Direct C call instead of a fresh "SELECT last_insert_rowid()" statement.
+            // A full rebuild on a large project inserts hundreds of thousands of nodes;
+            // preparing+stepping+finalizing a throwaway statement for each one was an
+            // equal number of redundant statements. This reads the value straight from
+            // the connection handle.
+            return SQLite3.LastInsertRowid(_connection.Handle);
         }
 
         public long InsertEdge(long sourceId, long targetId, string type, string propertiesJson = null)
@@ -260,7 +279,8 @@ namespace ArcForge.Hades.Editor.Graph
                 now,
                 now);
 
-            return _connection.ExecuteScalar<long>("SELECT last_insert_rowid();");
+            // See InsertNode: avoid a throwaway last_insert_rowid() statement per edge.
+            return SQLite3.LastInsertRowid(_connection.Handle);
         }
 
         public NodeRecord FindNodeByGuid(string guid, long? fileId = null)

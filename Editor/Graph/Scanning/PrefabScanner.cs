@@ -138,16 +138,9 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
 
                 if (!compType.Namespace?.StartsWith("UnityEngine") ?? false)
                 {
-                    var scriptGuids = AssetDatabase.FindAssets($"t:MonoScript {compType.Name}");
-                    foreach (var scriptGuid in scriptGuids)
-                    {
-                        var script = AssetDatabase.LoadAssetAtPath<MonoScript>(AssetDatabase.GUIDToAssetPath(scriptGuid));
-                        if (script != null && script.GetClass() == compType)
-                        {
-                            result.Edges.Add(new EdgeRecord("instance_of", compNode.Guid, compFileId, scriptGuid, 0));
-                            break;
-                        }
-                    }
+                    var scriptGuid = ScanResolver.GetScriptGuid(compType);
+                    if (scriptGuid != null)
+                        result.Edges.Add(new EdgeRecord("instance_of", compNode.Guid, compFileId, scriptGuid, 0));
                 }
 
                 ScanSerializedReferences(comp, compNode, result);
@@ -169,10 +162,8 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
                 if (prop.propertyType != SerializedPropertyType.ObjectReference) continue;
                 if (prop.objectReferenceValue == null) continue;
 
-                var refPath = AssetDatabase.GetAssetPath(prop.objectReferenceValue);
-                if (string.IsNullOrEmpty(refPath) || !refPath.StartsWith("Assets/")) continue;
-
-                var refGuid = AssetDatabase.AssetPathToGUID(refPath);
+                var refGuid = ScanResolver.GetAssetGuidUnderAssets(prop.objectReferenceValue);
+                if (refGuid == null) continue;
 
                 if (prop.objectReferenceValue is Material)
                     result.Edges.Add(new EdgeRecord("uses_material", compNode.Guid, compNode.FileId ?? 0, refGuid, 0));

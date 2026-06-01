@@ -85,7 +85,7 @@ namespace ArcForge.Hades.Editor.Tests.Graph
         public void SchemaVersion_IsRecorded()
         {
             var version = _db.ExecuteScalar<long>("SELECT MAX(version) FROM schema_version;");
-            Assert.AreEqual(1L, version);
+            Assert.AreEqual(2L, version);
         }
 
         [Test]

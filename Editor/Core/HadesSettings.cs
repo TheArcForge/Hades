@@ -59,5 +59,14 @@ namespace ArcForge.Hades.Editor.Core
             get => EditorPrefs.GetInt(Prefix + "CharonRetentionDays", 30);
             set => EditorPrefs.SetInt(Prefix + "CharonRetentionDays", value);
         }
+
+        // Hard size cap for traces.db. Time-based retention alone let the trace DB
+        // grow into the multi-GB range on a large, heavily-used project; this is the
+        // backstop. 0 disables the cap.
+        public int CharonMaxSizeMb
+        {
+            get => EditorPrefs.GetInt(Prefix + "CharonMaxSizeMb", 500);
+            set => EditorPrefs.SetInt(Prefix + "CharonMaxSizeMb", value);
+        }
     }
 }

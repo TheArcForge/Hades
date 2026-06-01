@@ -36,6 +36,15 @@ namespace ArcForge.Hades.Editor.Charon
                     Debug.Log($"[Hades Charon] Pruned {pruned} traces older than {settings.CharonRetentionDays} days");
                 }
                 span.SetAttribute("retention.days", (long)settings.CharonRetentionDays);
+
+                // Backstop: enforce a hard size cap even within the retention window.
+                var capBytes = (long)settings.CharonMaxSizeMb * 1024 * 1024;
+                var trimmed = _database.EnforceSizeLimit(dbPath, capBytes);
+                if (trimmed > 0)
+                {
+                    span.SetAttribute("traces.size_trimmed", (long)trimmed);
+                    Debug.Log($"[Hades Charon] Trimmed {trimmed} oldest traces to keep traces.db under {settings.CharonMaxSizeMb} MB");
+                }
             }
             CharonEmitter.Flush();
 

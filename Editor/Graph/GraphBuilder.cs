@@ -24,7 +24,20 @@ namespace ArcForge.Hades.Editor.Graph
 
         readonly GraphDatabase _db;
         readonly ScannerRegistry _scannerRegistry;
-        BuildStatus _status = BuildStatus.Idle;
+
+        // Thread-safe "busy" flag mirroring _status. A long synchronous rebuild blocks
+        // the main thread, so MCPServer's main-thread queue processor is frozen and cannot
+        // answer "are we rebuilding?". Background transport threads read this volatile flag
+        // instead to short-circuit calls with a structured busy response (no SQLite access).
+        static volatile bool _busy;
+        public static bool IsBusy => _busy;
+
+        BuildStatus _statusBacking = BuildStatus.Idle;
+        BuildStatus _status
+        {
+            get => _statusBacking;
+            set { _statusBacking = value; _busy = value != BuildStatus.Idle; }
+        }
 
         // Session-level node map: accumulates guid:fileId → nodeId across all scanned files
         // during a rebuild. Eliminates per-edge DB lookups in WriteScanResult.
@@ -66,6 +79,7 @@ namespace ArcForge.Hades.Editor.Graph
         public void RebuildAll()
         {
             _status = BuildStatus.Rebuilding;
+            ScanResolver.Clear();
             var allPaths = GetScannablePaths("Assets/");
 
             _db.SetCurrentOperation("rebuild");
@@ -141,6 +155,7 @@ namespace ArcForge.Hades.Editor.Graph
             if (_status == BuildStatus.Rebuilding) return;
 
             _status = BuildStatus.Rebuilding;
+            ScanResolver.Clear();
             _db.SetCurrentOperation("rebuild");
 
             try
@@ -225,6 +240,7 @@ namespace ArcForge.Hades.Editor.Graph
             if (_status == BuildStatus.Rebuilding) return;
 
             _status = BuildStatus.Rebuilding;
+            ScanResolver.Clear();
             _db.SetCurrentOperation("rebuild_parallel");
 
             try
@@ -269,6 +285,11 @@ namespace ArcForge.Hades.Editor.Graph
                         _buildLog?.ReportDegraded($"C# nodes missing — Scanner failed (exit {nodeResult.ExitCode})");
                     Debug.LogWarning("[Hades] Script scan failed, continuing with other scanners");
                 }
+
+                // Persist the C# scan outcome so MCP tools can distinguish "no
+                // references" from "C# scanning unavailable" and avoid returning a
+                // confident, wrong 0 on .cs queries when the scanner failed.
+                _db.SetMetadata("csharp_scan_status", nodeResult.Success ? "ok" : "degraded");
                 _buildLog?.EndStep();
 
                 // Rebuild session map from DB (includes what Node.js wrote)
@@ -330,8 +351,19 @@ namespace ArcForge.Hades.Editor.Graph
             finally
             {
                 _sessionNodeMap = null;
-                EditorUtility.ClearProgressBar();
+
+                // Clear the operation marker (a small write), then force the WAL
+                // checkpoint while the progress bar is still visible. A full rebuild
+                // leaves a huge write-ahead log; if we don't checkpoint it now,
+                // SQLite defers it to the next write — which then blocks the editor
+                // for minutes with no progress bar (the field report's "mystery
+                // freeze"). Doing it explicitly here keeps the cost observable.
                 _db.ClearCurrentOperation();
+                EditorUtility.DisplayProgressBar("Hades: Rebuilding Graph",
+                    "Finalizing (checkpointing database)…", 0.99f);
+                _db.Checkpoint();
+
+                EditorUtility.ClearProgressBar();
                 _status = BuildStatus.Idle;
             }
         }
@@ -422,8 +454,13 @@ namespace ArcForge.Hades.Editor.Graph
             }
             finally
             {
-                EditorUtility.ClearProgressBar();
+                // Checkpoint the WAL while the bar is still up (see RebuildParallel).
                 _db.ClearCurrentOperation();
+                EditorUtility.DisplayProgressBar("Hades: Scanning Packages",
+                    "Finalizing (checkpointing database)…", 0.99f);
+                _db.Checkpoint();
+
+                EditorUtility.ClearProgressBar();
                 _status = BuildStatus.Idle;
             }
 
@@ -1157,13 +1194,13 @@ namespace ArcForge.Hades.Editor.Graph
                 EditorUtility.DisplayProgressBar("Hades: Installing Scanner",
                     "Running npm install for script scanner…", 0f);
 
-                var npmResult = ProcessResolver.Run("npm", "install", scannerDir, 120000);
+                var npmResult = ProcessResolver.Run("npm", "install", scannerDir, 120000, ProcessResolver.NativeBuildEnv);
                 if (!npmResult.Success)
                 {
                     Debug.LogWarning($"[Hades] npm install failed (attempt 1/2): {npmResult.Error}");
                     _buildLog?.Detail("npm install attempt 1", $"Failed: {npmResult.Error}");
 
-                    npmResult = ProcessResolver.Run("npm", "install", scannerDir, 300000);
+                    npmResult = ProcessResolver.Run("npm", "install", scannerDir, 300000, ProcessResolver.NativeBuildEnv);
                     if (!npmResult.Success)
                     {
                         EditorUtility.ClearProgressBar();

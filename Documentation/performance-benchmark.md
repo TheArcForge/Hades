@@ -1,6 +1,6 @@
 # Hades — Performance Benchmark
 
-Benchmark recorded 2026-05-26 against Hades-Unity-Client (Unity 6000.0).
+Benchmark recorded against a representative development project (Unity 6000.0).
 
 ---
 
@@ -133,7 +133,7 @@ The script scanner dominates build time by orders of magnitude. Project-tier sca
 
 ## Assessment
 
-The Hades-Unity-Client graph (163k nodes, 128MB) is representative of a medium-to-large project. Performance is acceptable for agent interactions:
+The benchmark graph (163k nodes, 128MB) is representative of a medium-to-large project. Performance is acceptable for agent interactions:
 
 1. **Rebuild**: 197ms average for project asset rebuild. Well within usability.
 2. **Queries**: Most queries complete in under 50ms. Outliers (search, aggregation) stay under 1s.

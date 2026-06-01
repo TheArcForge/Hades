@@ -39,6 +39,11 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 ["scene_count"] = GetCount(counts, "Scene"),
                 ["prefab_count"] = GetCount(counts, "Prefab") + GetCount(counts, "PrefabVariant"),
                 ["script_count"] = GetCount(counts, "Script"),
+                // Project-tier C# types only — excludes the ~4k seeded Unity builtin
+                // ScriptType nodes so this reflects the user's own indexed types
+                // (the field report saw ScriptType nodes present while script_count
+                // read 0, because those were builtins with no Script file node).
+                ["script_type_count"] = db.GetNodeCount("ScriptType", "project"),
                 ["scriptable_object_count"] = GetCount(counts, "ScriptableObject"),
                 ["material_count"] = GetCount(counts, "Material"),
                 ["total_node_count"] = db.GetNodeCount(),
@@ -61,19 +66,23 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 }));
             }
 
-            // Asset coverage section
-            var assetTypes = new[] {
-                "Texture", "Model", "AnimationClip", "AnimatorController",
-                "AudioClip", "Font", "SpriteAtlas", "RenderTexture", "Cubemap",
-                "AvatarMask", "PhysicsMaterial", "Flare", "GUISkin", "AudioMixer",
-                "SignalAsset", "PlayableAsset"
+            // Asset coverage section. Derive indexed_types from the actual node-type
+            // counts rather than a hardcoded whitelist — the old whitelist omitted
+            // obviously-indexed types (Material, Shader, ScriptableObject, …), so the
+            // field read as `{}` on real projects (field report §9.5). Exclude
+            // structural composition nodes (the scene/prefab internals and project
+            // root) and the code-symbol nodes, which are reported via the dedicated
+            // script_count / script_type_count fields instead of asset coverage.
+            var nonAssetTypes = new HashSet<string> {
+                "Project", "GameObject", "Component",
+                "Script", "ScriptType", "ScriptMethod"
             };
 
             var indexedTypes = new Dictionary<string, long>();
-            foreach (var assetType in assetTypes)
+            foreach (var kv in counts)
             {
-                if (counts.TryGetValue(assetType, out var count) && count > 0)
-                    indexedTypes[assetType] = count;
+                if (kv.Value > 0 && !nonAssetTypes.Contains(kv.Key))
+                    indexedTypes[kv.Key] = kv.Value;
             }
 
             var pendingCount = db.GetPendingEdgeCount();
@@ -175,7 +184,8 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         [MCPTool("hades_rebuild_graph",
             "Triggers a full rebuild of the Hades knowledge graph. Use this if the graph seems stale or out of sync with the project. " +
             "Uses parallel scanning for .cs files (thread pool) and batched processing for other assets. " +
-            "Blocks until rebuild completes (progress bar shown in Unity).")]
+            "Returns immediately with status='rebuild_started'; the rebuild then runs in the Editor (progress bar shown in Unity). " +
+            "While it runs, other Hades tool calls return status='busy' until it finishes — poll hades_status to confirm completion.")]
         public static MCPToolResult HadesRebuildGraph(
             [MCPToolParam("Set to 'true' to also rescan all packages (normally cached)", required: false)] string include_packages = "")
         {
@@ -188,18 +198,24 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             if (builder.GetStatus() != ArcForge.Hades.Editor.Graph.BuildStatus.Idle)
                 return MCPToolResult.Success(new { status = "already_rebuilding", message = "A rebuild is already in progress" });
 
-            if (include_packages == "true")
-                builder.ScanPackages();
+            // Schedule the rebuild on the next Editor tick rather than blocking this call.
+            // RebuildParallel blocks the main thread for minutes on large projects; running it
+            // inline would make this MCP call hang until the transport's 30s timeout. Returning
+            // now lets the response flush first; the rebuild then runs and IsBusy short-circuits
+            // concurrent tool calls with a structured "busy" status instead of a timeout.
+            var rescanPackages = include_packages == "true";
+            UnityEditor.EditorApplication.delayCall += () =>
+            {
+                if (rescanPackages)
+                    builder.ScanPackages(onComplete: () => builder.RebuildParallel());
+                else
+                    builder.RebuildParallel();
+            };
 
-            builder.RebuildParallel();
-
-            var db = GraphDatabase.Instance;
             return MCPToolResult.Success(new
             {
-                status = "completed",
-                nodes = db?.GetNodeCount() ?? 0,
-                edges = db?.GetEdgeCount() ?? 0,
-                message = $"Rebuild complete: {db?.GetNodeCount() ?? 0} nodes, {db?.GetEdgeCount() ?? 0} edges"
+                status = "rebuild_started",
+                message = "Graph rebuild started in the Editor. Other tools return status='busy' until it completes; poll hades_status to confirm."
             });
         }
 
@@ -351,6 +367,13 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 ["references"] = new JArray(references)
             };
 
+            if (IsScriptPath(target_path) && CSharpScanDegraded())
+            {
+                result["status"] = "degraded";
+                result["csharp_references_available"] = false;
+                result["warning"] = CSharpDegradedWarning;
+            }
+
             return MCPToolResult.SuccessWithConfidence(result, BuildConfidence());
         }
 
@@ -361,11 +384,30 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             var db = GraphDatabase.Instance;
             if (db == null) return MCPToolResult.Error("Graph database not initialized");
 
+            // Without C# code references, every script falsely appears orphaned.
+            // Refuse to answer rather than imply scripts are "safe to remove".
+            if (CSharpScanDegraded())
+                return MCPToolResult.SuccessWithConfidence(
+                    new JObject
+                    {
+                        ["status"] = "unavailable",
+                        ["orphan_count"] = 0,
+                        ["orphan_scripts"] = new JArray(),
+                        ["warning"] = "C# code scanning is unavailable (scanner not installed), so reference data is missing and every script would falsely appear orphaned. This tool is disabled until the graph has C# references."
+                    },
+                    BuildConfidence());
+
             var scriptTypes = db.FindNodesByType("ScriptType");
             var orphans = new List<JObject>();
 
             foreach (var st in scriptTypes)
             {
+                // Only consider the project's own, removable scripts. Builtins have
+                // no source path (path == null); package types live under Packages/
+                // and are never "safe to remove" — both must be excluded.
+                if (string.IsNullOrEmpty(st.Path)) continue;
+                if (!st.Path.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase)) continue;
+
                 var instanceEdges = db.FindNodesWithEdgeTo(st.Id, "instance_of");
                 var referenceEdges = db.FindNodesWithEdgeTo(st.Id, "references");
 
@@ -442,9 +484,22 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 startNodes = db.FindNodesByType("Prefab").Where(n => n.Path == asset_path).ToList();
 
             if (startNodes.Count == 0)
+            {
+                if (IsScriptPath(asset_path) && CSharpScanDegraded())
+                    return MCPToolResult.SuccessWithConfidence(
+                        new JObject
+                        {
+                            ["status"] = "degraded",
+                            ["message"] = $"'{asset_path}' is not in the graph because C# scanning is unavailable.",
+                            ["warning"] = CSharpDegradedWarning,
+                            ["dependencies"] = new JArray()
+                        },
+                        BuildConfidence());
+
                 return MCPToolResult.SuccessWithConfidence(
                     new { message = $"Asset not found: {asset_path}", dependencies = new object[0] },
                     BuildConfidence());
+            }
 
             var deps = db.TraverseDependencies(startNodes[0].Id, max_depth);
 
@@ -517,6 +572,29 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
                 // Name-based filtering (supports SQL LIKE patterns with %)
                 var whereClause = q["where"];
+
+                // Validate and apply exact-match keys. A 'where' with an unsupported
+                // key is rejected rather than silently ignored — previously e.g.
+                // {"name":"Foo"} returned the entire unfiltered table.
+                if (whereClause is JObject whereObj)
+                {
+                    var allowedKeys = new HashSet<string> { "name", "path", "name_like", "path_like", "edges" };
+                    foreach (var prop in whereObj.Properties())
+                    {
+                        if (!allowedKeys.Contains(prop.Name))
+                            return MCPToolResult.Error(
+                                $"Unsupported 'where' key '{prop.Name}'. Supported keys: name, path, name_like, path_like, edges.");
+                    }
+
+                    var nameExact = whereObj["name"]?.ToString();
+                    if (!string.IsNullOrEmpty(nameExact))
+                        nodes = nodes.Where(n => string.Equals(n.Name, nameExact, StringComparison.OrdinalIgnoreCase)).ToList();
+
+                    var pathExact = whereObj["path"]?.ToString();
+                    if (!string.IsNullOrEmpty(pathExact))
+                        nodes = nodes.Where(n => string.Equals(n.Path, pathExact, StringComparison.OrdinalIgnoreCase)).ToList();
+                }
+
                 var nameLike = whereClause?["name_like"]?.ToString();
                 if (!string.IsNullOrEmpty(nameLike))
                 {
@@ -604,6 +682,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 var result = new JObject
                 {
                     ["count"] = nodes.Count,
+                    ["returned_count"] = Math.Min(nodes.Count, limit),
                     ["rows"] = new JArray(rows)
                 };
 
@@ -619,5 +698,23 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         {
             return counts.ContainsKey(type) ? counts[type] : 0;
         }
+
+        static bool IsScriptPath(string path)
+        {
+            return !string.IsNullOrEmpty(path) && path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
+        }
+
+        // True when the last build could not parse project C# (Node scanner failed
+        // to install/run). In that state code-level references are absent, so a 0
+        // from a .cs query means "unknown", not "unused".
+        static bool CSharpScanDegraded()
+        {
+            var db = GraphDatabase.Instance;
+            return db != null && db.GetMetadata("csharp_scan_status") == "degraded";
+        }
+
+        const string CSharpDegradedWarning =
+            "C# code scanning is unavailable — the Node.js scanner failed to install or run (see the Hades build log). " +
+            "Code-level references are NOT included; treat a low or zero count as 'unknown', not 'unused'. Verify with grep/ripgrep.";
     }
 }

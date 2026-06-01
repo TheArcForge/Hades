@@ -130,7 +130,7 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
 
             if (!compType.Namespace?.StartsWith("UnityEngine") ?? false)
             {
-                var scriptTypeGuid = FindScriptGuid(compType);
+                var scriptTypeGuid = ScanResolver.GetScriptGuid(compType);
                 if (scriptTypeGuid != null)
                 {
                     result.Edges.Add(new EdgeRecord("instance_of",
@@ -151,12 +151,9 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
             {
                 if (prop.propertyType == SerializedPropertyType.ObjectReference && prop.objectReferenceValue != null)
                 {
-                    var refObj = prop.objectReferenceValue;
-                    var refPath = AssetDatabase.GetAssetPath(refObj);
-
-                    if (!string.IsNullOrEmpty(refPath) && refPath.StartsWith("Assets/"))
+                    var refGuid = ScanResolver.GetAssetGuidUnderAssets(prop.objectReferenceValue);
+                    if (refGuid != null)
                     {
-                        var refGuid = AssetDatabase.AssetPathToGUID(refPath);
                         result.Edges.Add(new EdgeRecord("references",
                             compNode.Guid, compNode.FileId ?? 0,
                             refGuid, 0)
@@ -169,18 +166,6 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
                     }
                 }
             }
-        }
-
-        string FindScriptGuid(System.Type type)
-        {
-            var guids = AssetDatabase.FindAssets($"t:MonoScript {type.Name}");
-            foreach (var guid in guids)
-            {
-                var script = AssetDatabase.LoadAssetAtPath<MonoScript>(AssetDatabase.GUIDToAssetPath(guid));
-                if (script != null && script.GetClass() == type)
-                    return guid;
-            }
-            return null;
         }
     }
 }

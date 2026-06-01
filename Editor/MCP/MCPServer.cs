@@ -163,9 +163,43 @@ namespace ArcForge.Hades.Editor.MCP
 
         Task<string> EnqueueAndWait(string json, string traceId)
         {
+            // A long synchronous rebuild blocks the main thread, freezing the queue
+            // processor below. Enqueuing here would just stall until the transport's 30s
+            // timeout fires ("No Unity instance found"). Instead, answer immediately from
+            // this background thread with an honest "busy" status. The volatile flag is the
+            // only state we touch — no SQLite, which the blocked main thread may be mid-write.
+            if (Graph.GraphBuilder.IsBusy)
+                return Task.FromResult(CreateBusyResponse(json));
+
             var tcs = new TaskCompletionSource<string>();
             _workQueue.Enqueue(new WorkItem(json, tcs, traceId));
             return tcs.Task;
+        }
+
+        string CreateBusyResponse(string json)
+        {
+            JToken id = null;
+            try { id = JObject.Parse(json)["id"]; }
+            catch { }
+
+            var payload = new JObject
+            {
+                ["status"] = "busy",
+                ["reason"] = "rebuild_in_progress",
+                ["message"] = "Hades graph rebuild in progress; retry shortly."
+            };
+            var result = new JObject
+            {
+                ["content"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["type"] = "text",
+                        ["text"] = payload.ToString(Newtonsoft.Json.Formatting.None)
+                    }
+                }
+            };
+            return CreateJsonRpcSuccess(id, result);
         }
 
         string CreateJsonRpcSuccess(JToken id, JObject result)
