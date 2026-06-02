@@ -145,27 +145,7 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
         void ScanSerializedReferences(Component comp, NodeRecord compNode, ScanResult result)
         {
             var so = new SerializedObject(comp);
-            var prop = so.GetIterator();
-
-            while (prop.NextVisible(true))
-            {
-                if (prop.propertyType == SerializedPropertyType.ObjectReference && prop.objectReferenceValue != null)
-                {
-                    var refGuid = ScanResolver.GetAssetGuidUnderAssets(prop.objectReferenceValue);
-                    if (refGuid != null)
-                    {
-                        result.Edges.Add(new EdgeRecord("references",
-                            compNode.Guid, compNode.FileId ?? 0,
-                            refGuid, 0)
-                        {
-                            Properties = new Dictionary<string, object>
-                            {
-                                { "field", prop.name }
-                            }
-                        });
-                    }
-                }
-            }
+            SerializedReferenceExtractor.Extract(so, compNode, result, useTypedAssetEdges: false);
         }
     }
 }

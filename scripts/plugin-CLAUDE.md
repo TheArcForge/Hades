@@ -49,6 +49,27 @@ When you need to change scenes, prefabs, components, or assets — use the MCP t
 
 For C# scripts: write and edit code files normally with your editor tools. Use `BeginScriptEditing` / `EndScriptEditing` to batch multiple script changes before triggering recompilation.
 
+## Recovering a stalled MCP connection (macOS)
+
+If an MCP tool call returns **"Server hades unavailable"** or **"No Unity instance found"** while the Unity Editor process is still running, the editor's main thread is napped — typically right after a recompile/domain reload, or after a deep idle. A running server keeps itself registered via a background heartbeat, but a *torn-down* server (post-reload) needs one main-thread tick to re-register, which a napped editor won't give it.
+
+Bringing Unity to the foreground for a moment un-naps it and lets it re-register. Run the helper (it captures your current frontmost app and restores focus afterward, so it doesn't leave you staring at Unity):
+
+```bash
+<hades-package>/Scripts/wake-unity.sh        # ~2s focus round-trip, then retry the MCP call
+```
+
+Or inline, if you don't have the script path handy:
+
+```bash
+PREV=$(osascript -e 'tell application "System Events" to name of first application process whose frontmost is true')
+osascript -e 'tell application "Unity" to activate'
+sleep 2
+osascript -e "tell application \"System Events\" to set frontmost of process \"$PREV\" to true"
+```
+
+After it runs, retry the failed call — it should succeed. (Routine idle no longer needs this; the background heartbeat keeps a running server registered on its own.)
+
 ## Available commands
 
 - `/hades:status` — graph state, server status, memory summary

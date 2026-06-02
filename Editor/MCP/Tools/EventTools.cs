@@ -53,8 +53,8 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             if (targetGO == null)
                 return GameObjectNotFoundError(target_path);
 
-            var (targetComp, methodInfo) = FindMethod(targetGO, target_method, argument != null);
-            if (targetComp == null || methodInfo == null)
+            var (targetObj, methodInfo) = FindMethod(targetGO, target_method, argument != null);
+            if (targetObj == null || methodInfo == null)
             {
                 var available = ListAvailableMethods(targetGO);
                 return MCPToolResult.Error(
@@ -67,11 +67,11 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             if (argument == null)
             {
                 UnityEventTools.AddVoidPersistentListener(
-                    unityEvent, methodInfo.CreateDelegate(typeof(UnityAction), targetComp) as UnityAction);
+                    unityEvent, methodInfo.CreateDelegate(typeof(UnityAction), targetObj) as UnityAction);
             }
             else
             {
-                AddTypedListener(unityEvent, targetComp, target_method, argument, argument_type);
+                AddTypedListener(unityEvent, targetObj, target_method, argument, argument_type);
             }
 
             return MCPToolResult.Success(new
@@ -260,7 +260,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 .ToArray();
         }
 
-        static (Component comp, MethodInfo method) FindMethod(GameObject go, string methodName, bool hasArgument)
+        static (UnityEngine.Object target, MethodInfo method) FindMethod(GameObject go, string methodName, bool hasArgument)
         {
             int expectedParams = hasArgument ? 1 : 0;
             foreach (var comp in go.GetComponents<Component>())
@@ -271,6 +271,21 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 if (method != null)
                     return (comp, method);
             }
+
+            // No component method matched — also allow methods declared on GameObject
+            // itself (e.g. SetActive(bool)), binding the persistent listener to the
+            // GameObject as the target object.
+            var goMethod = typeof(GameObject).GetMethod(methodName,
+                BindingFlags.Public | BindingFlags.Instance,
+                null,
+                hasArgument ? new[] { typeof(bool) } : Type.EmptyTypes,
+                null);
+            if (goMethod == null && !hasArgument)
+                goMethod = typeof(GameObject).GetMethod(methodName,
+                    BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null);
+            if (goMethod != null)
+                return (go, goMethod);
+
             return (null, null);
         }
 
@@ -294,7 +309,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             return methods.Distinct().ToArray();
         }
 
-        static void AddTypedListener(UnityEventBase unityEvent, Component target, string methodName, string argument, string argumentType)
+        static void AddTypedListener(UnityEventBase unityEvent, UnityEngine.Object target, string methodName, string argument, string argumentType)
         {
             var resolvedType = argumentType?.ToLowerInvariant() ?? DetectArgumentType(argument);
             var method = target.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)

@@ -186,6 +186,17 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             });
         }
 
+        // Unity-internal serialization fields are ObjectReferences that are routinely null
+        // on plain (non-prefab-instance) objects. They are not user-assignable wiring, so
+        // listing them as "unset references" is noise.
+        static readonly HashSet<string> InternalSerializationFields = new HashSet<string>
+        {
+            "m_CorrespondingSourceObject",
+            "m_PrefabInstance",
+            "m_PrefabAsset",
+            "m_Father",
+        };
+
         [MCPTool("reference_find_unset", "Find all unset (null) object reference fields on a GameObject's components")]
         public static MCPToolResult FindUnsetReferences(
             [MCPToolParam("GameObject name or hierarchy path", required: true)] string game_object_path,
@@ -221,6 +232,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                     do
                     {
                         if (iterator.depth > 1) continue;
+                        if (InternalSerializationFields.Contains(iterator.name)) continue;
                         if (iterator.propertyType == SerializedPropertyType.ObjectReference
                             && iterator.objectReferenceValue == null
                             && iterator.name != "m_Script")

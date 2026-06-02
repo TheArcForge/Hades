@@ -97,7 +97,10 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             var neverResolvable = Math.Min(pendingCount, externalEdges + unresolvableEdges);
             var stillPending = Math.Max(0, pendingCount - neverResolvable);
             var totalIndexed = counts.Values.Sum();
-            var coveragePercent = totalIndexed > 0 && stillPending == 0 ? 100.0
+            // Resolution rate of edges we ATTEMPTED to resolve — NOT a completeness measure.
+            // Renamed from coverage_percent to stop implying it knows about never-extracted
+            // references (e.g. the Addressables channel surfaces in `edges`, not here).
+            var edgeResolutionPercent = totalIndexed > 0 && stillPending == 0 ? 100.0
                 : totalIndexed > 0 ? Math.Round(100.0 * totalIndexed / (totalIndexed + stillPending), 1)
                 : 0.0;
 
@@ -107,7 +110,16 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 ["pending_edge_count"] = pendingCount,
                 ["external_edge_count"] = neverResolvable,
                 ["still_pending_edge_count"] = stillPending,
-                ["coverage_percent"] = coveragePercent
+                ["edge_resolution_percent"] = edgeResolutionPercent
+            };
+
+            // Honest uncertainty: explicit per-scan health flags rather than a fabricated
+            // completeness percentage. Unknown (e.g. never rebuilt) reads as "unknown".
+            result["scan_health"] = new JObject
+            {
+                ["csharp"] = db.GetMetadata("csharp_scan_status") ?? "unknown",
+                ["meta"] = db.GetMetadata("meta_scan_status") ?? "unknown",
+                ["addressables"] = db.GetMetadata("addressables_scan_status") ?? "unknown"
             };
 
             return MCPToolResult.SuccessWithConfidence(result, BuildConfidence());
@@ -567,7 +579,10 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         }
 
         [MCPTool("query_graph",
-            "Escape hatch for complex graph queries. Accepts a structured JSON query with from, where, select, and limit fields.")]
+            "Escape hatch for complex graph queries. Accepts a structured JSON query with from, where, select, and limit fields. " +
+            "Supported 'where' keys: name, path, name_like, path_like, edges. " +
+            "'where.edges' must be an array: [{ \"type\": \"<edge_type>\", \"target\": { \"type\": \"<node_type>\", \"name\": \"<node_name>\" } }] " +
+            "(type and target are each optional within a filter).")]
         public static MCPToolResult QueryGraph(
             [MCPToolParam("Structured query as JSON string", required: true)] string query)
         {
@@ -654,7 +669,14 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                     }).ToList();
                 }
 
-                var whereEdges = whereClause?["edges"] as JArray;
+                var edgesToken = whereClause?["edges"];
+                if (edgesToken != null && edgesToken.Type != JTokenType.Array)
+                    return MCPToolResult.Error(
+                        "'where.edges' must be a JSON array of edge filters: " +
+                        "[ { \"type\": \"<edge_type>\", \"target\": { \"type\": \"<node_type>\", \"name\": \"<node_name>\" } } ]. " +
+                        "Both 'type' and 'target' fields are optional within each filter.");
+
+                var whereEdges = edgesToken as JArray;
                 if (whereEdges != null)
                 {
                     var filtered = new List<NodeRecord>();

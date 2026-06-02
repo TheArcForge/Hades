@@ -43,21 +43,7 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
             }
 
             var so = new SerializedObject(asset);
-            var prop = so.GetIterator();
-            while (prop.NextVisible(true))
-            {
-                if (prop.propertyType != SerializedPropertyType.ObjectReference) continue;
-                if (prop.objectReferenceValue == null) continue;
-
-                var refPath = AssetDatabase.GetAssetPath(prop.objectReferenceValue);
-                if (string.IsNullOrEmpty(refPath) || !refPath.StartsWith("Assets/")) continue;
-
-                var refGuid = AssetDatabase.AssetPathToGUID(refPath);
-                result.Edges.Add(new EdgeRecord("references", guid, 0, refGuid, 0)
-                {
-                    Properties = new Dictionary<string, object> { { "field", prop.name } }
-                });
-            }
+            SerializedReferenceExtractor.Extract(so, soNode, result, useTypedAssetEdges: false);
 
             return result;
         }

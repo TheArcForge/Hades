@@ -61,20 +61,49 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
             var pipeline = GraphicsSettings.defaultRenderPipeline;
             if (pipeline != null)
             {
-                var pipelinePath = AssetDatabase.GetAssetPath(pipeline);
-                var pipelineGuid = AssetDatabase.AssetPathToGUID(pipelinePath);
-
-                var node = new NodeRecord("RenderPipelineAsset", pipelineGuid)
-                {
-                    Name = pipeline.name,
-                    Path = pipelinePath,
-                    Properties = new Dictionary<string, object>
-                    {
-                        { "pipeline_type", pipeline.GetType().Name }
-                    }
-                };
-                result.Nodes.Add(node);
+                AddRenderPipelineNode(result, AssetDatabase.GetAssetPath(pipeline),
+                    pipeline.name, pipeline.GetType().Name);
+                return;
             }
+
+            // The typed accessor returns null on some URP/HDRP setups even when the raw
+            // m_CustomRenderPipeline GUID is set, which made analyze_render_pipeline
+            // falsely report Built-in. Fall back to the serialized GraphicsSettings object
+            // and resolve the referenced pipeline asset directly. Any failure leaves
+            // behavior unchanged (no node).
+            try
+            {
+                var so = new SerializedObject(GraphicsSettings.GetGraphicsSettings());
+                var prop = so.FindProperty("m_CustomRenderPipeline");
+                var asset = prop?.objectReferenceValue;
+                if (asset == null) return;
+
+                var path = AssetDatabase.GetAssetPath(asset);
+                if (string.IsNullOrEmpty(path)) return;
+
+                AddRenderPipelineNode(result, path, asset.name, asset.GetType().Name);
+            }
+            catch (System.Exception ex)
+            {
+                result.Warnings.Add(new ScanWarning(WarningSeverity.Warning,
+                    $"Could not read raw render pipeline setting: {ex.Message}",
+                    "ProjectSettings/GraphicsSettings.asset"));
+            }
+        }
+
+        void AddRenderPipelineNode(ScanResult result, string pipelinePath, string pipelineName, string pipelineType)
+        {
+            var pipelineGuid = AssetDatabase.AssetPathToGUID(pipelinePath);
+            var node = new NodeRecord("RenderPipelineAsset", pipelineGuid)
+            {
+                Name = pipelineName,
+                Path = pipelinePath,
+                Properties = new Dictionary<string, object>
+                {
+                    { "pipeline_type", pipelineType }
+                }
+            };
+            result.Nodes.Add(node);
         }
 
         void ScanPhysicsSettings(ScanResult result)

@@ -32,7 +32,14 @@ namespace ArcForge.Hades.Editor.MCP
         public event Action<string, string, MCPToolResult> OnToolExecuted;
 
         const double HeartbeatIntervalSeconds = 30.0;
-        double _lastHeartbeat;
+        System.Threading.Timer _heartbeatTimer;
+        volatile bool _heartbeatActive;
+        // Cached at Start() on the main thread so the background heartbeat timer never touches
+        // a main-thread-only Unity API (PathSandbox.ProjectRoot reads Application.dataPath).
+        string _projectRoot;
+        string _projectName;
+        int _pid;
+        int _heartbeatPort;
 
         static MCPServer()
         {
@@ -68,6 +75,14 @@ namespace ArcForge.Hades.Editor.MCP
             {
                 SessionState.SetBool("Hades_MCP_WasRunning", false);
             }
+
+            // Tear down the background heartbeat timer before the domain reloads.
+            if (_instance != null)
+            {
+                _instance._heartbeatActive = false;
+                _instance._heartbeatTimer?.Dispose();
+                _instance._heartbeatTimer = null;
+            }
         }
 
         public void Start(HadesSettings settings)
@@ -93,11 +108,20 @@ namespace ArcForge.Hades.Editor.MCP
             Core.MCPClientConfig.OnServerStart(port);
 
             EditorApplication.update += ProcessMainThreadQueue;
-            EditorApplication.update += HeartbeatTick;
             EditorApplication.quitting += Stop;
 
             _instance = this;
-            _lastHeartbeat = EditorApplication.timeSinceStartup;
+
+            // Heartbeat runs on a background timer (not EditorApplication.update) so registration
+            // survives a stalled/napped main thread — the cause of "No Unity instance found" after
+            // idle. Values are cached above on the main thread; the timer only touches pure I/O.
+            _projectRoot = Core.PathSandbox.ProjectRoot;
+            _projectName = projectName;
+            _pid = pid;
+            _heartbeatPort = port;
+            _heartbeatActive = true;
+            var heartbeatMs = (int)(HeartbeatIntervalSeconds * 1000);
+            _heartbeatTimer = new System.Threading.Timer(HeartbeatTick, null, heartbeatMs, heartbeatMs);
 
             if (_settings.LogLevel >= 1)
                 Debug.Log($"[Hades MCP] Server running on {_transport.Endpoint}");
@@ -108,8 +132,11 @@ namespace ArcForge.Hades.Editor.MCP
             if (!IsRunning && _transport == null) return;
 
             EditorApplication.update -= ProcessMainThreadQueue;
-            EditorApplication.update -= HeartbeatTick;
             EditorApplication.quitting -= Stop;
+
+            _heartbeatActive = false;
+            _heartbeatTimer?.Dispose();
+            _heartbeatTimer = null;
 
             _transport?.Stop();
             _reloadStrategy?.Dispose();
@@ -118,7 +145,10 @@ namespace ArcForge.Hades.Editor.MCP
             HubClient.Deregister(Core.PathSandbox.ProjectRoot, false);
 
             while (_workQueue != null && _workQueue.TryDequeue(out var item))
+            {
                 item.Completion.TrySetCanceled();
+                AppNapGuard.Release();
+            }
 
             if (_settings?.LogLevel >= 1)
                 Debug.Log("[Hades MCP] Server stopped.");
@@ -138,27 +168,32 @@ namespace ArcForge.Hades.Editor.MCP
             if (_instance == this) _instance = null;
         }
 
-        void HeartbeatTick()
+        // Runs on a background timer thread — must only touch cached values and HubClient's pure
+        // file-I/O + HTTP helpers, never a Unity main-thread API.
+        void HeartbeatTick(object state)
         {
-            if (!IsRunning) return;
-            if (EditorApplication.timeSinceStartup - _lastHeartbeat < HeartbeatIntervalSeconds) return;
-
-            _lastHeartbeat = EditorApplication.timeSinceStartup;
-            var port = (_transport as HttpTransport)?.Port ?? 0;
-            var pid = System.Diagnostics.Process.GetCurrentProcess().Id;
-
-            // Check if Hub has restarted (new PID or port in hub.json)
-            var changed = HubClient.DetectHubChange();
-            if (changed != null)
+            if (!_heartbeatActive) return;
+            try
             {
-                Debug.Log($"[Hades MCP] Hub restart detected (port {changed.Port}, pid {changed.Pid}), re-registering…");
-                var projectName = System.IO.Path.GetFileName(Core.PathSandbox.ProjectRoot);
-                var manifestPackages = HubClient.ReadManifestPackages(Core.PathSandbox.ProjectRoot);
-                HubClient.Register(projectName, Core.PathSandbox.ProjectRoot, port, pid, manifestPackages);
-                return;
-            }
+                // Hub restarted (new PID/port in hub.json) — re-register against the new hub.
+                var changed = HubClient.DetectHubChange();
+                if (changed != null)
+                {
+                    var manifestPackages = HubClient.ReadManifestPackages(_projectRoot);
+                    HubClient.Register(_projectName, _projectRoot, _heartbeatPort, _pid, manifestPackages);
+                    return;
+                }
 
-            HubClient.Heartbeat(Core.PathSandbox.ProjectRoot, port, pid);
+                var ok = HubClient.Heartbeat(_projectRoot, _heartbeatPort, _pid);
+                if (!ok && HubClient.IsHubRunning())
+                {
+                    // Hub is up but no longer knows us — we were evicted while the main thread was
+                    // stalled or the machine asleep. Re-register so clients can find us again.
+                    var manifestPackages = HubClient.ReadManifestPackages(_projectRoot);
+                    HubClient.Register(_projectName, _projectRoot, _heartbeatPort, _pid, manifestPackages);
+                }
+            }
+            catch { /* heartbeat is best-effort; never let it crash the timer thread */ }
         }
 
         Task<string> EnqueueAndWait(string json, string traceId)
@@ -177,6 +212,9 @@ namespace ArcForge.Hades.Editor.MCP
                 return Task.FromResult(CreateBusyResponse(json));
 
             var tcs = new TaskCompletionSource<string>();
+            // Hold a macOS App Nap opt-out for the lifetime of this in-flight request, so a
+            // backgrounded editor's main-thread queue keeps draining. Released per item below.
+            AppNapGuard.Acquire();
             _workQueue.Enqueue(new WorkItem(json, tcs, traceId));
             return tcs.Task;
         }
@@ -257,6 +295,10 @@ namespace ArcForge.Hades.Editor.MCP
                 catch (Exception ex)
                 {
                     item.Completion.TrySetException(ex);
+                }
+                finally
+                {
+                    AppNapGuard.Release();
                 }
             }
         }

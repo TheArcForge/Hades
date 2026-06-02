@@ -319,6 +319,9 @@ namespace ArcForge.Hades.Editor.Graph
                 _sessionNodeMap = BuildSessionMapFromExistingNodes();
 
                 // --- Phase C: Main-thread assets (scenes, prefabs, etc.) ---
+                // Honest default: assume the asset scan is incomplete until it finishes
+                // without throwing. A thrown Phase-C scan then leaves an accurate "degraded".
+                _db.SetMetadata("meta_scan_status", "degraded");
                 var projectAssets = DiscoverProjectAssets();
                 int totalOther = projectAssets.OtherPaths.Length;
 
@@ -345,6 +348,18 @@ namespace ArcForge.Hades.Editor.Graph
                     _buildLog?.Detail("Assets scanned", totalOther);
                     _buildLog?.EndStep();
                 }
+
+                // Project settings: a scanner the registry-driven Assets/-only scan never reaches.
+                // Run in its own transaction so a failure here cannot roll back the main asset scan.
+                _buildLog?.BeginStep("Project settings scan");
+                _db.RunInTransaction(() =>
+                {
+                    ScanProjectSettings();
+                    ScanAddressables();
+                });
+                _buildLog?.EndStep();
+
+                _db.SetMetadata("meta_scan_status", "ok");
 
                 // --- Phase D: Edge resolution ---
                 _buildLog?.BeginStep("Edge resolution");
@@ -738,6 +753,67 @@ namespace ArcForge.Hades.Editor.Graph
         // -------------------------------------------------------------------
         // Scanning core
         // -------------------------------------------------------------------
+
+        // Project settings live outside Assets/ (and aren't in AssetDatabase.GetAllAssetPaths()),
+        // and ProjectSettingsScanner's .asset registration collides with ScriptableObjectScanner
+        // in the extension map — so the registry-driven Phase C scan never reaches them. Invoke
+        // the scanner directly on the known ProjectSettings files. These are not AssetDatabase
+        // assets, so route results straight through WriteScanResult rather than ScanAsset (which
+        // keys on AssetPathToGUID + RecordScannedAsset).
+        void ScanProjectSettings()
+        {
+            var scanner = new ProjectSettingsScanner();
+            string[] settingsPaths =
+            {
+                "ProjectSettings/EditorBuildSettings.asset",
+                "ProjectSettings/GraphicsSettings.asset",
+                "ProjectSettings/DynamicsManager.asset",
+                "ProjectSettings/InputManager.asset",
+            };
+
+            foreach (var path in settingsPaths)
+            {
+                try
+                {
+                    WriteScanResult(scanner.Scan(path), "", "project");
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"[Hades] Settings scan failed for {path}: {ex.Message}");
+                }
+            }
+        }
+
+        // The AddressablesScanner declares no extensions, so the registry never selects it.
+        // Locate the settings asset directly and invoke it. Sets addressables_scan_status so
+        // get_project_summary can report Addressables completeness honestly.
+        void ScanAddressables()
+        {
+            var guids = AssetDatabase.FindAssets("t:AddressableAssetSettings");
+            if (guids == null || guids.Length == 0)
+            {
+                _db.SetMetadata("addressables_scan_status", "not_installed");
+                return;
+            }
+
+            try
+            {
+                var path = AssetDatabase.GUIDToAssetPath(guids[0]);
+                var scanner = new AddressablesScanner();
+                var scanResult = scanner.Scan(path);
+
+                WriteScanResult(scanResult, AssetDatabase.AssetPathToGUID(path), "project");
+
+                bool packageAbsent = scanResult.Warnings.Exists(w =>
+                    w.Message != null && w.Message.Contains("not installed"));
+                _db.SetMetadata("addressables_scan_status", packageAbsent ? "not_installed" : "ok");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Hades] Addressables scan failed: {ex.Message}");
+                _db.SetMetadata("addressables_scan_status", "degraded");
+            }
+        }
 
         void ScanAsset(string assetPath, string tier)
         {

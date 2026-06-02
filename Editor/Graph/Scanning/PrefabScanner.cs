@@ -177,28 +177,7 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
         void ScanSerializedReferences(Component comp, NodeRecord compNode, ScanResult result)
         {
             var so = new SerializedObject(comp);
-            var prop = so.GetIterator();
-
-            while (prop.NextVisible(true))
-            {
-                if (prop.propertyType != SerializedPropertyType.ObjectReference) continue;
-                if (prop.objectReferenceValue == null) continue;
-
-                var refGuid = ScanResolver.GetAssetGuidUnderAssets(prop.objectReferenceValue);
-                if (refGuid == null) continue;
-
-                if (prop.objectReferenceValue is Material)
-                    result.Edges.Add(new EdgeRecord("uses_material", compNode.Guid, compNode.FileId ?? 0, refGuid, 0));
-                else if (prop.objectReferenceValue is Mesh)
-                    result.Edges.Add(new EdgeRecord("uses_mesh", compNode.Guid, compNode.FileId ?? 0, refGuid, 0));
-                else if (prop.objectReferenceValue is AudioClip)
-                    result.Edges.Add(new EdgeRecord("uses_audio", compNode.Guid, compNode.FileId ?? 0, refGuid, 0));
-                else
-                    result.Edges.Add(new EdgeRecord("references", compNode.Guid, compNode.FileId ?? 0, refGuid, 0)
-                    {
-                        Properties = new Dictionary<string, object> { { "field", prop.name } }
-                    });
-            }
+            SerializedReferenceExtractor.Extract(so, compNode, result, useTypedAssetEdges: true);
         }
     }
 }

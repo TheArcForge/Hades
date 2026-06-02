@@ -90,11 +90,18 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 .Where(c => c != null)
                 .Select(c =>
                 {
-                    var behaviour = c as Behaviour;
+                    // Behaviour, Collider, and Renderer each expose `enabled` through
+                    // unrelated base classes. Components with no enabled concept (e.g.
+                    // Transform, MeshFilter) stay null.
+                    bool? enabled = null;
+                    if (c is Behaviour behaviour) enabled = behaviour.enabled;
+                    else if (c is Collider collider) enabled = collider.enabled;
+                    else if (c is Renderer renderer) enabled = renderer.enabled;
+
                     return new
                     {
                         type = c.GetType().Name,
-                        enabled = behaviour != null ? (bool?)behaviour.enabled : null
+                        enabled
                     };
                 })
                 .ToArray();

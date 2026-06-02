@@ -1,5 +1,7 @@
 using System;
+using System.IO;
 using System.Linq;
+using System.Xml.Linq;
 using Newtonsoft.Json;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -11,13 +13,15 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 {
     public static class ProjectTools
     {
-        [MCPTool("project_run_tests", "Run unit tests with optional name filter. Returns pass/fail/skip counts and failure details.")]
+        [MCPTool("project_run_tests",
+            "Start a test run with an optional name filter. EditMode runs trigger a domain reload, so this returns " +
+            "immediately with status 'started' — poll project_get_test_results until it reports 'complete' for " +
+            "total/passed/failed/skipped counts and failure details. The filter is a regex matched against full test " +
+            "names, so a class or namespace name (e.g. 'MyScannerTests') selects all tests under it.")]
         public static MCPToolResult RunTests(
-            [MCPToolParam("Test name filter (e.g. 'MyTests'). Empty = all tests.")] string filter,
+            [MCPToolParam("Test name filter — regex matched against full test names (e.g. 'MyTests'). Empty = all tests.")] string filter,
             [MCPToolParam("Test mode: EditMode, PlayMode, or All (default EditMode)")] string test_mode)
         {
-            var api = ScriptableObject.CreateInstance<TestRunnerApi>();
-
             var mode = TestMode.EditMode;
             if (!string.IsNullOrEmpty(test_mode))
             {
@@ -37,56 +41,100 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 testMode = mode
             };
 
+            // groupNames does regex matching against full test names, so a bare class or
+            // namespace name selects all tests beneath it. (testNames requires the exact
+            // full name of each test and silently matches nothing for a class-name filter.)
             if (!string.IsNullOrEmpty(filter))
-                executionFilter.testNames = new[] { filter };
+                executionFilter.groupNames = new[] { filter };
 
-            // Auto-save the current scene before running tests.
-            // Tests may trigger domain reload which discards unsaved scene changes.
-            EditorSceneManager.SaveOpenScenes();
+            SaveDirtyScenesWithPath();
 
-            var callbacks = new TestCallbacks();
-            api.RegisterCallbacks(callbacks);
+            // Results only exist after RunFinished, which for EditMode fires on a later tick
+            // (past a domain reload) — so we cannot return them from this call. Unity writes the
+            // completed run to TestResults.xml; MarkStarted records its baseline mtime so the
+            // poll (project_get_test_results) can tell this run's output from a stale file.
+            TestRunResultStore.MarkStarted();
 
+            var api = ScriptableObject.CreateInstance<TestRunnerApi>();
+            api.Execute(new ExecutionSettings(executionFilter));
+
+            return MCPToolResult.Success(new
+            {
+                status = "started",
+                test_mode = mode.ToString(),
+                filter = string.IsNullOrEmpty(filter) ? "(all)" : filter,
+                note = "Run started. EditMode triggers a domain reload; poll project_get_test_results until status='complete'."
+            });
+        }
+
+        [MCPTool("project_get_test_results",
+            "Retrieve results from the most recent project_run_tests run. Returns status 'running' until the run " +
+            "(and any domain reload) finishes, then status 'complete' with total/passed/failed/skipped counts and failures.")]
+        public static MCPToolResult GetTestResults()
+        {
+            if (!TestRunResultStore.HasStarted)
+                return MCPToolResult.Success(new
+                {
+                    status = "none",
+                    note = "No test run has been started this session. Call project_run_tests first."
+                });
+
+            if (!TestRunResultStore.IsComplete())
+                return MCPToolResult.Success(new
+                {
+                    status = "running",
+                    note = "Test run in progress (EditMode runs include a domain reload). Poll again shortly."
+                });
+
+            var path = TestRunResultStore.ResultsPath;
             try
             {
-                api.Execute(new ExecutionSettings(executionFilter));
+                var run = XDocument.Load(path).Root;
+                int passed = (int?)run.Attribute("passed") ?? 0;
+                int failed = (int?)run.Attribute("failed") ?? 0;
+                int skipped = (int?)run.Attribute("skipped") ?? 0;
+                int inconclusive = (int?)run.Attribute("inconclusive") ?? 0;
+                int total = (int?)run.Attribute("total")
+                            ?? (int?)run.Attribute("testcasecount")
+                            ?? (passed + failed + skipped + inconclusive);
 
-                // TestRunnerApi.Execute for EditMode runs synchronously on the main thread,
-                // so results are available immediately after Execute returns.
-                var results = callbacks.Results;
-
-                if (results == null)
-                {
-                    return MCPToolResult.Success(new
+                var failures = run.Descendants("test-case")
+                    .Where(tc => (string)tc.Attribute("result") == "Failed")
+                    .Select(tc => new
                     {
-                        status = "executed",
-                        note = "Tests were dispatched. EditMode tests run synchronously; PlayMode tests run asynchronously and results may not be captured here."
-                    });
-                }
-
-                var passed = results.PassCount;
-                var failed = results.FailCount;
-                var skipped = results.SkipCount;
-                var total = passed + failed + skipped;
-
-                var failures = callbacks.Failures
-                    .Select(f => new { name = f.name, message = f.message })
+                        name = (string)tc.Attribute("fullname") ?? (string)tc.Attribute("name"),
+                        message = (tc.Element("failure")?.Element("message")?.Value ?? "").Trim()
+                    })
                     .ToArray();
 
                 return MCPToolResult.Success(new
                 {
+                    status = "complete",
                     total,
                     passed,
                     failed,
                     skipped,
-                    failures,
-                    duration = results.Duration
+                    inconclusive,
+                    duration = (string)run.Attribute("duration"),
+                    failures
                 });
             }
-            finally
+            catch (Exception ex)
             {
-                api.UnregisterCallbacks(callbacks);
-                UnityEngine.Object.DestroyImmediate(api);
+                return MCPToolResult.Error($"Failed to parse test results at {path}: {ex.Message}");
+            }
+        }
+
+        // Persist only scenes that are dirty AND already saved to disk. The previous
+        // EditorSceneManager.SaveOpenScenes() popped a blocking Save-As modal for untitled
+        // scenes, which froze the MCP bridge until a human dismissed it.
+        static void SaveDirtyScenesWithPath()
+        {
+            for (int i = 0; i < EditorSceneManager.sceneCount; i++)
+            {
+                var scene = EditorSceneManager.GetSceneAt(i);
+                if (scene.isDirty && !string.IsNullOrEmpty(scene.path))
+                    EditorSceneManager.SaveScene(scene);
             }
         }
 
@@ -212,6 +260,28 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 });
             }
 
+            // Some PlayerSettings values (e.g. activeInputHandler) are exposed only through
+            // the serialized ProjectSettings asset, not as public static members. Fall back
+            // to reading them directly so the documented settings actually resolve.
+            if (className == "PlayerSettings")
+            {
+                var psAssets = AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/ProjectSettings.asset");
+                if (psAssets != null && psAssets.Length > 0)
+                {
+                    var so = new SerializedObject(psAssets[0]);
+                    var sp = so.FindProperty(propertyName);
+                    if (sp != null)
+                    {
+                        return MCPToolResult.Success(new
+                        {
+                            setting = settingName,
+                            value = SerializedPropertyToString(sp),
+                            type = sp.propertyType.ToString()
+                        });
+                    }
+                }
+            }
+
             // List available properties as suggestions
             var available = settingsType
                 .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
@@ -223,6 +293,21 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             return MCPToolResult.Error(
                 $"Property '{propertyName}' not found on {className}.\n\nAvailable properties (first 30):\n  " +
                 string.Join("\n  ", available));
+        }
+
+        static string SerializedPropertyToString(SerializedProperty sp)
+        {
+            switch (sp.propertyType)
+            {
+                case SerializedPropertyType.Integer: return sp.intValue.ToString();
+                case SerializedPropertyType.Boolean: return sp.boolValue.ToString();
+                case SerializedPropertyType.Float: return sp.floatValue.ToString();
+                case SerializedPropertyType.String: return sp.stringValue;
+                case SerializedPropertyType.Enum: return sp.enumValueIndex.ToString();
+                case SerializedPropertyType.ObjectReference:
+                    return sp.objectReferenceValue != null ? sp.objectReferenceValue.name : "null";
+                default: return sp.propertyType.ToString();
+            }
         }
 
         [MCPTool("project_refresh_assets", "Force a full refresh of the Unity AssetDatabase")]
@@ -240,30 +325,6 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             return string.Join("\n", lines.Take(5)) + "\n... (truncated)";
         }
 
-        class TestCallbacks : ICallbacks
-        {
-            public ITestResultAdaptor Results { get; private set; }
-
-            public System.Collections.Generic.List<(string name, string message)> Failures { get; }
-                = new System.Collections.Generic.List<(string, string)>();
-
-            public void RunStarted(ITestAdaptor testsToRun) { }
-
-            public void RunFinished(ITestResultAdaptor result)
-            {
-                Results = result;
-            }
-
-            public void TestStarted(ITestAdaptor test) { }
-
-            public void TestFinished(ITestResultAdaptor result)
-            {
-                if (result.TestStatus == TestStatus.Failed)
-                {
-                    Failures.Add((result.Test.FullName, result.Message ?? "No message"));
-                }
-            }
-        }
     }
 
     public static class ConsoleLogBuffer

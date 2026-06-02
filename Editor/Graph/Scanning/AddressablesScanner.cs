@@ -57,21 +57,33 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
                         var entryAddress = entryType.GetProperty("address")?.GetValue(entry)?.ToString();
                         var entryAssetPath = entryType.GetProperty("AssetPath")?.GetValue(entry)?.ToString();
 
-                        var entryNode = new NodeRecord("AddressableEntry", entryGuid)
+                        // The entry's own `guid` equals the target asset's GUID. Using it as the
+                        // node identity collided the entry with the real asset node and turned
+                        // addressable_for into a self-edge. Give the entry a group-scoped synthetic
+                        // identity so it is a distinct node; addressable_for still points at the
+                        // real asset (its true GUID).
+                        var entryNodeGuid = $"addr_entry:{groupGuid}:{entryGuid}";
+
+                        var entryNode = new NodeRecord("AddressableEntry", entryNodeGuid)
                         {
                             Name = entryAddress,
-                            Path = entryAssetPath
+                            Path = entryAssetPath,
+                            Properties = new Dictionary<string, object>
+                            {
+                                { "address", entryAddress },
+                                { "target_guid", entryGuid }
+                            }
                         };
                         result.Nodes.Add(entryNode);
 
-                        result.Edges.Add(new EdgeRecord("contains", groupGuid, 0, entryGuid, 0));
+                        result.Edges.Add(new EdgeRecord("contains", groupGuid, 0, entryNodeGuid, 0));
 
                         if (entryAssetPath != null)
                         {
                             var targetGuid = AssetDatabase.AssetPathToGUID(entryAssetPath);
                             if (!string.IsNullOrEmpty(targetGuid))
                             {
-                                result.Edges.Add(new EdgeRecord("addressable_for", entryGuid, 0, targetGuid, 0));
+                                result.Edges.Add(new EdgeRecord("addressable_for", entryNodeGuid, 0, targetGuid, 0));
                             }
                         }
                     }
