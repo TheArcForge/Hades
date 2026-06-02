@@ -6,7 +6,7 @@ const GUID_REGEX = /^guid:\s*([0-9a-f]{32})/m;
 const EXTENSION_TO_TYPE = {
   '.png': 'Texture', '.jpg': 'Texture', '.jpeg': 'Texture',
   '.tga': 'Texture', '.psd': 'Texture', '.gif': 'Texture',
-  '.exr': 'Texture', '.hdr': 'Texture',
+  '.exr': 'Texture', '.hdr': 'Texture', '.bmp': 'Texture',
   '.fbx': 'Model', '.obj': 'Model', '.blend': 'Model',
   '.dae': 'Model', '.3ds': 'Model',
   '.anim': 'AnimationClip',
@@ -14,7 +14,7 @@ const EXTENSION_TO_TYPE = {
   '.wav': 'AudioClip', '.mp3': 'AudioClip', '.ogg': 'AudioClip',
   '.aif': 'AudioClip', '.aiff': 'AudioClip',
   '.ttf': 'Font', '.otf': 'Font',
-  '.spriteatlas': 'SpriteAtlas',
+  '.spriteatlas': 'SpriteAtlas', '.spriteatlasv2': 'SpriteAtlas',
   '.renderTexture': 'RenderTexture',
   '.cubemap': 'Cubemap',
   '.mask': 'AvatarMask',

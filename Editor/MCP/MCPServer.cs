@@ -163,12 +163,17 @@ namespace ArcForge.Hades.Editor.MCP
 
         Task<string> EnqueueAndWait(string json, string traceId)
         {
-            // A long synchronous rebuild blocks the main thread, freezing the queue
-            // processor below. Enqueuing here would just stall until the transport's 30s
-            // timeout fires ("No Unity instance found"). Instead, answer immediately from
+            // A long synchronous rebuild (or package scan) blocks the main thread, freezing
+            // the queue processor below. Enqueuing here would just stall until the transport's
+            // 30s timeout fires ("No Unity instance found"). Instead, answer immediately from
             // this background thread with an honest "busy" status. The volatile flag is the
             // only state we touch — no SQLite, which the blocked main thread may be mid-write.
-            if (Graph.GraphBuilder.IsBusy)
+            //
+            // Gate only on a genuine long op — NOT the fast transient incremental Updating
+            // state (Phase 9.6 Workstream A made incrementals O(changed), so they finish in
+            // well under a frame). Gating Updating would return a spurious "busy" and open an
+            // at-least-once retry window on non-idempotent writes that already applied.
+            if (Graph.GraphBuilder.IsInLongOperation)
                 return Task.FromResult(CreateBusyResponse(json));
 
             var tcs = new TaskCompletionSource<string>();

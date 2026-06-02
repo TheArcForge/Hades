@@ -32,18 +32,21 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             var db = GraphDatabase.Instance;
             if (db == null) return MCPToolResult.Error("Graph database not initialized");
 
-            var counts = db.GetTypeCounts();
+            // Scope every per-type count to the project tier so the summary is internally
+            // consistent — previously script_type_count was project-scoped while the other
+            // per-type counts came from an all-tier GROUP BY, mixing seeded builtin and
+            // package-tier nodes into some fields but not others (field verification §9.5).
+            // total_node_count / total_edge_count remain graph-wide totals by design.
+            var counts = db.GetTypeCounts("project");
             var result = new JObject
             {
                 ["project_name"] = db.FindNodesByType("Project").FirstOrDefault()?.Name ?? "Unknown",
                 ["scene_count"] = GetCount(counts, "Scene"),
                 ["prefab_count"] = GetCount(counts, "Prefab") + GetCount(counts, "PrefabVariant"),
                 ["script_count"] = GetCount(counts, "Script"),
-                // Project-tier C# types only — excludes the ~4k seeded Unity builtin
-                // ScriptType nodes so this reflects the user's own indexed types
-                // (the field report saw ScriptType nodes present while script_count
-                // read 0, because those were builtins with no Script file node).
-                ["script_type_count"] = db.GetNodeCount("ScriptType", "project"),
+                // Project-tier C# types — consistent with the other counts above and
+                // excludes the ~4k seeded Unity builtin ScriptType nodes.
+                ["script_type_count"] = GetCount(counts, "ScriptType"),
                 ["scriptable_object_count"] = GetCount(counts, "ScriptableObject"),
                 ["material_count"] = GetCount(counts, "Material"),
                 ["total_node_count"] = db.GetNodeCount(),
@@ -86,15 +89,24 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             }
 
             var pendingCount = db.GetPendingEdgeCount();
+            // Exclude never-resolvable edges (BCL/Unity/framework types and references to
+            // asset types Hades does not index) from the coverage denominator — they are
+            // not missing user-code links. Tallies are persisted by the last full rebuild.
+            var externalEdges = ParseMetaLong(db.GetMetadata("pending_edges_external"));
+            var unresolvableEdges = ParseMetaLong(db.GetMetadata("pending_edges_unresolvable"));
+            var neverResolvable = Math.Min(pendingCount, externalEdges + unresolvableEdges);
+            var stillPending = Math.Max(0, pendingCount - neverResolvable);
             var totalIndexed = counts.Values.Sum();
-            var coveragePercent = totalIndexed > 0 && pendingCount == 0 ? 100.0
-                : totalIndexed > 0 ? Math.Round(100.0 * totalIndexed / (totalIndexed + pendingCount), 1)
+            var coveragePercent = totalIndexed > 0 && stillPending == 0 ? 100.0
+                : totalIndexed > 0 ? Math.Round(100.0 * totalIndexed / (totalIndexed + stillPending), 1)
                 : 0.0;
 
             result["asset_coverage"] = new JObject
             {
                 ["indexed_types"] = JObject.FromObject(indexedTypes),
                 ["pending_edge_count"] = pendingCount,
+                ["external_edge_count"] = neverResolvable,
+                ["still_pending_edge_count"] = stillPending,
                 ["coverage_percent"] = coveragePercent
             };
 
@@ -312,11 +324,11 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             if (db == null) return MCPToolResult.Error("Graph database not initialized");
 
             var targets = db.SearchByName(null, null)
-                .Where(n => n.Path == target_path).ToList();
+                .Where(n => PathMatches(n.Path, target_path)).ToList();
 
             if (targets.Count == 0)
                 targets = db.FindNodesByType("ScriptType")
-                    .Where(n => n.Path == target_path).ToList();
+                    .Where(n => PathMatches(n.Path, target_path)).ToList();
 
             var references = new List<JObject>();
             var seenIds = new HashSet<long>();
@@ -477,11 +489,11 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             var db = GraphDatabase.Instance;
             if (db == null) return MCPToolResult.Error("Graph database not initialized");
 
-            var startNodes = db.SearchByName(null, null).Where(n => n.Path == asset_path).ToList();
+            var startNodes = db.SearchByName(null, null).Where(n => PathMatches(n.Path, asset_path)).ToList();
             if (startNodes.Count == 0)
-                startNodes = db.FindNodesByType("Scene").Where(n => n.Path == asset_path).ToList();
+                startNodes = db.FindNodesByType("Scene").Where(n => PathMatches(n.Path, asset_path)).ToList();
             if (startNodes.Count == 0)
-                startNodes = db.FindNodesByType("Prefab").Where(n => n.Path == asset_path).ToList();
+                startNodes = db.FindNodesByType("Prefab").Where(n => PathMatches(n.Path, asset_path)).ToList();
 
             if (startNodes.Count == 0)
             {
@@ -522,16 +534,23 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         [MCPTool("get_recently_changed",
             "Returns assets that were updated in the graph within the last N hours. Useful for understanding recent project activity.")]
         public static MCPToolResult GetRecentlyChanged(
-            [MCPToolParam("Number of hours to look back", required: true)] int hours)
+            [MCPToolParam("Number of hours to look back", required: true)] int hours,
+            [MCPToolParam("Maximum number of changed nodes to scan (default 500)", required: false)] int limit = 500)
         {
             var db = GraphDatabase.Instance;
             if (db == null) return MCPToolResult.Error("Graph database not initialized");
 
-            var nodes = db.GetRecentlyChanged(hours);
+            if (limit <= 0) limit = 500;
+            // Bound the result so a wide look-back window can't return the whole graph.
+            // Nodes come back most-recent-first; if we hit the cap there may be more.
+            var nodes = db.GetRecentlyChanged(hours, limit);
+            var truncated = nodes.Count >= limit;
 
             var result = new JObject
             {
                 ["hours"] = hours,
+                ["limit"] = limit,
+                ["truncated"] = truncated,
                 ["count"] = nodes.Count,
                 ["assets"] = new JArray(nodes
                     .Where(n => n.Path != null)
@@ -702,6 +721,38 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         static bool IsScriptPath(string path)
         {
             return !string.IsNullOrEmpty(path) && path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
+        }
+
+        static long ParseMetaLong(string value)
+        {
+            return long.TryParse(value, out var n) ? n : 0;
+        }
+
+        // Reduces any asset path to a canonical project-relative key so a query argument
+        // resolves whether the caller passes an absolute path or a project-relative one,
+        // and regardless of slash direction. The Node scanner now stores project-relative
+        // Script paths (Phase 9.6 Workstream C); this keeps lookups tolerant across the
+        // rebuild transition and for callers that still pass absolute paths.
+        static string NormalizeAssetPath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return path;
+            var p = path.Replace('\\', '/');
+            // Cut to the project-relative segment if an absolute path slipped through.
+            foreach (var root in new[] { "/Assets/", "/Packages/", "/Library/" })
+            {
+                var idx = p.IndexOf(root, StringComparison.OrdinalIgnoreCase);
+                if (idx >= 0) { p = p.Substring(idx + 1); break; }
+            }
+            return p;
+        }
+
+        // Tolerant path equality: exact match first (fast path), then normalized.
+        static bool PathMatches(string nodePath, string queryPath)
+        {
+            if (nodePath == queryPath) return true;
+            if (string.IsNullOrEmpty(nodePath) || string.IsNullOrEmpty(queryPath)) return false;
+            return string.Equals(NormalizeAssetPath(nodePath), NormalizeAssetPath(queryPath),
+                StringComparison.OrdinalIgnoreCase);
         }
 
         // True when the last build could not parse project C# (Node scanner failed

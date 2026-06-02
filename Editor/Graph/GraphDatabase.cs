@@ -42,6 +42,12 @@ namespace ArcForge.Hades.Editor.Graph
             _connection.Execute("PRAGMA temp_store = MEMORY;");
             _connection.Execute("PRAGMA mmap_size = 268435456;");
             _connection.Execute("PRAGMA foreign_keys = ON;");
+            // Bound WAL growth between full checkpoints: fire automatic PASSIVE
+            // checkpoints as the log accumulates (1000 pages ≈ 4 MB) and cap the
+            // on-disk WAL file size after checkpoint. The explicit TRUNCATE at
+            // rebuild finalize (Checkpoint()) is retained for a hard reset.
+            _connection.Execute("PRAGMA wal_autocheckpoint = 1000;");
+            _connection.Execute("PRAGMA journal_size_limit = 67108864;");
         }
 
         void InitializeSchema()
@@ -219,6 +225,20 @@ namespace ArcForge.Hades.Editor.Graph
         public void Checkpoint()
         {
             _connection.ExecuteScalar<string>("PRAGMA wal_checkpoint(TRUNCATE);");
+        }
+
+        /// <summary>
+        /// Passive WAL checkpoint: integrates committed WAL frames — including those
+        /// written by the out-of-process Node scanner — into the main database file
+        /// through this connection, without truncating the WAL or blocking writers.
+        /// Called right after the scanner subprocess exits so its project-script
+        /// frames are durably merged before the C# side does any further writes or
+        /// the final TRUNCATE checkpoint; otherwise that TRUNCATE can discard the
+        /// not-yet-integrated frames, dropping every project script on a full rebuild.
+        /// </summary>
+        public void CheckpointPassive()
+        {
+            _connection.ExecuteScalar<string>("PRAGMA wal_checkpoint(PASSIVE);");
         }
 
         // --- Low-level SQL helpers (public for GraphBuilder, tools, and tests) ---
@@ -631,14 +651,15 @@ namespace ArcForge.Hades.Editor.Graph
             return _connection.ExecuteScalar<long>("SELECT COUNT(*) FROM pending_edges;");
         }
 
-        public List<NodeRecord> GetRecentlyChanged(int hours)
+        public List<NodeRecord> GetRecentlyChanged(int hours, int limit = 1000)
         {
             var results = new List<NodeRecord>();
             var cutoff = DateTimeOffset.UtcNow.AddHours(-hours).ToUnixTimeSeconds();
             using (var stmt = new SQLitePreparedStatement(_connection,
-                "SELECT * FROM nodes WHERE updated_at >= ? ORDER BY updated_at DESC;"))
+                "SELECT * FROM nodes WHERE updated_at >= ? ORDER BY updated_at DESC LIMIT ?;"))
             {
                 stmt.Bind(1, cutoff);
+                stmt.Bind(2, limit);
                 while (stmt.Step() == SQLite3.Result.Row)
                     results.Add(ReadNodeFromStatement(stmt));
             }
@@ -730,6 +751,24 @@ namespace ArcForge.Hades.Editor.Graph
             return counts;
         }
 
+        /// <summary>
+        /// Per-type node counts scoped to a single tier (e.g. "project"). Lets callers
+        /// report a scope-consistent view that excludes seeded builtin and package-tier
+        /// nodes rather than mixing scoped and unscoped counts in one summary.
+        /// </summary>
+        public Dictionary<string, long> GetTypeCounts(string tier)
+        {
+            var counts = new Dictionary<string, long>();
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "SELECT type, COUNT(*) as cnt FROM nodes WHERE tier = ? GROUP BY type;"))
+            {
+                stmt.Bind(1, tier);
+                while (stmt.Step() == SQLite3.Result.Row)
+                    counts[stmt.GetString(0)] = stmt.GetLong(1);
+            }
+            return counts;
+        }
+
         // --- Tier-aware operations ---
 
         /// <summary>
@@ -784,6 +823,45 @@ namespace ArcForge.Hades.Editor.Graph
             using (var stmt = new SQLitePreparedStatement(_connection,
                 "SELECT id, source_node_id, edge_type, target_type_name, target_namespace, source_asset_guid, created_at FROM pending_edges;"))
             {
+                while (stmt.Step() == SQLite3.Result.Row)
+                {
+                    results.Add(new Models.PendingEdge
+                    {
+                        Id = stmt.GetLong(0),
+                        SourceNodeId = stmt.GetLong(1),
+                        EdgeType = stmt.GetString(2),
+                        TargetTypeName = stmt.GetString(3),
+                        TargetNamespace = stmt.GetString(4),
+                        SourceAssetGuid = stmt.GetString(5),
+                        CreatedAt = stmt.GetLong(6)
+                    });
+                }
+            }
+            return results;
+        }
+
+        /// <summary>
+        /// Returns only the pending edges whose source asset GUID is in the given set.
+        /// Used by incremental updates to scope resolution to the changed assets
+        /// (O(changed)) instead of scanning the entire pending_edges table (O(graph)).
+        /// </summary>
+        public List<Models.PendingEdge> GetPendingEdgesBySourceAssets(IReadOnlyCollection<string> sourceAssetGuids)
+        {
+            var results = new List<Models.PendingEdge>();
+            if (sourceAssetGuids == null || sourceAssetGuids.Count == 0) return results;
+
+            var placeholderArr = new string[sourceAssetGuids.Count];
+            for (int p = 0; p < placeholderArr.Length; p++) placeholderArr[p] = "?";
+            var placeholders = string.Join(",", placeholderArr);
+            var sql = "SELECT id, source_node_id, edge_type, target_type_name, target_namespace, source_asset_guid, created_at "
+                      + "FROM pending_edges WHERE source_asset_guid IN (" + placeholders + ");";
+
+            using (var stmt = new SQLitePreparedStatement(_connection, sql))
+            {
+                int i = 1;
+                foreach (var guid in sourceAssetGuids)
+                    stmt.Bind(i++, guid);
+
                 while (stmt.Step() == SQLite3.Result.Row)
                 {
                     results.Add(new Models.PendingEdge

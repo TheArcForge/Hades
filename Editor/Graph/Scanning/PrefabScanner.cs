@@ -76,7 +76,8 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
             {
                 if (rootToScan != null)
                 {
-                    ScanGameObject(rootToScan, guid, prefabNode, result);
+                    var nestedSeen = new HashSet<string>();
+                    ScanGameObject(rootToScan, guid, prefabNode, result, true, nestedSeen);
                 }
             }
             finally
@@ -90,7 +91,8 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
             return result;
         }
 
-        void ScanGameObject(GameObject go, string prefabGuid, NodeRecord parentNode, ScanResult result)
+        void ScanGameObject(GameObject go, string prefabGuid, NodeRecord parentNode, ScanResult result,
+            bool isRoot, HashSet<string> nestedSeen)
         {
             var goFileId = go.GetInstanceID();
             var goNode = new NodeRecord("GameObject")
@@ -107,6 +109,26 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
             result.Edges.Add(new EdgeRecord("contains",
                 parentNode.Guid, parentNode.FileId ?? 0,
                 goNode.Guid, goFileId));
+
+            // Nested-prefab linkage: a non-root GameObject that is itself the root of another
+            // prefab instance creates a prefab→prefab dependency (m_SourcePrefab). The scan
+            // root is skipped — for variants its source is already recorded via inherits_from.
+            // Conservative: instance-root detection only; a recursive serialized-ref walk is
+            // deferred. Deduped so repeated instances of one prefab yield a single edge.
+            if (!isRoot && PrefabUtility.IsAnyPrefabInstanceRoot(go))
+            {
+                var sourcePath = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(go);
+                if (!string.IsNullOrEmpty(sourcePath))
+                {
+                    var sourceGuid = AssetDatabase.AssetPathToGUID(sourcePath);
+                    if (!string.IsNullOrEmpty(sourceGuid) && sourceGuid != prefabGuid
+                        && nestedSeen.Add(sourceGuid))
+                    {
+                        result.Edges.Add(new EdgeRecord("nests_prefab",
+                            prefabGuid, 0, sourceGuid, 0));
+                    }
+                }
+            }
 
             var components = go.GetComponents<Component>();
             foreach (var comp in components)
@@ -148,7 +170,7 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
 
             for (int i = 0; i < go.transform.childCount; i++)
             {
-                ScanGameObject(go.transform.GetChild(i).gameObject, prefabGuid, goNode, result);
+                ScanGameObject(go.transform.GetChild(i).gameObject, prefabGuid, goNode, result, false, nestedSeen);
             }
         }
 

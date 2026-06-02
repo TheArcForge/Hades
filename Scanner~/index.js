@@ -2,7 +2,7 @@ import { parseArgs } from 'node:util';
 import { Worker } from 'worker_threads';
 import { cpus } from 'os';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, relative, sep } from 'path';
 import { discoverCsFiles } from './src/discovery.js';
 import { parseFile } from './src/ts-parser.js';
 import { resolveGuid } from './src/meta-resolver.js';
@@ -84,9 +84,9 @@ export async function scan({
 
     if (mode === 'full') {
       _runMetaScan({ db, dirs });
-      return await _runFullScan({ db, allFiles, guidToFile, scannerVersion, tier });
+      return await _runFullScan({ db, allFiles, guidToFile, scannerVersion, tier, projectRoot });
     } else if (mode === 'incremental') {
-      return await _runIncrementalScan({ db, guids: guids ?? [], guidToFile, scannerVersion, tier });
+      return await _runIncrementalScan({ db, guids: guids ?? [], guidToFile, scannerVersion, tier, projectRoot });
     } else {
       process.stderr.write(`Unknown mode: ${mode}\n`);
       return EXIT_ERROR;
@@ -99,7 +99,7 @@ export async function scan({
 
 // ─── Full scan ───────────────────────────────────────────────────────────────
 
-async function _runFullScan({ db, allFiles, guidToFile, scannerVersion, tier }) {
+async function _runFullScan({ db, allFiles, guidToFile, scannerVersion, tier, projectRoot }) {
   const total = allFiles.length;
   let current = 0;
 
@@ -154,12 +154,13 @@ async function _runFullScan({ db, allFiles, guidToFile, scannerVersion, tier }) 
           contentHash: wr.hash,
           scannerVersion,
           parsed: wr.parsed,
+          projectRoot,
         });
       }
     });
   } else {
     for (const item of toScan) {
-      _scanFile({ db, filePath: item.filePath, guid: item.guid, contentHash: item.contentHash, scannerVersion });
+      _scanFile({ db, filePath: item.filePath, guid: item.guid, contentHash: item.contentHash, scannerVersion, projectRoot });
     }
   }
 
@@ -168,7 +169,7 @@ async function _runFullScan({ db, allFiles, guidToFile, scannerVersion, tier }) 
 
 // ─── Incremental scan ────────────────────────────────────────────────────────
 
-async function _runIncrementalScan({ db, guids, guidToFile, scannerVersion, tier }) {
+async function _runIncrementalScan({ db, guids, guidToFile, scannerVersion, tier, projectRoot }) {
   const total = guids.length;
   let current = 0;
 
@@ -193,7 +194,7 @@ async function _runIncrementalScan({ db, guids, guidToFile, scannerVersion, tier
     }
 
     // Re-scan this file
-    _scanFile({ db, filePath, guid, contentHash, scannerVersion });
+    _scanFile({ db, filePath, guid, contentHash, scannerVersion, projectRoot });
   }
 
   return EXIT_OK;
@@ -201,7 +202,7 @@ async function _runIncrementalScan({ db, guids, guidToFile, scannerVersion, tier
 
 // ─── File scanning ───────────────────────────────────────────────────────────
 
-function _writeParseResult({ db, filePath, guid, contentHash, scannerVersion, parsed }) {
+function _writeParseResult({ db, filePath, guid, contentHash, scannerVersion, parsed, projectRoot }) {
   if (parsed.nodes.length === 0) return;
 
   // Delete old nodes + pending edges for this guid
@@ -218,7 +219,7 @@ function _writeParseResult({ db, filePath, guid, contentHash, scannerVersion, pa
   const scriptDbId = db.insertNode({
     type: scriptNode.type,
     name: scriptNode.name,
-    path: scriptNode.path,
+    path: _toProjectRelative(scriptNode.path, projectRoot),
     guid,
     properties: scriptNode.properties ? JSON.stringify(scriptNode.properties) : null,
     sourceRange: scriptNode.sourceRange ?? null,
@@ -232,7 +233,7 @@ function _writeParseResult({ db, filePath, guid, contentHash, scannerVersion, pa
     const dbId = db.insertNode({
       type: node.type,
       name: node.name,
-      path: node.path,
+      path: _toProjectRelative(node.path, projectRoot),
       guid: node.type === 'Script' ? guid : null,
       fileId: scriptDbId,
       properties: node.properties ? JSON.stringify(node.properties) : null,
@@ -286,11 +287,24 @@ function _writeParseResult({ db, filePath, guid, contentHash, scannerVersion, pa
   db.recordScannedAsset(guid, contentHash, scannerVersion);
 }
 
-function _scanFile({ db, filePath, guid, contentHash, scannerVersion }) {
+function _scanFile({ db, filePath, guid, contentHash, scannerVersion, projectRoot }) {
   const parsed = parseFile(filePath);
   db.runInTransaction(() => {
-    _writeParseResult({ db, filePath, guid, contentHash, scannerVersion, parsed });
+    _writeParseResult({ db, filePath, guid, contentHash, scannerVersion, parsed, projectRoot });
   });
+}
+
+/**
+ * Converts an absolute scan path to a project-relative path (e.g. "Assets/Foo.cs"),
+ * matching how the C# scanners key every other asset. Forward-slash normalized so
+ * Script/ScriptType nodes resolve the same way on Windows and macOS. Falls back to
+ * the original path if no projectRoot is available.
+ */
+function _toProjectRelative(p, projectRoot) {
+  if (!p || !projectRoot) return p;
+  const rel = relative(projectRoot, p);
+  if (!rel || rel.startsWith('..')) return p; // outside the project — leave as-is
+  return rel.split(sep).join('/');
 }
 
 // ─── Meta-scan for non-code assets ──────────────────────────────────────────

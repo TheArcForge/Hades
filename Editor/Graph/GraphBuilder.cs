@@ -32,11 +32,25 @@ namespace ArcForge.Hades.Editor.Graph
         static volatile bool _busy;
         public static bool IsBusy => _busy;
 
+        // True only during a *long*, main-thread-blocking operation (a full rebuild or
+        // package scan), NOT during the fast transient incremental Updating state.
+        // The MCP busy gate keys off this: incrementals are now O(changed) (Phase 9.6
+        // Workstream A) and finish in well under a frame, so gating them would return a
+        // spurious "busy" and open an at-least-once retry window on non-idempotent writes.
+        // Only a genuine long op (which truly blocks the queue) warrants a busy response.
+        static volatile bool _longOp;
+        public static bool IsInLongOperation => _longOp;
+
         BuildStatus _statusBacking = BuildStatus.Idle;
         BuildStatus _status
         {
             get => _statusBacking;
-            set { _statusBacking = value; _busy = value != BuildStatus.Idle; }
+            set
+            {
+                _statusBacking = value;
+                _busy = value != BuildStatus.Idle;
+                _longOp = value == BuildStatus.Rebuilding || value == BuildStatus.ScanningPackages;
+            }
         }
 
         // Session-level node map: accumulates guid:fileId → nodeId across all scanned files
@@ -290,6 +304,15 @@ namespace ArcForge.Hades.Editor.Graph
                 // references" from "C# scanning unavailable" and avoid returning a
                 // confident, wrong 0 on .cs queries when the scanner failed.
                 _db.SetMetadata("csharp_scan_status", nodeResult.Success ? "ok" : "degraded");
+
+                // Cross-process WAL safety: the Node scanner wrote project-script
+                // frames to the WAL from a separate process. Integrate them into the
+                // main DB through this connection now — before Phase C writes or the
+                // final TRUNCATE checkpoint — otherwise that TRUNCATE can discard the
+                // not-yet-merged frames and drop every project script on a full rebuild.
+                if (nodeResult.Success)
+                    _db.CheckpointPassive();
+
                 _buildLog?.EndStep();
 
                 // Rebuild session map from DB (includes what Node.js wrote)
@@ -542,10 +565,12 @@ namespace ArcForge.Hades.Editor.Graph
                         RunNodeScanner("incremental", assetsDir, $"--guids \"{guidList}\"");
                     }
 
+                    // Incrementals stay O(changed): no full session-map rebuild
+                    // (WriteScanResult falls back to targeted FindNodeByGuid lookups
+                    // when _sessionNodeMap is null) and pending-edge resolution is
+                    // scoped to the changed assets instead of the whole table.
                     if (otherGuids.Count > 0)
                     {
-                        _sessionNodeMap = BuildSessionMapFromExistingNodes();
-
                         _db.RunInTransaction(() =>
                         {
                             foreach (var guid in otherGuids)
@@ -565,13 +590,12 @@ namespace ArcForge.Hades.Editor.Graph
                                 ScanAsset(assetPath, tier);
                             }
 
-                            ResolvePendingEdges();
+                            ResolvePendingEdges(guids);
                         });
                     }
                     else
                     {
-                        _sessionNodeMap = BuildSessionMapFromExistingNodes();
-                        _db.RunInTransaction(() => ResolvePendingEdges());
+                        _db.RunInTransaction(() => ResolvePendingEdges(guids));
                     }
                 }
                 catch (Exception ex)
@@ -854,9 +878,18 @@ namespace ArcForge.Hades.Editor.Graph
         /// Resolves pending edges by matching target GUIDs/names against existing nodes.
         /// Called after scanning completes.
         /// </summary>
-        void ResolvePendingEdges()
+        /// <param name="scopeGuids">
+        /// When non-null, only pending edges originating from these source asset GUIDs
+        /// are considered — keeping incremental updates O(changed) instead of scanning
+        /// the entire pending_edges table. A full rebuild passes null (resolve all).
+        /// Pre-existing pending edges from other assets that a newly-scanned node would
+        /// now satisfy are intentionally left for the next rebuild (they persist, not lost).
+        /// </param>
+        void ResolvePendingEdges(IReadOnlyCollection<string> scopeGuids = null)
         {
-            var pending = _db.GetPendingEdges();
+            var pending = scopeGuids != null
+                ? _db.GetPendingEdgesBySourceAssets(scopeGuids)
+                : _db.GetPendingEdges();
             if (pending.Count == 0) return;
 
             var coveredExtensions = _scannerRegistry.GetCoveredExtensions();
@@ -864,6 +897,7 @@ namespace ArcForge.Hades.Editor.Graph
             int resolved = 0;
             int permanent = 0;
             int transient = 0;
+            int external = 0;
             var toDelete = new HashSet<long>();
 
             foreach (var pe in pending)
@@ -916,9 +950,17 @@ namespace ArcForge.Hades.Editor.Graph
                         else
                             transient++;
                     }
+                    else if (IsKnownExternalTarget(pe))
+                    {
+                        // Target is a BCL/Unity/framework type or an unstripped generic — no
+                        // user node will ever satisfy it. Count separately so it does not
+                        // depress the "still pending" (will-resolve-next-rebuild) signal.
+                        external++;
+                    }
                     else
                     {
-                        // GUID doesn't resolve to any asset — likely a type name for inherits_from/implements
+                        // GUID doesn't resolve to any asset — likely a user type for
+                        // inherits_from/implements not yet scanned this pass.
                         transient++;
                     }
                 }
@@ -931,6 +973,8 @@ namespace ArcForge.Hades.Editor.Graph
                 parts.Add($"{resolved} resolved");
                 if (permanent > 0)
                     parts.Add($"{permanent} unresolvable (refs to textures, meshes, audio, etc. — asset types not indexed by Hades)");
+                if (external > 0)
+                    parts.Add($"{external} external (BCL/Unity/framework types — not user code)");
                 if (transient > 0)
                     parts.Add($"{transient} still pending (will resolve on next rebuild)");
 
@@ -939,8 +983,21 @@ namespace ArcForge.Hades.Editor.Graph
                 _buildLog?.Detail("Edges resolved", resolved);
                 if (permanent > 0)
                     _buildLog?.Detail("Edges unresolvable (unscanned types)", permanent);
+                if (external > 0)
+                    _buildLog?.Detail("Edges external (BCL/framework)", external);
                 if (transient > 0)
                     _buildLog?.Detail("Edges still pending", transient);
+            }
+
+            // On a full pass (scope == null) the classification above is global, so persist
+            // the never-resolvable tallies. get_project_summary reads these to keep its
+            // coverage metric honest — framework/asset-type references that can never resolve
+            // must not be counted as "missing user-code links". Incrementals leave them as-is;
+            // they reconverge on the next full rebuild.
+            if (scopeGuids == null)
+            {
+                _db.SetMetadata("pending_edges_external", external.ToString());
+                _db.SetMetadata("pending_edges_unresolvable", permanent.ToString());
             }
         }
 
@@ -1005,7 +1062,7 @@ namespace ArcForge.Hades.Editor.Graph
 
                         if (type.BaseType != null && type.BaseType != typeof(object))
                         {
-                            var baseTypeName = type.BaseType.Name;
+                            var baseTypeName = StripGenericArity(type.BaseType.Name);
                             _db.InsertPendingEdge(nodeId, "inherits_from", baseTypeName, type.BaseType.Namespace, null);
                             edgeCount++;
                         }
@@ -1018,7 +1075,7 @@ namespace ArcForge.Hades.Editor.Graph
                         }
                         foreach (var iface in directInterfaces)
                         {
-                            _db.InsertPendingEdge(nodeId, "implements", iface.Name, iface.Namespace, null);
+                            _db.InsertPendingEdge(nodeId, "implements", StripGenericArity(iface.Name), iface.Namespace, null);
                             edgeCount++;
                         }
                     }
@@ -1029,6 +1086,52 @@ namespace ArcForge.Hades.Editor.Graph
 
             sw.Stop();
             Debug.Log($"[Hades] Seeded {typeCount} builtin types, {edgeCount} edges in {sw.ElapsedMilliseconds}ms");
+        }
+
+        /// <summary>
+        /// Strips the CLR generic-arity suffix (e.g. "IList`1" → "IList") so builtin-type
+        /// pending edges match the unadorned type names scanners record. Without this,
+        /// generic base/interface edges never resolve.
+        /// </summary>
+        static string StripGenericArity(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return name;
+            var tick = name.IndexOf('`');
+            return tick >= 0 ? name.Substring(0, tick) : name;
+        }
+
+        static readonly string[] ExternalNamespaceRoots =
+        {
+            "System", "Microsoft", "Mono", "UnityEngine", "UnityEditor",
+            "Unity", "TMPro", "JetBrains", "NUnit", "Newtonsoft"
+        };
+
+        /// <summary>
+        /// Heuristic: does this unresolved pending edge target a BCL/Unity/framework type
+        /// (or an unstripped generic) that no user-scanned node will ever satisfy? Such
+        /// edges are tallied as "external" rather than "still pending" so coverage metrics
+        /// reflect genuinely missing user-code links, not permanent framework references.
+        /// </summary>
+        static bool IsKnownExternalTarget(Models.PendingEdge pe)
+        {
+            // Unstripped generic-arity names (e.g. "IList`1") can never match a scanned or
+            // seeded node, so they are effectively external for coverage purposes.
+            if (!string.IsNullOrEmpty(pe.TargetTypeName) && pe.TargetTypeName.IndexOf('`') >= 0)
+                return true;
+
+            // For code_references the TargetNamespace field carries the reference_kind, not a
+            // namespace — so only inheritance/interface edges get namespace classification.
+            if (pe.EdgeType != "inherits_from" && pe.EdgeType != "implements")
+                return false;
+
+            var ns = pe.TargetNamespace;
+            if (string.IsNullOrEmpty(ns)) return false;
+            foreach (var root in ExternalNamespaceRoots)
+            {
+                if (ns == root || ns.StartsWith(root + ".", StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
         }
 
         // -------------------------------------------------------------------
