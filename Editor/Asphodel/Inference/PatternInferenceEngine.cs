@@ -111,7 +111,7 @@ namespace ArcForge.Hades.Editor.Asphodel.Inference
                 {
                     span?.SetStatus(SpanStatus.Error);
                     span?.SetAttribute("error.message", ex.Message);
-                    UnityEngine.Debug.LogWarning($"[Hades] Inference run failed: {ex.Message}");
+                    UnityEngine.Debug.LogWarning($"[Hades] Inference run failed: {ex}");
                 }
             }
         }
@@ -182,6 +182,7 @@ namespace ArcForge.Hades.Editor.Asphodel.Inference
 
                 foreach (var file in tier1Files)
                 {
+                    if (string.IsNullOrEmpty(pattern.TargetFile)) continue;
                     if (file.Filename.Replace(".md", "") != pattern.TargetFile.Replace(".md", ""))
                         continue;
 

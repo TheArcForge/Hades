@@ -84,6 +84,9 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
                             if (!string.IsNullOrEmpty(targetGuid))
                             {
                                 result.Edges.Add(new EdgeRecord("addressable_for", entryNodeGuid, 0, targetGuid, 0));
+                                // Also surface the GROUP as a referrer of the member asset so that
+                                // find_references_to(member) returns the AddressableGroup node.
+                                result.Edges.Add(new EdgeRecord("addressable_for", groupGuid, 0, targetGuid, 0));
                             }
                         }
                     }

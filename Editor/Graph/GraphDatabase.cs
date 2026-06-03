@@ -666,8 +666,49 @@ namespace ArcForge.Hades.Editor.Graph
             return results;
         }
 
-        public List<NodeRecord> TraverseDependencies(long startNodeId, int maxDepth = 5)
+        // Edge types that represent structural containment/declaration within a file or asset.
+        // These are NOT dependencies — they describe the internal shape of the source node,
+        // not what it depends on. Excluded from dependency traversal by default.
+        private static readonly HashSet<string> DefaultExcludedDependencyEdgeTypes =
+            new HashSet<string>(System.StringComparer.Ordinal) { "defines" };
+
+        /// <summary>
+        /// Edge types that describe structural shape or ownership — they are NEVER a "real"
+        /// reference from one asset to another for the purposes of <c>find_references_to</c>.
+        ///
+        /// Policy:
+        ///   defines       — Script/ScriptType declares a child type or method.
+        ///   contains      — Prefab/Scene/GameObject contains a child object or component.
+        ///   nests_prefab  — Prefab structurally nests another prefab as a child instance.
+        ///
+        /// Intentionally NOT in this set (= treated as real referrers):
+        ///   references, uses_*, instance_of, code_references — direct asset/code references.
+        ///   inherits_from, implements  — C# inheritance is a real referrer for script targets;
+        ///       for prefab targets, inherits_from (variant→base) is filtered separately in
+        ///       FindReferencesTo using target-type-aware logic.
+        ///   instantiates  — (Task C4) scene instantiating a prefab is a real referrer.
+        ///   addressable_for — (Task D1) addressables entry pointing at an asset is a real referrer.
+        /// </summary>
+        public static readonly HashSet<string> StructuralEdgeTypes =
+            new HashSet<string>(System.StringComparer.Ordinal) { "defines", "contains", "nests_prefab" };
+
+        /// <summary>
+        /// Traverses forward dependency edges from <paramref name="startNodeId"/> up to
+        /// <paramref name="maxDepth"/> hops. Structural-containment edges (by default:
+        /// <c>defines</c>) are excluded so that a Script/ScriptType's own declared methods
+        /// do not appear as dependencies.
+        /// </summary>
+        /// <param name="startNodeId">Node to start from.</param>
+        /// <param name="maxDepth">Maximum BFS depth.</param>
+        /// <param name="excludedEdgeTypes">
+        /// Set of edge types to skip during traversal. Pass <c>null</c> to use the default
+        /// exclusion set (<c>defines</c>). Pass an empty set to follow all edge types.
+        /// </param>
+        public List<NodeRecord> TraverseDependencies(long startNodeId, int maxDepth = 5,
+            HashSet<string> excludedEdgeTypes = null)
         {
+            var excluded = excludedEdgeTypes ?? DefaultExcludedDependencyEdgeTypes;
+
             using (var span = CharonEmitter.StartSpan("graph.query.traverse_dependencies", SpanKind.Internal))
             {
                 span.SetAttribute("query.start_node_id", startNodeId);
@@ -687,6 +728,7 @@ namespace ArcForge.Hades.Editor.Graph
                     var edges = FindEdgesFrom(currentId);
                     foreach (var edge in edges)
                     {
+                        if (excluded.Contains(edge.Type)) continue;
                         if (visited.Contains(edge.TargetNodeId)) continue;
                         visited.Add(edge.TargetNodeId);
 
@@ -730,6 +772,42 @@ namespace ArcForge.Hades.Editor.Graph
                     {
                         stmt.Bind(1, targetNodeId);
                         while (stmt.Step() == SQLite3.Result.Row)
+                            results.Add(ReadNodeFromStatement(stmt));
+                    }
+                }
+
+                span.SetAttribute("results.count", (long)results.Count);
+                return results;
+            }
+        }
+
+        /// <summary>
+        /// Returns all source nodes that have an incoming edge to <paramref name="targetNodeId"/>,
+        /// excluding edges whose type is in <paramref name="excludedEdgeTypes"/>.
+        /// Pass <see cref="StructuralEdgeTypes"/> to filter structural/containment edges, or a
+        /// superset that additionally excludes context-specific edge types (e.g. <c>inherits_from</c>
+        /// for prefab targets where variants should not count as direct referrers).
+        /// </summary>
+        public List<NodeRecord> FindNodesWithEdgeTo(long targetNodeId, HashSet<string> excludedEdgeTypes)
+        {
+            using (var span = CharonEmitter.StartSpan("graph.query.find_nodes_with_edge_to_filtered", SpanKind.Internal))
+            {
+                span.SetAttribute("query.target_node_id", targetNodeId);
+
+                // Fetch all referrers with edge type so we can post-filter in C#
+                // (SQLite does not support array bind parameters).
+                var results = new List<NodeRecord>();
+                using (var stmt = new SQLitePreparedStatement(_connection,
+                    "SELECT n.*, e.type as edge_type FROM nodes n JOIN edges e ON n.id = e.source_id WHERE e.target_id = ?;"))
+                {
+                    stmt.Bind(1, targetNodeId);
+                    while (stmt.Step() == SQLite3.Result.Row)
+                    {
+                        // nodes.* has 12 columns (0-11: id, type, tier, guid, file_id,
+                        // parent_node_id, name, path, source_range, properties,
+                        // created_at, updated_at). e.type as edge_type is column 12.
+                        var edgeType = stmt.GetString(12);
+                        if (excludedEdgeTypes == null || !excludedEdgeTypes.Contains(edgeType))
                             results.Add(ReadNodeFromStatement(stmt));
                     }
                 }
@@ -784,6 +862,16 @@ namespace ArcForge.Hades.Editor.Graph
         {
             return _connection.ExecuteScalar<long>(
                 "SELECT COUNT(*) FROM nodes WHERE type = ? AND tier = ?;", type, tier);
+        }
+
+        /// <summary>
+        /// Returns all distinct non-null GUIDs for nodes in the given tier.
+        /// Used for stale-node reconciliation after a successful package scan.
+        /// </summary>
+        public List<string> GetDistinctGuidsForTier(string tier)
+        {
+            return _connection.QueryScalars<string>(
+                "SELECT DISTINCT guid FROM nodes WHERE tier = ? AND guid IS NOT NULL;", tier);
         }
 
         // --- Name-based lookups for edge resolution ---
@@ -879,6 +967,37 @@ namespace ArcForge.Hades.Editor.Graph
             return results;
         }
 
+        /// <summary>
+        /// Returns pending edges whose source is the given node. Used by honesty-signal
+        /// logic to count unresolved supertype/dependency edges that point at known-external
+        /// targets (precompiled BCL/Unity types) — the caller uses
+        /// <c>GraphBuilder.IsKnownExternalTarget</c> to classify them.
+        /// </summary>
+        public List<Models.PendingEdge> GetPendingEdgesForNode(long sourceNodeId)
+        {
+            var results = new List<Models.PendingEdge>();
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "SELECT id, source_node_id, edge_type, target_type_name, target_namespace, source_asset_guid, created_at " +
+                "FROM pending_edges WHERE source_node_id = ?;"))
+            {
+                stmt.Bind(1, sourceNodeId);
+                while (stmt.Step() == SQLite3.Result.Row)
+                {
+                    results.Add(new Models.PendingEdge
+                    {
+                        Id = stmt.GetLong(0),
+                        SourceNodeId = stmt.GetLong(1),
+                        EdgeType = stmt.GetString(2),
+                        TargetTypeName = stmt.GetString(3),
+                        TargetNamespace = stmt.GetString(4),
+                        SourceAssetGuid = stmt.GetString(5),
+                        CreatedAt = stmt.GetLong(6)
+                    });
+                }
+            }
+            return results;
+        }
+
         public void DeletePendingEdge(long id)
         {
             _connection.Execute("DELETE FROM pending_edges WHERE id = ?;", id);
@@ -918,6 +1037,14 @@ namespace ArcForge.Hades.Editor.Graph
             _disposed = true;
             _connection?.Close();
             if (_instance == this) _instance = null;
+        }
+
+        // Test-only: restore the singleton to a prior value captured before a test ran.
+        // Called from [TearDown] to undo the side-effect of constructing a temp DB in tests.
+        // Nothing in production code calls this method.
+        internal static void RestoreInstanceForTests(GraphDatabase savedInstance)
+        {
+            _instance = savedInstance;
         }
     }
 }

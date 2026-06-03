@@ -15,10 +15,12 @@ namespace ArcForge.Hades.Editor.Tests.MCP.Tools
         string _testDbPath;
         string _testMemDir;
         GraphDatabase _db;
+        GraphDatabase _savedInstance;
 
         [SetUp]
         public void SetUp()
         {
+            _savedInstance = GraphDatabase.Instance;
             _testDbPath = Path.Combine(Path.GetTempPath(), $"hades_asph_test_{Guid.NewGuid()}.db");
             _db = new GraphDatabase(_testDbPath);
 
@@ -36,6 +38,7 @@ namespace ArcForge.Hades.Editor.Tests.MCP.Tools
         {
             AsphodeTools.ClearTestOverrides();
             _db?.Dispose();
+            GraphDatabase.RestoreInstanceForTests(_savedInstance);
             if (File.Exists(_testDbPath)) File.Delete(_testDbPath);
             if (File.Exists(_testDbPath + "-wal")) File.Delete(_testDbPath + "-wal");
             if (File.Exists(_testDbPath + "-shm")) File.Delete(_testDbPath + "-shm");

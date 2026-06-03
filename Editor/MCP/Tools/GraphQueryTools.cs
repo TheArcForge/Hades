@@ -119,7 +119,8 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             {
                 ["csharp"] = db.GetMetadata("csharp_scan_status") ?? "unknown",
                 ["meta"] = db.GetMetadata("meta_scan_status") ?? "unknown",
-                ["addressables"] = db.GetMetadata("addressables_scan_status") ?? "unknown"
+                ["addressables"] = db.GetMetadata("addressables_scan_status") ?? "unknown",
+                ["packages"] = db.GetMetadata("package_scan_status") ?? "unknown"
             };
 
             return MCPToolResult.SuccessWithConfidence(result, BuildConfidence());
@@ -254,33 +255,102 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             var components = db.FindNodesByType("Component")
                 .Where(c => c.Name == component_type).ToList();
 
-            var prefabs = new List<JObject>();
+            // Raw hits: (prefabNodeId → JObject). One entry per component instance found.
+            // We use prefabNodeId as the dedup key so each prefab appears at most once.
+            var hitsByPrefabId = new Dictionary<long, JObject>();
+
+            const int MaxAscendHops = 32; // guard against malformed / cyclic containment graphs
+
             foreach (var comp in components)
             {
-                var containers = db.FindNodesWithEdgeTo(comp.Id, "contains");
-                foreach (var go in containers)
+                // Ascend the containment chain from this Component node upward until we reach
+                // a Prefab or PrefabVariant node. The chain looks like:
+                //   Prefab/PrefabVariant → rootGO → … → hostGO → Component
+                // Each hop follows incoming "contains" edges (parent contains child).
+                var visited = new HashSet<long> { comp.Id };
+                long currentId = comp.Id;
+                string hostGoName = null;
+                NodeRecord prefabRoot = null;
+
+                for (int hop = 0; hop < MaxAscendHops; hop++)
                 {
-                    var parentContainers = db.FindNodesWithEdgeTo(go.Id, "contains");
-                    foreach (var parent in parentContainers)
+                    var parents = db.FindNodesWithEdgeTo(currentId, "contains");
+                    if (parents.Count == 0) break; // orphan — no prefab root found
+
+                    // In a well-formed graph each node has exactly one "contains" parent;
+                    // take the first to avoid duplicate traversals on malformed graphs.
+                    var parent = parents[0];
+                    if (!visited.Add(parent.Id)) break; // cycle guard
+
+                    if (parent.Type == "GameObject" && hostGoName == null)
+                        hostGoName = parent.Name; // record the immediate host GO
+
+                    if (parent.Type == "Prefab" || parent.Type == "PrefabVariant")
                     {
-                        if (parent.Type == "Prefab" || parent.Type == "PrefabVariant")
-                        {
-                            prefabs.Add(new JObject
-                            {
-                                ["name"] = parent.Name,
-                                ["path"] = parent.Path,
-                                ["gameobject"] = go.Name
-                            });
-                        }
+                        prefabRoot = parent;
+                        break;
                     }
+
+                    currentId = parent.Id;
+                }
+
+                if (prefabRoot == null) continue; // component not inside any prefab
+
+                // Don't overwrite an existing hit for this prefab (first component instance wins).
+                if (hitsByPrefabId.ContainsKey(prefabRoot.Id)) continue;
+
+                hitsByPrefabId[prefabRoot.Id] = new JObject
+                {
+                    ["name"] = prefabRoot.Name,
+                    ["path"] = prefabRoot.Path,
+                    ["gameobject"] = hostGoName ?? "(root)",
+                    ["prefab_type"] = prefabRoot.Type,
+                    // source is resolved below after we know which base prefabs are hit
+                    ["source"] = prefabRoot.Type == "PrefabVariant" ? "variant" : "direct"
+                };
+            }
+
+            // Variant de-dup: for each PrefabVariant hit, follow its inherits_from edge to the
+            // base prefab. If the base prefab is ALSO in the hit set, the variant's copy of this
+            // component is inherited (it comes from the base's fully-instantiated hierarchy that
+            // Unity surfaces when LoadPrefabContents is called on the variant). Label such variant
+            // hits as "inherited" rather than "direct", and exclude them from the primary count so
+            // the caller gets honest, non-inflated results.
+            //
+            // A PrefabVariant hit is "direct" only if its base is NOT in the hit set, meaning the
+            // component was added specifically by this variant (or the base simply doesn't have it).
+            foreach (var kvp in hitsByPrefabId.ToList())
+            {
+                var hit = kvp.Value;
+                if (hit["prefab_type"]?.ToString() != "PrefabVariant") continue;
+
+                var baseEdges = db.FindEdgesFrom(kvp.Key, "inherits_from");
+                if (baseEdges.Count == 0) continue;
+
+                long baseTargetId = baseEdges[0].TargetNodeId;
+                if (hitsByPrefabId.ContainsKey(baseTargetId))
+                {
+                    // The base prefab is already a hit → this variant merely inherits the component.
+                    hit["source"] = "inherited";
+                }
+                else
+                {
+                    hit["source"] = "direct";
                 }
             }
+
+            // Build output: direct/variant hits first; inherited variants included but labelled.
+            var prefabs = hitsByPrefabId.Values.ToList();
+
+            // Count only direct or own-variant hits for the headline count.
+            int directCount = prefabs.Count(p => p["source"]?.ToString() != "inherited");
 
             var result = new JObject
             {
                 ["component_type"] = component_type,
-                ["count"] = prefabs.Count,
-                ["prefabs"] = new JArray(prefabs.GroupBy(p => p["path"].ToString()).Select(g => g.First()))
+                ["count"] = directCount,
+                ["total_including_inherited_variants"] = prefabs.Count,
+                ["prefabs"] = new JArray(prefabs.OrderBy(p => p["source"]?.ToString()).ThenBy(p => p["path"]?.ToString()))
             };
 
             return MCPToolResult.SuccessWithConfidence(result, BuildConfidence());
@@ -299,12 +369,30 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
             foreach (var st in scriptTypes)
             {
-                var baseType = st.Properties?.ContainsKey("base_type") == true
-                    ? st.Properties["base_type"]?.ToString() : null;
+                // Collect supertype names from the supertypes array property
+                // (replaces the removed base_type string property).
+                // supertypes is a JArray of { "name": "...", "genericArgs"?: [...] } objects.
+                var supertypeNames = new List<string>();
+                if (st.Properties != null &&
+                    st.Properties.TryGetValue("supertypes", out var supertypesRaw) &&
+                    supertypesRaw is JArray supertypesArr)
+                {
+                    foreach (var token in supertypesArr)
+                    {
+                        var name = token is JObject obj ? obj["name"]?.ToString() : null;
+                        if (name != null) supertypeNames.Add(name);
+                    }
+                }
 
                 bool isMatch = false;
                 if (st.Name.Contains(pattern_name)) isMatch = true;
-                if (baseType != null && baseType.Contains(pattern_name)) isMatch = true;
+                if (!isMatch)
+                {
+                    foreach (var superName in supertypeNames)
+                    {
+                        if (superName.Contains(pattern_name)) { isMatch = true; break; }
+                    }
+                }
 
                 if (isMatch)
                 {
@@ -312,7 +400,7 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                     {
                         ["name"] = st.Name,
                         ["path"] = st.Path,
-                        ["base_type"] = baseType
+                        ["supertypes"] = new JArray(supertypeNames)
                     });
                 }
             }
@@ -328,7 +416,9 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         }
 
         [MCPTool("find_references_to",
-            "Finds all assets and components that reference a given asset. Returns the referencing nodes with their paths.")]
+            "Finds all assets and components that reference a given asset. Returns the referencing nodes with their paths. " +
+            "Also surfaces 'nested_by': structural parents that directly embed this asset (prefabs that nest it, " +
+            "or variants that derive from it) — relevant for delete-safety even when reference_count is 0.")]
         public static MCPToolResult FindReferencesTo(
             [MCPToolParam("Path of the target asset (e.g. Assets/Scripts/PlayerHealth.cs)", required: true)] string target_path)
         {
@@ -342,12 +432,73 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 targets = db.FindNodesByType("ScriptType")
                     .Where(n => PathMatches(n.Path, target_path)).ToList();
 
+            // For .cs queries, sibling suppression: among path-matched ScriptType nodes,
+            // keep only the one whose Name matches the file stem (e.g. "TypeA" for
+            // "TypeA.cs"), so referrers of co-located sibling types (e.g. TypeB) are
+            // not reported for a query targeting TypeA.
+            //
+            // Fallback: if NO ScriptType matches the stem (utility files, partial classes,
+            // or any file where the primary type name differs from the filename —
+            // e.g. Helpers.cs containing only StringHelpers but whose stem is
+            // "Helpers"), we keep ALL co-located ScriptTypes so the query never
+            // returns a false-empty result.
+            if (IsScriptPath(target_path))
+            {
+                var fileStem = System.IO.Path.GetFileNameWithoutExtension(target_path);
+                var colocatedScriptTypes = targets
+                    .Where(n => n.Type == "ScriptType")
+                    .ToList();
+
+                if (colocatedScriptTypes.Count > 0)
+                {
+                    var stemMatch = colocatedScriptTypes
+                        .Where(n => string.Equals(n.Name, fileStem, System.StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    // Remove all co-located ScriptTypes from targets, then re-add only the
+                    // filtered set (stem-matched, or fall back to all if no stem match).
+                    targets = targets.Where(n => n.Type != "ScriptType").ToList();
+                    targets.AddRange(stemMatch.Count > 0 ? stemMatch : colocatedScriptTypes);
+                }
+            }
+
             var references = new List<JObject>();
             var seenIds = new HashSet<long>();
 
+            // Structural parents collected separately so they never inflate reference_count.
+            // nested_by surfaces: (a) prefabs that directly nest this target via nests_prefab,
+            // and (b) for Prefab/PrefabVariant targets only, variants that derive via inherits_from.
+            var nestedBy = new List<JObject>();
+            var seenNestedByIds = new HashSet<long>();
+
             foreach (var target in targets)
             {
-                var refs = db.FindNodesWithEdgeTo(target.Id);
+                // Build the exclusion set for this target.
+                //
+                // Policy (see GraphDatabase.StructuralEdgeTypes for the canonical constant):
+                //   - Structural edges (defines, contains, nests_prefab) are always excluded —
+                //     they describe internal shape, never a real reference from one asset to another.
+                //   - inherits_from: for Prefab/PrefabVariant targets, a variant "inherits_from"
+                //     its base — that is structural/transitive, NOT a direct referrer. For Script/
+                //     ScriptType targets, a subclass "inherits_from" a base type — that IS a
+                //     legitimate referrer and must NOT be excluded.
+                //   - instantiates (Task C4) and addressable_for (Task D1) are real referrers;
+                //     they are absent from StructuralEdgeTypes and must never be added here.
+                HashSet<string> excluded;
+                bool targetIsPrefab = target.Type == "Prefab" || target.Type == "PrefabVariant";
+                if (targetIsPrefab)
+                {
+                    // For prefab targets, also exclude inherits_from so that PrefabVariants
+                    // that derive from this prefab are not counted as direct referrers.
+                    excluded = new HashSet<string>(GraphDatabase.StructuralEdgeTypes, System.StringComparer.Ordinal)
+                        { "inherits_from" };
+                }
+                else
+                {
+                    excluded = GraphDatabase.StructuralEdgeTypes;
+                }
+
+                var refs = db.FindNodesWithEdgeTo(target.Id, excluded);
                 foreach (var refNode in refs)
                 {
                     if (seenIds.Add(refNode.Id))
@@ -361,24 +512,38 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                     }
                 }
 
-                // If target is a Script, also find references to its child ScriptType nodes
-                if (target.Type == "Script")
+                // Collect structural parents into nested_by (never into references).
+                // (a) Prefabs that directly nest this target via nests_prefab.
+                var nesterNodes = db.FindNodesWithEdgeTo(target.Id, "nests_prefab");
+                foreach (var n in nesterNodes)
                 {
-                    var childTypes = db.FindChildNodes(target.Id, "ScriptType");
-                    foreach (var childType in childTypes)
+                    if (seenNestedByIds.Add(n.Id))
                     {
-                        var childRefs = db.FindNodesWithEdgeTo(childType.Id);
-                        foreach (var r in childRefs)
+                        nestedBy.Add(new JObject
                         {
-                            if (seenIds.Add(r.Id))
+                            ["name"] = n.Name,
+                            ["type"] = n.Type,
+                            ["path"] = n.Path,
+                            ["relationship"] = "nests_prefab"
+                        });
+                    }
+                }
+
+                // (b) For Prefab/PrefabVariant targets only: variants that inherit_from this prefab.
+                if (targetIsPrefab)
+                {
+                    var variantNodes = db.FindNodesWithEdgeTo(target.Id, "inherits_from");
+                    foreach (var v in variantNodes)
+                    {
+                        if (seenNestedByIds.Add(v.Id))
+                        {
+                            nestedBy.Add(new JObject
                             {
-                                references.Add(new JObject
-                                {
-                                    ["name"] = r.Name,
-                                    ["type"] = r.Type,
-                                    ["path"] = r.Path
-                                });
-                            }
+                                ["name"] = v.Name,
+                                ["type"] = v.Type,
+                                ["path"] = v.Path,
+                                ["relationship"] = "inherits_from"
+                            });
                         }
                     }
                 }
@@ -388,7 +553,8 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             {
                 ["target"] = target_path,
                 ["reference_count"] = references.Count,
-                ["references"] = new JArray(references)
+                ["references"] = new JArray(references),
+                ["nested_by"] = new JArray(nestedBy)
             };
 
             if (IsScriptPath(target_path) && CSharpScanDegraded())
@@ -398,7 +564,26 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 result["warning"] = CSharpDegradedWarning;
             }
 
-            return MCPToolResult.SuccessWithConfidence(result, BuildConfidence());
+            // Signal 2: surface count of external-unresolved supertype/dependency pending
+            // edges on the queried node(s) — only emitted when count > 0.
+            var externalUnresolved = CountExternalUnresolvedPendingEdges(db, targets.Select(t => t.Id));
+            if (externalUnresolved > 0)
+                result["supertypes_external_unresolved"] = externalUnresolved;
+
+            // Signals 1 + 3: build confidence with package-scan and static-analysis caveats.
+            var confidence = BuildConfidence()
+                // Signal 3 (always-on): static analysis cannot see reflection/runtime dispatch.
+                .WithFactor("static_analysis_coverage", "partial",
+                    new List<string> { "reflection", "runtime/string-based dispatch", "DI containers", "dynamic instantiation" })
+                .WithRecommendation("'No references' means none were statically detected; dynamic/runtime references are not visible to this tool. Check 'nested_by' before treating an asset as unused — it lists structural parents (direct nesting prefabs, prefab variants) even when reference_count is 0");
+
+            // Signal 1 (conditional): package scan degraded → package base types unindexed.
+            if (PackageScanDegraded())
+                confidence = confidence
+                    .WithFactor("package_scan", "degraded")
+                    .WithRecommendation("Package/external base types may be unindexed; supertypes/dependencies into packages may be missing");
+
+            return MCPToolResult.SuccessWithConfidence(result, confidence);
         }
 
         [MCPTool("find_orphan_scripts",
@@ -525,7 +710,8 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                     BuildConfidence());
             }
 
-            var deps = db.TraverseDependencies(startNodes[0].Id, max_depth);
+            var startNode = startNodes[0];
+            var deps = db.TraverseDependencies(startNode.Id, max_depth);
 
             var result = new JObject
             {
@@ -540,7 +726,26 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 }))
             };
 
-            return MCPToolResult.SuccessWithConfidence(result, BuildConfidence());
+            // Signal 2: surface count of external-unresolved pending edges on the start
+            // node — only emitted when count > 0.
+            var externalUnresolved = CountExternalUnresolvedPendingEdges(db, new[] { startNode.Id });
+            if (externalUnresolved > 0)
+                result["supertypes_external_unresolved"] = externalUnresolved;
+
+            // Signals 1 + 3: build confidence with package-scan and static-analysis caveats.
+            var confidence = BuildConfidence()
+                // Signal 3 (always-on): static analysis cannot see reflection/runtime dispatch.
+                .WithFactor("static_analysis_coverage", "partial",
+                    new List<string> { "reflection", "runtime/string-based dispatch", "DI containers", "dynamic instantiation" })
+                .WithRecommendation("'No dependencies' means none were statically detected; runtime-wired dependencies are not visible to this tool");
+
+            // Signal 1 (conditional): package scan degraded → package base types unindexed.
+            if (PackageScanDegraded())
+                confidence = confidence
+                    .WithFactor("package_scan", "degraded")
+                    .WithRecommendation("Package/external base types may be unindexed; supertypes/dependencies into packages may be missing");
+
+            return MCPToolResult.SuccessWithConfidence(result, confidence);
         }
 
         [MCPTool("get_recently_changed",
@@ -784,6 +989,41 @@ namespace ArcForge.Hades.Editor.MCP.Tools
         {
             var db = GraphDatabase.Instance;
             return db != null && db.GetMetadata("csharp_scan_status") == "degraded";
+        }
+
+        // True when the last package scan failed or was skipped. In that state,
+        // package-tier base types / supertypes are absent from the graph, so
+        // inherits_from / implements / dependency edges into packages may be missing.
+        static bool PackageScanDegraded()
+        {
+            var db = GraphDatabase.Instance;
+            return db != null && db.GetMetadata("package_scan_status") == "degraded";
+        }
+
+        /// <summary>
+        /// Counts unresolved pending edges from the given nodes whose targets are
+        /// known-external (BCL/Unity/framework precompiled types). Used to populate
+        /// the <c>supertypes_external_unresolved</c> honesty signal.
+        ///
+        /// Limitation: counts only edges still in the pending_edges table (i.e. that
+        /// were NOT resolved during the last build). Edges to externals that were
+        /// resolved against a seeded builtin ScriptType node will not appear here.
+        /// The count is therefore a lower-bound on external supertype relationships;
+        /// the true total may be higher once builtin seeding is complete.
+        /// </summary>
+        static int CountExternalUnresolvedPendingEdges(GraphDatabase db, IEnumerable<long> nodeIds)
+        {
+            int count = 0;
+            foreach (var nodeId in nodeIds)
+            {
+                var pending = db.GetPendingEdgesForNode(nodeId);
+                foreach (var pe in pending)
+                {
+                    if (GraphBuilder.IsKnownExternalTarget(pe))
+                        count++;
+                }
+            }
+            return count;
         }
 
         const string CSharpDegradedWarning =

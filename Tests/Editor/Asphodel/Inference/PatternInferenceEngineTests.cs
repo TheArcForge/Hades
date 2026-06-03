@@ -126,6 +126,30 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
             }
         }
 
+        // Regression: second RunInference call used to throw NullReferenceException inside
+        // DetectConflicts because InferredPattern.FromMemoryFile never restores TargetFile
+        // (it is not persisted to the inferred markdown), leaving it null for patterns loaded
+        // from disk via LoadExistingPatterns. The fix guards TargetFile before calling .Replace.
+        [Test]
+        public void RunInference_SecondRun_DoesNotThrowWhenExistingPatternsHaveNullTargetFile()
+        {
+            SeedDatabase(SyntheticTraceFixtures.AcceptanceRateFixture());
+
+            // First run produces inferred files (TargetFile is set in-memory)
+            _engine.RunInference();
+
+            var inferredDir = Path.Combine(_testMemDir, "inferred");
+            Assert.IsTrue(Directory.Exists(inferredDir), "Inferred dir must exist after first run");
+            Assert.IsTrue(Directory.GetFiles(inferredDir, "*.md").Length > 0,
+                "At least one inferred file must be written after first run");
+
+            // Second run: LoadExistingPatterns reads those files back; FromMemoryFile does not
+            // restore TargetFile (field is absent from the markdown), so TargetFile == null.
+            // DetectConflicts must not dereference it.
+            Assert.DoesNotThrow(() => _engine.RunInference(),
+                "RunInference must not throw on second call when existing inferred files have null TargetFile");
+        }
+
         void SeedDatabase((List<TraceRecord> traces, List<SpanRecord> spans) fixture)
         {
             foreach (var trace in fixture.traces)

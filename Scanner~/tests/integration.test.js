@@ -108,12 +108,12 @@ describe('integration: full scan', () => {
     const edges = db.prepare("SELECT * FROM edges WHERE type = 'defines'").all();
     expect(edges.length).toBeGreaterThanOrEqual(4); // 2 script→type + 2 type→method
 
-    // Should have pending_edges for base types
+    // Should have pending_edges for base types (neutral extends_or_implements)
     const pendingEdges = db.prepare('SELECT * FROM pending_edges').all();
-    expect(pendingEdges.length).toBeGreaterThanOrEqual(2); // at least one per file (inherits_from)
+    expect(pendingEdges.length).toBeGreaterThanOrEqual(2); // at least one per file
 
     const pendingTypes = pendingEdges.map(p => p.edge_type);
-    expect(pendingTypes).toContain('inherits_from');
+    expect(pendingTypes).toContain('extends_or_implements');
 
     const pendingTargets = pendingEdges.map(p => p.target_type_name).sort();
     expect(pendingTargets).toContain('MonoBehaviour');

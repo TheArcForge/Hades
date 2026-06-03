@@ -63,7 +63,7 @@ export async function scan({
   mode,
   dirs,
   projectRoot,
-  scannerVersion = 3,
+  scannerVersion = 4,
   guids = null,
   tier = 'project',
 }) {
@@ -241,15 +241,18 @@ function _writeParseResult({ db, filePath, guid, contentHash, scannerVersion, pa
     });
     idMap.set(node.id, dbId);
 
-    // Write pending edges for ScriptType nodes
+    // Write pending edges for ScriptType nodes.
+    // All base-list supertypes are emitted as neutral 'extends_or_implements' edges;
+    // ResolvePendingEdges in GraphBuilder reclassifies them to 'inherits_from' or
+    // 'implements' based on the resolved target node's 'kind' property.
     if (node.type === 'ScriptType') {
       const props = node.properties ?? {};
-      if (props.base_type) {
-        db.insertPendingEdge(dbId, 'inherits_from', props.base_type, props.namespace ?? null, guid);
-      }
-      if (Array.isArray(props.interfaces)) {
-        for (const iface of props.interfaces) {
-          db.insertPendingEdge(dbId, 'implements', iface, props.namespace ?? null, guid);
+      if (Array.isArray(props.supertypes)) {
+        for (const st of props.supertypes) {
+          const stName = typeof st === 'string' ? st : st.name;
+          if (stName) {
+            db.insertPendingEdge(dbId, 'extends_or_implements', stName, props.namespace ?? null, guid);
+          }
         }
       }
     }
@@ -343,7 +346,7 @@ if (isCLI) {
   const dirs = (values['dirs'] ?? '').split(',').filter(Boolean);
   const projectRoot = values['project-root'] ?? process.cwd();
   const guidsList = values['guids'] ? values['guids'].split(',').filter(Boolean) : null;
-  const scannerVersion = values['scanner-version'] ? Number(values['scanner-version']) : 3;
+  const scannerVersion = values['scanner-version'] ? Number(values['scanner-version']) : 4;
   const tier = values['tier'] ?? 'project';
 
   let writer;

@@ -63,7 +63,15 @@ namespace ArcForge.Hades.Editor.Graph
         // Build log — records timing/results per step, written to .arcforge/graph_build.log
         GraphBuildLog _buildLog;
 
-        const int NodeScannerTimeoutMs = 300000; // 5 minutes
+        // Timeout for the Node.js scanner subprocess.
+        // Project-tier: 5 minutes — Assets/ is bounded to the user's project.
+        // Package-tier: 10 minutes — Library/PackageCache can be very large on first
+        //   run (hundreds of packages × dozens of .cs files each). Using the same
+        //   short timeout was the root cause of the "package nodes halved" regression:
+        //   on timeout the old code deleted the tier upfront and only partially
+        //   repopulated it. See ScanPackages for the non-destructive fix.
+        const int ProjectNodeScannerTimeoutMs = 300_000;  // 5 minutes
+        const int PackageNodeScannerTimeoutMs  = 600_000;  // 10 minutes — PackageCache is large
 
         public GraphBuilder(GraphDatabase db)
         {
@@ -424,6 +432,14 @@ namespace ArcForge.Hades.Editor.Graph
         /// <summary>
         /// Scans package .cs files via Node.js scanner. Blocks the main thread with a progress bar.
         /// Optionally chains a follow-up action when complete.
+        ///
+        /// Non-destructive on failure: existing package-tier nodes are PRESERVED when the scanner
+        /// fails or times out. The upfront DeleteNodesByTier("package") has been removed — it was
+        /// the root cause of the "package nodes halved" regression (nodes deleted, scanner timed
+        /// out on large PackageCache, only partial repopulation). The scanner does per-GUID
+        /// delete+reinsert for each file it processes, so in-place updates are always safe.
+        /// Stale removal (nodes for packages no longer on disk) is deferred to AFTER a confirmed
+        /// successful scan, never before.
         /// </summary>
         public void ScanPackages(Action onComplete = null)
         {
@@ -431,6 +447,10 @@ namespace ArcForge.Hades.Editor.Graph
 
             _status = BuildStatus.ScanningPackages;
             _db.SetCurrentOperation("package_scan");
+
+            // Honest default: assume degraded until confirmed success. If an unhandled
+            // exception escapes the try block, the finally still writes this value.
+            _db.SetMetadata("package_scan_status", "degraded");
 
             try
             {
@@ -441,45 +461,67 @@ namespace ArcForge.Hades.Editor.Graph
                 var projectRoot = Path.GetDirectoryName(Application.dataPath);
                 var cacheDir = Path.Combine(projectRoot, "Library", "PackageCache");
                 var packagesDir = Path.Combine(projectRoot, "Packages");
-                var dirs = string.Join(",", new[] { cacheDir, packagesDir }.Where(Directory.Exists));
+                var scanDirs = new[] { cacheDir, packagesDir }.Where(Directory.Exists).ToArray();
+                var dirs = string.Join(",", scanDirs);
 
                 if (string.IsNullOrEmpty(dirs))
                 {
                     Debug.Log("[Hades] No package directories found, skipping scan");
                     _buildLog?.Detail("Result", "No package directories");
+                    // No package dirs = nothing to scan; treat as OK so we don't report degraded
+                    // for a project that simply has no PackageCache/Packages directories.
+                    _db.SetMetadata("package_scan_status", "ok");
                     _buildLog?.EndStep();
                     return;
                 }
 
                 _sessionNodeMap = _sessionNodeMap ?? BuildSessionMapFromExistingNodes();
-                _db.RunInTransaction(() => _db.DeleteNodesByTier("package"));
 
-                var result = RunNodeScanner("full", dirs, "--tier package");
+                // DO NOT DeleteNodesByTier("package") here. Run the scanner first.
+                // On success: reconcile stale nodes below.
+                // On failure/timeout: leave existing package nodes intact — stale data is
+                // better than no data, and MCP tools will see package_scan_status=degraded.
+                var result = RunNodeScanner("full", dirs, "--tier package",
+                    PackageNodeScannerTimeoutMs);
 
                 if (result.Success)
                 {
+                    // Checkpoint: integrate scanner's WAL writes before any C# reads/writes.
+                    _db.CheckpointPassive();
+
+                    // Stale-node reconciliation: remove package nodes whose backing .cs file
+                    // no longer exists (e.g. package was uninstalled since last scan).
+                    // Safety guarantee: we enumerate the exact same dirs just scanned, so every
+                    // live package GUID is in the returned set — we can never delete a live node.
+                    // We skip this if the filesystem walk itself fails (log + continue).
+                    RemoveStalePackageNodes(scanDirs);
+
                     var packageHash = ComputePackageLockHash();
                     if (packageHash != null)
                         _db.SetMetadata("packages_lock_hash", packageHash);
 
                     _db.SetMetadata("last_package_scan_at",
                         DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
+                    _db.SetMetadata("package_scan_status", "ok");
 
                     _sessionNodeMap = BuildSessionMapFromExistingNodes();
 
                     var typeCount = _db.GetNodeCount("ScriptType", "package");
                     Debug.Log($"[Hades] Package scan complete: {typeCount} package types indexed");
                     _buildLog?.Detail("Types indexed", typeCount);
+                    _buildLog?.Detail("Result", "Success");
                 }
                 else
                 {
+                    // Scanner failed or timed out. Existing package nodes are preserved.
+                    // package_scan_status remains "degraded" (set above).
                     if (result.ExitCode == 100)
                         _buildLog?.ReportDegraded("Package C# nodes missing — Node.js not found");
                     else if (result.ExitCode == 101)
                         _buildLog?.ReportDegraded("Package C# nodes missing — Scanner npm install failed");
                     else
                         _buildLog?.ReportDegraded($"Package C# nodes missing — Scanner failed (exit {result.ExitCode})");
-                    Debug.LogWarning("[Hades] Package scan skipped (Node.js scanner unavailable or failed)");
+                    Debug.LogWarning("[Hades] Package scan failed; existing package nodes preserved (degraded mode)");
                     _buildLog?.Detail("Result", $"Failed: exit {result.ExitCode}");
                 }
 
@@ -487,6 +529,7 @@ namespace ArcForge.Hades.Editor.Graph
             }
             catch (Exception ex)
             {
+                // package_scan_status = "degraded" was already written before the try block.
                 _buildLog?.Detail("ERROR", $"{ex.Message}");
                 Debug.LogError($"[Hades] Package scan failed: {ex.Message}\n{ex.StackTrace}");
             }
@@ -503,6 +546,101 @@ namespace ArcForge.Hades.Editor.Graph
             }
 
             onComplete?.Invoke();
+        }
+
+        /// <summary>
+        /// After a confirmed successful package scan, removes package-tier nodes whose backing
+        /// .cs file no longer exists on disk (e.g. a package was uninstalled).
+        ///
+        /// Safety: we enumerate the exact same directories that were just scanned and collect
+        /// every .cs GUID that has a live .meta file — these are ALL live package GUIDs. Any
+        /// package node whose GUID is not in this set has no backing file and is safe to delete.
+        /// This runs ONLY after a successful scan, never on failure or timeout.
+        ///
+        /// If the filesystem walk fails, we log a warning and skip cleanup rather than risk
+        /// deleting anything — correctness is preserved, stale nodes stay until the next scan.
+        /// </summary>
+        void RemoveStalePackageNodes(string[] packageDirs)
+        {
+            try
+            {
+                // Collect every live .cs GUID from the package directories.
+                var liveGuids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var dir in packageDirs)
+                {
+                    if (!Directory.Exists(dir)) continue;
+                    foreach (var csFile in Directory.GetFiles(dir, "*.cs", SearchOption.AllDirectories))
+                    {
+                        var metaPath = csFile + ".meta";
+                        if (!File.Exists(metaPath)) continue;
+                        var guid = ExtractGuidFromMeta(metaPath);
+                        if (guid != null) liveGuids.Add(guid);
+                    }
+                }
+
+                if (liveGuids.Count == 0) return; // nothing to do (or dirs empty)
+
+                // Get all GUIDs currently stored as package-tier nodes.
+                var storedGuids = _db.GetDistinctGuidsForTier("package");
+                var stale = new List<string>();
+                foreach (var guid in storedGuids)
+                {
+                    if (!liveGuids.Contains(guid))
+                        stale.Add(guid);
+                }
+
+                if (stale.Count == 0) return;
+
+                _db.RunInTransaction(() =>
+                {
+                    foreach (var guid in stale)
+                    {
+                        _db.DeleteNodesByGuid(guid);
+                        _db.DeletePendingEdgesBySourceAsset(guid);
+                    }
+                });
+
+                Debug.Log($"[Hades] Package scan: removed {stale.Count} stale node GUIDs (packages no longer on disk)");
+                _buildLog?.Detail("Stale package GUIDs removed", stale.Count);
+            }
+            catch (Exception ex)
+            {
+                // Non-fatal: stale nodes stay until the next scan. Do not delete anything.
+                Debug.LogWarning($"[Hades] Could not reconcile stale package nodes (skipped): {ex.Message}");
+                _buildLog?.Detail("Stale removal skipped (error)", ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Extracts the GUID from a Unity .meta file.
+        /// Reads up to the first 4 KB — the guid: line is always near the top.
+        /// Returns null if the file cannot be read or has no guid line.
+        /// </summary>
+        internal static string ExtractGuidFromMeta(string metaPath)
+        {
+            try
+            {
+                // Read just the first 4 KB — guid: is always in the first few lines.
+                using (var reader = new StreamReader(metaPath))
+                {
+                    var buf = new char[4096];
+                    int read = reader.Read(buf, 0, buf.Length);
+                    var content = new string(buf, 0, read);
+
+                    // Line-anchored "guid: <32 hex>" — mirrors the Node scanner's
+                    // /^guid:\s*([0-9a-f]{32})/m so the two never disagree on which node
+                    // is "live" (a mismatch could falsely flag a live package node as stale).
+                    var match = System.Text.RegularExpressions.Regex.Match(
+                        content, @"^guid:\s*([0-9a-fA-F]{32})",
+                        System.Text.RegularExpressions.RegexOptions.Multiline);
+                    if (!match.Success) return null;
+                    return match.Groups[1].Value.ToLowerInvariant();
+                }
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         /// <summary>
@@ -985,7 +1123,8 @@ namespace ArcForge.Hades.Editor.Graph
                 }
 
                 if (targetNode == null && !string.IsNullOrEmpty(pe.TargetTypeName)
-                    && (pe.EdgeType == "inherits_from" || pe.EdgeType == "implements" || pe.EdgeType == "code_references"))
+                    && (pe.EdgeType == "inherits_from" || pe.EdgeType == "implements"
+                        || pe.EdgeType == "extends_or_implements" || pe.EdgeType == "code_references"))
                 {
                     targetNode = _db.FindNodeByNameAndType(pe.TargetTypeName, "ScriptType");
                 }
@@ -997,7 +1136,23 @@ namespace ArcForge.Hades.Editor.Graph
                     {
                         propertiesJson = $"{{\"reference_kind\":\"{pe.TargetNamespace}\"}}";
                     }
-                    _db.InsertEdge(pe.SourceNodeId, targetNode.Id, pe.EdgeType, propertiesJson);
+
+                    // Reclassify neutral supertype edge now that we know the target's kind.
+                    // If the target ScriptType has kind == "interface", emit 'implements';
+                    // otherwise emit 'inherits_from'. This is the correct classification for
+                    // C# types declared in the project — the base-list syntax doesn't encode
+                    // class-vs-interface so we couldn't tell at scan time.
+                    string resolvedEdgeType = pe.EdgeType;
+                    if (pe.EdgeType == "extends_or_implements")
+                    {
+                        var targetKind = targetNode.Properties != null
+                            && targetNode.Properties.TryGetValue("kind", out var kindObj)
+                            ? kindObj?.ToString()
+                            : null;
+                        resolvedEdgeType = targetKind == "interface" ? "implements" : "inherits_from";
+                    }
+
+                    _db.InsertEdge(pe.SourceNodeId, targetNode.Id, resolvedEdgeType, propertiesJson);
                     toDelete.Add(pe.Id);
                     resolved++;
                 }
@@ -1122,6 +1277,13 @@ namespace ArcForge.Hades.Editor.Graph
                         if (type.IsGenericTypeDefinition) continue;
                         if (type.IsNested) continue;
 
+                        // Determine kind from reflection metadata so resolution can tell
+                        // interfaces apart from classes (used by extends_or_implements reclassification).
+                        string typeKind = type.IsInterface ? "interface"
+                            : type.IsEnum ? "enum"
+                            : type.IsValueType ? "struct"
+                            : "class";
+
                         var node = new NodeRecord("ScriptType")
                         {
                             Name = type.Name,
@@ -1129,7 +1291,8 @@ namespace ArcForge.Hades.Editor.Graph
                             {
                                 ["source"] = "builtin",
                                 ["namespace"] = type.Namespace ?? "",
-                                ["assembly"] = assemblyName
+                                ["assembly"] = assemblyName,
+                                ["kind"] = typeKind
                             }
                         };
 
@@ -1188,7 +1351,7 @@ namespace ArcForge.Hades.Editor.Graph
         /// edges are tallied as "external" rather than "still pending" so coverage metrics
         /// reflect genuinely missing user-code links, not permanent framework references.
         /// </summary>
-        static bool IsKnownExternalTarget(Models.PendingEdge pe)
+        internal static bool IsKnownExternalTarget(Models.PendingEdge pe)
         {
             // Unstripped generic-arity names (e.g. "IList`1") can never match a scanned or
             // seeded node, so they are effectively external for coverage purposes.
@@ -1197,7 +1360,10 @@ namespace ArcForge.Hades.Editor.Graph
 
             // For code_references the TargetNamespace field carries the reference_kind, not a
             // namespace — so only inheritance/interface edges get namespace classification.
-            if (pe.EdgeType != "inherits_from" && pe.EdgeType != "implements")
+            // extends_or_implements is the pre-resolution neutral form of inherits_from/implements
+            // and also carries a namespace hint, so include it here.
+            if (pe.EdgeType != "inherits_from" && pe.EdgeType != "implements"
+                && pe.EdgeType != "extends_or_implements")
                 return false;
 
             var ns = pe.TargetNamespace;
@@ -1353,7 +1519,8 @@ namespace ArcForge.Hades.Editor.Graph
             return File.Exists(sqliteMarker) && File.Exists(treeSitterMarker);
         }
 
-        RunResult RunNodeScanner(string mode, string dirs, string extraArgs = "")
+        RunResult RunNodeScanner(string mode, string dirs, string extraArgs = "",
+            int timeoutMs = ProjectNodeScannerTimeoutMs)
         {
             var nodePath = ProcessResolver.FindExecutable("node");
             if (nodePath == null)
@@ -1395,15 +1562,15 @@ namespace ArcForge.Hades.Editor.Graph
 
             var args = $"\"{Path.Combine(scannerDir, "index.js")}\" --db \"{dbPath}\" --mode {mode} --dirs \"{dirs}\" --project-root \"{projectRoot}\" {extraArgs}";
 
-            _buildLog?.Detail("Node.js scanner", $"mode={mode} dirs={dirs}");
+            _buildLog?.Detail("Node.js scanner", $"mode={mode} dirs={dirs} timeout={timeoutMs}ms");
 
-            var result = ProcessResolver.Run("node", args, projectRoot, NodeScannerTimeoutMs);
+            var result = ProcessResolver.Run("node", args, projectRoot, timeoutMs);
 
             if (result.ExitCode == 2)
             {
                 Debug.LogWarning("[Hades] Scanner reported database contention, retrying…");
                 System.Threading.Thread.Sleep(1000);
-                result = ProcessResolver.Run("node", args, projectRoot, NodeScannerTimeoutMs);
+                result = ProcessResolver.Run("node", args, projectRoot, timeoutMs);
             }
 
             if (!result.Success)

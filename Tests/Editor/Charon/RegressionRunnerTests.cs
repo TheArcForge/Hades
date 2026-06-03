@@ -278,6 +278,7 @@ namespace ArcForge.Hades.Editor.Tests.Charon
         {
             // Set up graph with test data
             var graphDbPath = Path.Combine(Path.GetTempPath(), $"hades_graph_test_{Guid.NewGuid()}.db");
+            var savedInstance = GraphDatabase.Instance;
             var graphDb = new GraphDatabase(graphDbPath);
 
             var scene = graphDb.InsertNode(new NodeRecord("Scene", "s1") { Name = "MainScene", Path = "Assets/Scenes/Main.unity" });
@@ -311,6 +312,7 @@ namespace ArcForge.Hades.Editor.Tests.Charon
             {
                 CharonEmitter.Shutdown();
                 graphDb.Dispose();
+                GraphDatabase.RestoreInstanceForTests(savedInstance);
                 if (File.Exists(graphDbPath)) File.Delete(graphDbPath);
                 if (File.Exists(graphDbPath + "-wal")) File.Delete(graphDbPath + "-wal");
                 if (File.Exists(graphDbPath + "-shm")) File.Delete(graphDbPath + "-shm");

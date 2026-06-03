@@ -10,10 +10,12 @@ namespace ArcForge.Hades.Editor.Tests.MCP.Tools
     {
         string _testDbPath;
         GraphDatabase _db;
+        GraphDatabase _savedInstance;
 
         [SetUp]
         public void SetUp()
         {
+            _savedInstance = GraphDatabase.Instance;
             _testDbPath = Path.Combine(Path.GetTempPath(), $"hades_test_{System.Guid.NewGuid()}.db");
             _db = new GraphDatabase(_testDbPath);
             SeedData();
@@ -23,6 +25,7 @@ namespace ArcForge.Hades.Editor.Tests.MCP.Tools
         public void TearDown()
         {
             _db?.Dispose();
+            GraphDatabase.RestoreInstanceForTests(_savedInstance);
             if (File.Exists(_testDbPath)) File.Delete(_testDbPath);
             if (File.Exists(_testDbPath + "-wal")) File.Delete(_testDbPath + "-wal");
             if (File.Exists(_testDbPath + "-shm")) File.Delete(_testDbPath + "-shm");
