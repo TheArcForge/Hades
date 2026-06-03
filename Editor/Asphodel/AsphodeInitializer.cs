@@ -96,15 +96,54 @@ namespace ArcForge.Hades.Editor.Asphodel
             OnGraphRebuild();
         }
 
+        // Inference is throttled so it does NOT run on every rebuild — it loads traces and runs
+        // analyzers, a heavy post-rebuild main-thread cost. The design intent is periodic.
+        const double InferenceThrottleMinutes = 30.0;
+
         static void OnGraphRebuild()
         {
             UnityEditor.EditorApplication.delayCall += () =>
             {
-                _watcher?.Suppress();
-                Validator?.ValidateAll();
-                InferenceEngine?.RunInference();
-                _watcher?.Resume();
+                bool barShown = false;
+                try
+                {
+                    _watcher?.Suppress();
+
+                    // Post-rebuild work runs on the main thread AFTER the rebuild's own progress
+                    // bar has cleared. Show our own bar so it is never a silent freeze.
+                    barShown = true;
+                    UnityEditor.EditorUtility.DisplayProgressBar("Hades", "Validating memory…", 0.3f);
+                    Validator?.ValidateAll();
+
+                    if (ShouldRunInference())
+                    {
+                        UnityEditor.EditorUtility.DisplayProgressBar("Hades", "Analyzing patterns…", 0.7f);
+                        InferenceEngine?.RunInference();
+                        UnityEditor.SessionState.SetString("Hades_LastInferenceTicks",
+                            System.DateTime.UtcNow.Ticks.ToString());
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    UnityEngine.Debug.LogWarning($"[Hades Asphodel] Post-rebuild processing failed: {ex}");
+                }
+                finally
+                {
+                    if (barShown) UnityEditor.EditorUtility.ClearProgressBar();
+                    _watcher?.Resume();
+                }
             };
+        }
+
+        static bool ShouldRunInference()
+        {
+            var last = UnityEditor.SessionState.GetString("Hades_LastInferenceTicks", "");
+            if (long.TryParse(last, out var ticks))
+            {
+                var elapsed = System.DateTime.UtcNow - new System.DateTime(ticks, System.DateTimeKind.Utc);
+                if (elapsed.TotalMinutes < InferenceThrottleMinutes) return false;
+            }
+            return true;
         }
 
         static void OnBeforeReload()

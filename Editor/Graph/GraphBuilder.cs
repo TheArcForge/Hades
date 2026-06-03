@@ -477,8 +477,16 @@ namespace ArcForge.Hades.Editor.Graph
 
                 _sessionNodeMap = _sessionNodeMap ?? BuildSessionMapFromExistingNodes();
 
+                // Mark this packages-lock state as "attempted" BEFORE running the scanner.
+                // If the scan fails or times out, IsPackageScanNeeded() must NOT re-trigger an
+                // identical scan on the next lock touch / domain reload — otherwise a project
+                // whose package scan can't complete spins in a re-scan loop (freezing the editor).
+                // A genuine package change (new lock hash) clears this gate and re-attempts.
+                var attemptHash = ComputePackageLockHash();
+                if (attemptHash != null)
+                    _db.SetMetadata("package_scan_attempted_hash", attemptHash);
+
                 // DO NOT DeleteNodesByTier("package") here. Run the scanner first.
-                // On success: reconcile stale nodes below.
                 // On failure/timeout: leave existing package nodes intact — stale data is
                 // better than no data, and MCP tools will see package_scan_status=degraded.
                 var result = RunNodeScanner("full", dirs, "--tier package",
@@ -489,12 +497,12 @@ namespace ArcForge.Hades.Editor.Graph
                     // Checkpoint: integrate scanner's WAL writes before any C# reads/writes.
                     _db.CheckpointPassive();
 
-                    // Stale-node reconciliation: remove package nodes whose backing .cs file
-                    // no longer exists (e.g. package was uninstalled since last scan).
-                    // Safety guarantee: we enumerate the exact same dirs just scanned, so every
-                    // live package GUID is in the returned set — we can never delete a live node.
-                    // We skip this if the filesystem walk itself fails (log + continue).
-                    RemoveStalePackageNodes(scanDirs);
+                    // NOTE: stale-package-node reconciliation (RemoveStalePackageNodes) is
+                    // DISABLED. It walked the entire PackageCache on the main thread
+                    // (Directory.GetFiles over all .cs + reading every .meta), which froze the
+                    // editor on large projects. Uninstalled-package nodes now linger until the
+                    // next full rebuild — a benign staleness. Re-introduce reconciliation only
+                    // OFF the main thread (e.g. from the scanner's own scanned-GUID set).
 
                     var packageHash = ComputePackageLockHash();
                     if (packageHash != null)
@@ -646,15 +654,34 @@ namespace ArcForge.Hades.Editor.Graph
         /// <summary>
         /// Checks if packages need rescanning by comparing packages-lock.json hash.
         /// </summary>
+        // Unity asset GUIDs are 32 hex chars. Used to skip AssetDatabase lookups for
+        // pending-edge targets that are type names (code/supertype refs), not GUIDs.
+        static bool LooksLikeGuid(string s)
+        {
+            if (string.IsNullOrEmpty(s) || s.Length != 32) return false;
+            foreach (var c in s)
+                if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+                    return false;
+            return true;
+        }
+
         bool IsPackageScanNeeded()
         {
-            // If no package nodes exist at all, we need a scan
-            var packageNodeCount = _db.GetNodeCount("ScriptType", "package");
-            if (packageNodeCount == 0) return true;
-
-            // Check if packages-lock.json has changed
             var currentHash = ComputePackageLockHash();
-            if (currentHash == null) return false; // No lock file, can't determine
+
+            // Don't re-attempt a scan we already tried for this exact packages-lock state
+            // (success OR failure). Prevents an infinite re-scan loop when the scanner can't
+            // complete — Unity re-touches packages-lock.json during package resolution, which
+            // would otherwise re-trigger the same failing scan and freeze the editor. A genuine
+            // package change (new lock hash) clears this gate and re-attempts.
+            if (currentHash != null &&
+                _db.GetMetadata("package_scan_attempted_hash") == currentHash)
+                return false;
+
+            // If no package nodes exist at all, we need a scan
+            if (_db.GetNodeCount("ScriptType", "package") == 0) return true;
+
+            if (currentHash == null) return false; // No lock file, can't determine staleness
 
             var storedHash = _db.GetMetadata("packages_lock_hash");
             return storedHash != currentHash;
@@ -1114,45 +1141,54 @@ namespace ArcForge.Hades.Editor.Graph
             int external = 0;
             var toDelete = new HashSet<long>();
 
+            // Bulk-load the resolution lookups ONCE (one indexed scan each) instead of two
+            // SQLite round-trips per pending edge. On large graphs (700K+ nodes) the per-edge
+            // lookups were O(P) main-thread queries that pinned the editor in sqlite3_step for
+            // tens of minutes; resolving against in-memory maps is O(P) with no per-edge I/O.
+            var guidToNodeId = _db.LoadGuidToNodeIdMap();
+            var scriptTypeByName = _db.LoadScriptTypeByNameMap();
+
             foreach (var pe in pending)
             {
-                NodeRecord targetNode = null;
-                if (!string.IsNullOrEmpty(pe.TargetTypeName))
+                if (string.IsNullOrEmpty(pe.TargetTypeName)) continue;
+
+                long targetId = 0;
+                string targetKind = null;
+                bool found = false;
+
+                // 1) GUID match first (asset references resolve here) — mirrors FindNodeByGuid.
+                if (guidToNodeId.TryGetValue(pe.TargetTypeName, out var gId))
                 {
-                    targetNode = _db.FindNodeByGuid(pe.TargetTypeName);
+                    targetId = gId;
+                    found = true;
                 }
 
-                if (targetNode == null && !string.IsNullOrEmpty(pe.TargetTypeName)
+                // 2) Else, for code/supertype edges, match a ScriptType by name —
+                //    mirrors FindNodeByNameAndType(name, "ScriptType").
+                if (!found
                     && (pe.EdgeType == "inherits_from" || pe.EdgeType == "implements"
-                        || pe.EdgeType == "extends_or_implements" || pe.EdgeType == "code_references"))
+                        || pe.EdgeType == "extends_or_implements" || pe.EdgeType == "code_references")
+                    && scriptTypeByName.TryGetValue(pe.TargetTypeName, out var st))
                 {
-                    targetNode = _db.FindNodeByNameAndType(pe.TargetTypeName, "ScriptType");
+                    targetId = st.Id;
+                    targetKind = st.Kind;
+                    found = true;
                 }
 
-                if (targetNode != null)
+                if (found)
                 {
                     string propertiesJson = null;
                     if (pe.EdgeType == "code_references" && !string.IsNullOrEmpty(pe.TargetNamespace))
-                    {
                         propertiesJson = $"{{\"reference_kind\":\"{pe.TargetNamespace}\"}}";
-                    }
 
-                    // Reclassify neutral supertype edge now that we know the target's kind.
-                    // If the target ScriptType has kind == "interface", emit 'implements';
-                    // otherwise emit 'inherits_from'. This is the correct classification for
-                    // C# types declared in the project — the base-list syntax doesn't encode
-                    // class-vs-interface so we couldn't tell at scan time.
-                    string resolvedEdgeType = pe.EdgeType;
-                    if (pe.EdgeType == "extends_or_implements")
-                    {
-                        var targetKind = targetNode.Properties != null
-                            && targetNode.Properties.TryGetValue("kind", out var kindObj)
-                            ? kindObj?.ToString()
-                            : null;
-                        resolvedEdgeType = targetKind == "interface" ? "implements" : "inherits_from";
-                    }
+                    // Reclassify the neutral supertype edge now that we know the target's kind:
+                    // interface target → 'implements', otherwise → 'inherits_from'. (Base-list
+                    // syntax doesn't encode class-vs-interface, so we couldn't tell at scan time.)
+                    string resolvedEdgeType = pe.EdgeType == "extends_or_implements"
+                        ? (targetKind == "interface" ? "implements" : "inherits_from")
+                        : pe.EdgeType;
 
-                    _db.InsertEdge(pe.SourceNodeId, targetNode.Id, resolvedEdgeType, propertiesJson);
+                    _db.InsertEdge(pe.SourceNodeId, targetId, resolvedEdgeType, propertiesJson);
                     toDelete.Add(pe.Id);
                     resolved++;
                 }
@@ -1171,8 +1207,13 @@ namespace ArcForge.Hades.Editor.Graph
                 {
                     if (toDelete.Contains(pe.Id)) continue;
 
-                    // Try to resolve the GUID to an asset path to check its extension
-                    var assetPath = UnityEditor.AssetDatabase.GUIDToAssetPath(pe.TargetTypeName);
+                    // Try to resolve the GUID to an asset path to check its extension.
+                    // Only asset references carry a GUID target; code/supertype targets are type
+                    // names (GUIDToAssetPath would always miss). Skipping the main-thread
+                    // AssetDatabase call for non-GUID targets avoids millions of calls at scale.
+                    var assetPath = LooksLikeGuid(pe.TargetTypeName)
+                        ? UnityEditor.AssetDatabase.GUIDToAssetPath(pe.TargetTypeName)
+                        : null;
                     if (!string.IsNullOrEmpty(assetPath))
                     {
                         var ext = Path.GetExtension(assetPath)?.ToLowerInvariant();

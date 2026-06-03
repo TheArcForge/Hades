@@ -238,5 +238,43 @@ namespace ArcForge.Hades.Editor.Tests.Graph
             Assert.AreEqual(2, counts["GameObject"]);
             Assert.AreEqual(1, counts["Component"]);
         }
+
+        // --- Batched pending-edge resolution: bulk-load lookup maps ---
+        // These replace the per-edge FindNodeByGuid / FindNodeByNameAndType calls that pinned
+        // the editor in sqlite3_step on large graphs. The maps must mirror those methods'
+        // first/lowest-id match so the resolved edges are identical.
+
+        [Test]
+        public void LoadGuidToNodeIdMap_MapsKnownGuids_MirrorsFindNodeByGuid()
+        {
+            var map = _db.LoadGuidToNodeIdMap();
+
+            Assert.IsTrue(map.ContainsKey("scene_guid"));
+            Assert.IsTrue(map.ContainsKey("script_guid"));
+            Assert.IsTrue(map.ContainsKey("prefab_guid"));
+            // Must equal FindNodeByGuid (ORDER BY id LIMIT 1) for the same guid.
+            Assert.AreEqual(_db.FindNodeByGuid("script_guid").Id, map["script_guid"]);
+            Assert.AreEqual(_db.FindNodeByGuid("prefab_guid").Id, map["prefab_guid"]);
+        }
+
+        [Test]
+        public void LoadScriptTypeByNameMap_ReturnsIdAndKind_LowestIdOnDuplicate_IgnoresNonScriptTypes()
+        {
+            var baseId  = _db.InsertNode(new NodeRecord("ScriptType") { Name = "BaseType", Guid = "g_base",  Properties = new Dictionary<string, object> { ["kind"] = "class" } });
+            var ifaceId = _db.InsertNode(new NodeRecord("ScriptType") { Name = "IThing",   Guid = "g_iface", Properties = new Dictionary<string, object> { ["kind"] = "interface" } });
+            var dupLow  = _db.InsertNode(new NodeRecord("ScriptType") { Name = "Dup",      Guid = "g_dup1",  Properties = new Dictionary<string, object> { ["kind"] = "struct" } });
+                          _db.InsertNode(new NodeRecord("ScriptType") { Name = "Dup",      Guid = "g_dup2",  Properties = new Dictionary<string, object> { ["kind"] = "class" } });
+            // A non-ScriptType node sharing a name must be ignored by the map.
+                          _db.InsertNode(new NodeRecord("Material")   { Name = "BaseType", Guid = "g_mat" });
+
+            var map = _db.LoadScriptTypeByNameMap();
+
+            Assert.AreEqual(baseId,  map["BaseType"].Id);
+            Assert.AreEqual("class", map["BaseType"].Kind);
+            Assert.AreEqual(ifaceId, map["IThing"].Id);
+            Assert.AreEqual("interface", map["IThing"].Kind);
+            Assert.AreEqual(dupLow,  map["Dup"].Id, "lowest id wins for duplicate type names (mirrors first-match)");
+            Assert.AreEqual("struct", map["Dup"].Kind);
+        }
     }
 }

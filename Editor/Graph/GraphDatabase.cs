@@ -893,6 +893,63 @@ namespace ArcForge.Hades.Editor.Graph
             }
         }
 
+        /// <summary>
+        /// Bulk-loads guid → node id (lowest id per guid, matching FindNodeByGuid's
+        /// "ORDER BY id LIMIT 1"). One indexed scan instead of a per-edge query.
+        /// Used by ResolvePendingEdges to resolve large pending-edge sets in memory —
+        /// the per-edge SQLite lookups were O(P) main-thread round-trips that pinned the
+        /// editor for tens of minutes on large graphs.
+        /// </summary>
+        public System.Collections.Generic.Dictionary<string, long> LoadGuidToNodeIdMap()
+        {
+            var map = new System.Collections.Generic.Dictionary<string, long>();
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "SELECT guid, MIN(id) FROM nodes WHERE guid IS NOT NULL GROUP BY guid;"))
+            {
+                while (stmt.Step() == SQLite3.Result.Row)
+                {
+                    var guid = stmt.GetString(0);
+                    if (!string.IsNullOrEmpty(guid))
+                        map[guid] = stmt.GetLong(1);
+                }
+            }
+            return map;
+        }
+
+        /// <summary>
+        /// Bulk-loads ScriptType name → (lowest node id, kind). Mirrors
+        /// FindNodeByNameAndType(name, "ScriptType") (first match) using the lowest id for
+        /// determinism; 'kind' is read from the node's properties JSON (class/struct/
+        /// interface/enum/record), needed to classify extends_or_implements edges.
+        /// </summary>
+        public System.Collections.Generic.Dictionary<string, (long Id, string Kind)> LoadScriptTypeByNameMap()
+        {
+            var map = new System.Collections.Generic.Dictionary<string, (long Id, string Kind)>();
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "SELECT name, id, properties FROM nodes WHERE type = 'ScriptType' ORDER BY id;"))
+            {
+                while (stmt.Step() == SQLite3.Result.Row)
+                {
+                    var name = stmt.GetString(0);
+                    // ORDER BY id ensures the first row seen for a name is the lowest id; keep it.
+                    if (string.IsNullOrEmpty(name) || map.ContainsKey(name)) continue;
+                    map[name] = (stmt.GetLong(1), ExtractKindFromProperties(stmt.GetString(2)));
+                }
+            }
+            return map;
+        }
+
+        static string ExtractKindFromProperties(string propertiesJson)
+        {
+            if (string.IsNullOrEmpty(propertiesJson)) return null;
+            try
+            {
+                var o = Newtonsoft.Json.Linq.JObject.Parse(propertiesJson);
+                return o["kind"]?.ToString();
+            }
+            catch { return null; }
+        }
+
         // --- Pending edges ---
 
         public void InsertPendingEdge(long sourceNodeId, string edgeType, string targetTypeName,
