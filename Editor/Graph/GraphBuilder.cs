@@ -1053,28 +1053,40 @@ namespace ArcForge.Hades.Editor.Graph
 
                 long sourceId, targetId;
 
-                // Resolve source: local map → session map → DB
-                if (!localNodeMap.TryGetValue(sourceKey, out sourceId))
+                // Resolve source: local map → session map → (incremental only) targeted DB lookup.
+                // During a FULL rebuild the session map holds ALL existing nodes and is kept
+                // current, so a miss means a DB lookup would return null anyway — skip it.
+                if (!localNodeMap.TryGetValue(sourceKey, out sourceId)
+                    && (_sessionNodeMap == null || !_sessionNodeMap.TryGetValue(sourceKey, out sourceId)))
                 {
-                    if (_sessionNodeMap == null || !_sessionNodeMap.TryGetValue(sourceKey, out sourceId))
-                    {
-                        var sourceNode = _db.FindNodeByGuid(edge.SourceGuid, edge.SourceFileId);
-                        if (sourceNode == null) sourceNode = _db.FindNodeByGuid(edge.SourceGuid);
-                        if (sourceNode == null) continue;
-                        sourceId = sourceNode.Id;
-                    }
+                    if (_sessionNodeMap != null)
+                        continue; // full rebuild: source not present (DB would be null too) — skip edge
+
+                    var sourceNode = _db.FindNodeByGuid(edge.SourceGuid, edge.SourceFileId);
+                    if (sourceNode == null) sourceNode = _db.FindNodeByGuid(edge.SourceGuid);
+                    if (sourceNode == null) continue;
+                    sourceId = sourceNode.Id;
                 }
 
-                // Resolve target: check for name-based pending marker → local map → session map → DB → pending
+                // Resolve target. The per-edge FindNodeBy* lookups below were the rebuild hot loop
+                // (millions of SELECT * pinning the main thread for tens of minutes at 700K nodes).
+                // During a FULL rebuild we defer any map miss to the batched ResolvePendingEdges
+                // pass instead of doing a per-edge query; incremental updates (no session map, few
+                // edges) keep the cheap targeted DB lookup.
                 if (edge.TargetGuid != null && edge.TargetGuid.StartsWith("__pending__"))
                 {
-                    // Name-based edge — goes to pending resolution
+                    // Name-based edge — resolves against ScriptType nodes by name.
                     var targetTypeName = edge.TargetGuid.Substring("__pending__".Length);
                     string targetNamespace = null;
                     if (edge.Properties != null && edge.Properties.TryGetValue("target_type_name", out var tn))
                         targetTypeName = tn.ToString();
 
-                    // Try immediate resolution against existing nodes
+                    if (_sessionNodeMap != null)
+                    {
+                        _db.InsertPendingEdge(sourceId, edge.Type, targetTypeName, targetNamespace, assetGuid);
+                        continue;
+                    }
+
                     var resolved = _db.FindNodeByNameAndType(targetTypeName, "ScriptType");
                     if (resolved != null)
                     {
@@ -1086,25 +1098,24 @@ namespace ArcForge.Hades.Editor.Graph
                         continue;
                     }
                 }
-                else if (!localNodeMap.TryGetValue(targetKey, out targetId))
+                else if (!localNodeMap.TryGetValue(targetKey, out targetId)
+                         && (_sessionNodeMap == null || !_sessionNodeMap.TryGetValue(targetKey, out targetId)))
                 {
-                    if (_sessionNodeMap != null && _sessionNodeMap.TryGetValue(targetKey, out targetId))
+                    if (_sessionNodeMap != null)
                     {
-                        // Found in session map
+                        // Full rebuild: target not scanned yet → defer to batched resolution.
+                        _db.InsertPendingEdge(sourceId, edge.Type, edge.TargetGuid ?? "", null, assetGuid);
+                        continue;
                     }
-                    else
+
+                    var targetNode = _db.FindNodeByGuid(edge.TargetGuid, edge.TargetFileId);
+                    if (targetNode == null) targetNode = _db.FindNodeByGuid(edge.TargetGuid);
+                    if (targetNode == null)
                     {
-                        var targetNode = _db.FindNodeByGuid(edge.TargetGuid, edge.TargetFileId);
-                        if (targetNode == null) targetNode = _db.FindNodeByGuid(edge.TargetGuid);
-                        if (targetNode == null)
-                        {
-                            // Target doesn't exist yet — store as pending edge for later resolution
-                            _db.InsertPendingEdge(sourceId, edge.Type,
-                                edge.TargetGuid ?? "", null, assetGuid);
-                            continue;
-                        }
-                        targetId = targetNode.Id;
+                        _db.InsertPendingEdge(sourceId, edge.Type, edge.TargetGuid ?? "", null, assetGuid);
+                        continue;
                     }
+                    targetId = targetNode.Id;
                 }
 
                 _db.InsertEdge(sourceId, targetId, edge.Type, edge.PropertiesJson);
