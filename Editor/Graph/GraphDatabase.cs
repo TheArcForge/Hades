@@ -263,8 +263,8 @@ namespace ArcForge.Hades.Editor.Graph
         public long InsertNode(NodeRecord node, string tier = "project")
         {
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            _connection.Execute(@"
-                INSERT INTO nodes (type, tier, guid, file_id, parent_node_id, name, path, source_range, properties, created_at, updated_at)
+            var rows = _connection.Execute(@"
+                INSERT OR IGNORE INTO nodes (type, tier, guid, file_id, parent_node_id, name, path, source_range, properties, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
                 node.Type,
                 tier,
@@ -277,6 +277,17 @@ namespace ArcForge.Hades.Editor.Graph
                 node.PropertiesJson,
                 now,
                 now);
+
+            // OR IGNORE: a duplicate (guid, file_id) is skipped rather than throwing. This happens
+            // when two assets share a GUID (Unity ignores one copy — the lantern duplicate-GUID
+            // case); previously the unique-index violation threw and aborted the whole rebuild
+            // mid-scan, leaving a partial graph. Reuse the existing node's id so edges still
+            // resolve to it, and the rebuild continues.
+            if (rows == 0 && node.Guid != null)
+            {
+                var existing = FindNodeByGuid(node.Guid, node.FileId);
+                if (existing != null) return existing.Id;
+            }
 
             // Direct C call instead of a fresh "SELECT last_insert_rowid()" statement.
             // A full rebuild on a large project inserts hundreds of thousands of nodes;
@@ -301,6 +312,73 @@ namespace ArcForge.Hades.Editor.Graph
 
             // See InsertNode: avoid a throwaway last_insert_rowid() statement per edge.
             return SQLite3.LastInsertRowid(_connection.Handle);
+        }
+
+        /// <summary>
+        /// Batch-inserts edges with ONE reused prepared statement (bind+step+reset per row)
+        /// instead of a fresh Execute (re-prepare + finalize) per edge. A full rebuild resolves
+        /// millions of edges; the per-edge re-prepare was a large write cost. Call inside a
+        /// transaction.
+        /// </summary>
+        public void InsertEdgesBatch(
+            System.Collections.Generic.IReadOnlyList<(long sourceId, long targetId, string type, string propertiesJson)> edges)
+        {
+            if (edges == null || edges.Count == 0) return;
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "INSERT OR IGNORE INTO edges (source_id, target_id, type, properties, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?);"))
+            {
+                foreach (var e in edges)
+                {
+                    stmt.Bind(1, e.sourceId);
+                    stmt.Bind(2, e.targetId);
+                    stmt.Bind(3, e.type);
+                    stmt.Bind(4, e.propertiesJson);
+                    stmt.Bind(5, now);
+                    stmt.Bind(6, now);
+                    stmt.Step();
+                    stmt.Reset();
+                }
+            }
+        }
+
+        /// <summary>Batch-inserts pending edges with one reused prepared statement.</summary>
+        public void InsertPendingEdgesBatch(
+            System.Collections.Generic.IReadOnlyList<(long sourceNodeId, string edgeType, string targetTypeName, string targetNamespace, string sourceAssetGuid)> rows)
+        {
+            if (rows == null || rows.Count == 0) return;
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "INSERT INTO pending_edges (source_node_id, edge_type, target_type_name, target_namespace, source_asset_guid, created_at) VALUES (?, ?, ?, ?, ?, ?);"))
+            {
+                foreach (var r in rows)
+                {
+                    stmt.Bind(1, r.sourceNodeId);
+                    stmt.Bind(2, r.edgeType);
+                    stmt.Bind(3, r.targetTypeName);
+                    stmt.Bind(4, r.targetNamespace);
+                    stmt.Bind(5, r.sourceAssetGuid);
+                    stmt.Bind(6, now);
+                    stmt.Step();
+                    stmt.Reset();
+                }
+            }
+        }
+
+        /// <summary>Batch-deletes pending edges by id with one reused prepared statement.</summary>
+        public void DeletePendingEdgesBatch(System.Collections.Generic.IEnumerable<long> ids)
+        {
+            if (ids == null) return;
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "DELETE FROM pending_edges WHERE id = ?;"))
+            {
+                foreach (var id in ids)
+                {
+                    stmt.Bind(1, id);
+                    stmt.Step();
+                    stmt.Reset();
+                }
+            }
         }
 
         public NodeRecord FindNodeByGuid(string guid, long? fileId = null)

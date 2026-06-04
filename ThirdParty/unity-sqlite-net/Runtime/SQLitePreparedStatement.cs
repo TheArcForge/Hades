@@ -125,6 +125,10 @@ namespace SQLite
         public SQLite3.Result Bind(int index, string value)
         {
             ThrowIfDisposed();
+            // Null-safe: a null string binds SQL NULL (BindText would NRE on value.Length).
+            // Required for reused/batched inserts of nullable columns.
+            if (value == null)
+                return (SQLite3.Result) SQLite3.BindNull(_preparedStatement, index);
             return (SQLite3.Result) SQLite3.BindText(_preparedStatement, index, value, value.Length * sizeof(char), SQLITE_STATIC);
         }
         public SQLite3.Result Bind(string name, string value)

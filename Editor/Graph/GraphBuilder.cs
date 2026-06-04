@@ -1046,6 +1046,9 @@ namespace ArcForge.Hades.Editor.Graph
                     _sessionNodeMap[key] = id;
             }
 
+            var edgesToInsert = new List<(long, long, string, string)>();
+            var pendingToInsert = new List<(long, string, string, string, string)>();
+
             foreach (var edge in scanResult.Edges)
             {
                 var sourceKey = $"{edge.SourceGuid ?? ""}:{edge.SourceFileId}";
@@ -1083,7 +1086,7 @@ namespace ArcForge.Hades.Editor.Graph
 
                     if (_sessionNodeMap != null)
                     {
-                        _db.InsertPendingEdge(sourceId, edge.Type, targetTypeName, targetNamespace, assetGuid);
+                        pendingToInsert.Add((sourceId, edge.Type, targetTypeName, targetNamespace, assetGuid));
                         continue;
                     }
 
@@ -1094,7 +1097,7 @@ namespace ArcForge.Hades.Editor.Graph
                     }
                     else
                     {
-                        _db.InsertPendingEdge(sourceId, edge.Type, targetTypeName, targetNamespace, assetGuid);
+                        pendingToInsert.Add((sourceId, edge.Type, targetTypeName, targetNamespace, assetGuid));
                         continue;
                     }
                 }
@@ -1104,7 +1107,7 @@ namespace ArcForge.Hades.Editor.Graph
                     if (_sessionNodeMap != null)
                     {
                         // Full rebuild: target not scanned yet → defer to batched resolution.
-                        _db.InsertPendingEdge(sourceId, edge.Type, edge.TargetGuid ?? "", null, assetGuid);
+                        pendingToInsert.Add((sourceId, edge.Type, edge.TargetGuid ?? "", null, assetGuid));
                         continue;
                     }
 
@@ -1112,14 +1115,19 @@ namespace ArcForge.Hades.Editor.Graph
                     if (targetNode == null) targetNode = _db.FindNodeByGuid(edge.TargetGuid);
                     if (targetNode == null)
                     {
-                        _db.InsertPendingEdge(sourceId, edge.Type, edge.TargetGuid ?? "", null, assetGuid);
+                        pendingToInsert.Add((sourceId, edge.Type, edge.TargetGuid ?? "", null, assetGuid));
                         continue;
                     }
                     targetId = targetNode.Id;
                 }
 
-                _db.InsertEdge(sourceId, targetId, edge.Type, edge.PropertiesJson);
+                edgesToInsert.Add((sourceId, targetId, edge.Type, edge.PropertiesJson));
             }
+
+            // Batched writes: one reused prepared statement each, instead of a per-edge Execute
+            // (re-prepare). On a large Addressables project this is the bulk of the rebuild writes.
+            _db.InsertEdgesBatch(edgesToInsert);
+            _db.InsertPendingEdgesBatch(pendingToInsert);
         }
 
         // -------------------------------------------------------------------
@@ -1151,6 +1159,7 @@ namespace ArcForge.Hades.Editor.Graph
             int transient = 0;
             int external = 0;
             var toDelete = new HashSet<long>();
+            var edgesToInsert = new List<(long, long, string, string)>();
 
             // Bulk-load the resolution lookups ONCE (one indexed scan each) instead of two
             // SQLite round-trips per pending edge. On large graphs (700K+ nodes) the per-edge
@@ -1199,16 +1208,16 @@ namespace ArcForge.Hades.Editor.Graph
                         ? (targetKind == "interface" ? "implements" : "inherits_from")
                         : pe.EdgeType;
 
-                    _db.InsertEdge(pe.SourceNodeId, targetId, resolvedEdgeType, propertiesJson);
+                    edgesToInsert.Add((pe.SourceNodeId, targetId, resolvedEdgeType, propertiesJson));
                     toDelete.Add(pe.Id);
                     resolved++;
                 }
             }
 
-            foreach (var id in toDelete)
-            {
-                _db.DeletePendingEdge(id);
-            }
+            // Batched writes: one reused prepared statement each, instead of millions of
+            // per-edge Execute (re-prepare) calls.
+            _db.InsertEdgesBatch(edgesToInsert);
+            _db.DeletePendingEdgesBatch(toDelete);
 
             // Classify remaining unresolved edges
             var remaining = pending.Count - resolved;
