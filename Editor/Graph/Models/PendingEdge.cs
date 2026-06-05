@@ -21,6 +21,13 @@ namespace ArcForge.Hades.Editor.Graph.Models
         /// <summary>The GUID of the source asset file (for incremental cleanup)</summary>
         public string SourceAssetGuid { get; set; }
 
+        /// <summary>
+        /// The original edge's properties JSON, carried through deferral so a forward-reference
+        /// edge keeps its enrichment (e.g. {"addressable":true,"field":"m_AssetGUID"}) when it
+        /// is later resolved. Null for edges that had no properties.
+        /// </summary>
+        public string Properties { get; set; }
+
         public long CreatedAt { get; set; }
     }
 }

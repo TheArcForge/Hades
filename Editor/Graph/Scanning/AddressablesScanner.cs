@@ -47,7 +47,12 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
                     };
                     result.Nodes.Add(groupNode);
 
-                    var entries = groupType.GetProperty("entries")?.GetValue(group) as System.Collections.IList;
+                    // AddressableAssetGroup.entries returns ICollection<T> backed by a
+                    // Dictionary.ValueCollection — NOT an IList. Casting to IList yielded null
+                    // for every group, so all entries (and their addressable_for edges) were
+                    // silently skipped, leaving every group node orphaned. IEnumerable is the
+                    // interface the runtime collection actually implements.
+                    var entries = groupType.GetProperty("entries")?.GetValue(group) as System.Collections.IEnumerable;
                     if (entries == null) continue;
 
                     foreach (var entry in entries)
@@ -64,14 +69,19 @@ namespace ArcForge.Hades.Editor.Graph.Scanning
                         // real asset (its true GUID).
                         var entryNodeGuid = $"addr_entry:{groupGuid}:{entryGuid}";
 
+                        // Do NOT set Path to the asset's path: the entry is a membership record,
+                        // not the asset. Sharing the asset's Path created a path collision (two
+                        // nodes, one path) that made path-based resolution (e.g. trace_dependencies)
+                        // land on the entry instead of the real asset and return wrong results. The
+                        // asset link is the addressable_for edge; keep the path in properties only.
                         var entryNode = new NodeRecord("AddressableEntry", entryNodeGuid)
                         {
                             Name = entryAddress,
-                            Path = entryAssetPath,
                             Properties = new Dictionary<string, object>
                             {
                                 { "address", entryAddress },
-                                { "target_guid", entryGuid }
+                                { "target_guid", entryGuid },
+                                { "asset_path", entryAssetPath }
                             }
                         };
                         result.Nodes.Add(entryNode);

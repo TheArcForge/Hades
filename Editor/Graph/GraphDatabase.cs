@@ -16,7 +16,7 @@ namespace ArcForge.Hades.Editor.Graph
         readonly SQLiteConnection _connection;
         bool _disposed;
 
-        const int CurrentSchemaVersion = 2;
+        const int CurrentSchemaVersion = 3;
 
         public GraphDatabase(string dbPath)
         {
@@ -113,6 +113,7 @@ namespace ArcForge.Hades.Editor.Graph
                     target_type_name TEXT NOT NULL,
                     target_namespace TEXT,
                     source_asset_guid TEXT,
+                    properties TEXT,
                     created_at INTEGER NOT NULL
                 );
 
@@ -168,6 +169,23 @@ namespace ArcForge.Hades.Editor.Graph
                 RecordSchemaVersion(2);
 
                 // Graph will be fully rebuilt on next startup via CheckStartupSync
+            }
+
+            if (fromVersion < 3)
+            {
+                // pending_edges gains a `properties` column so a deferred (forward-reference)
+                // edge keeps its {field}/{addressable} enrichment through ResolvePendingEdges.
+                // Previously deferral dropped properties, so addressable AssetReference edges
+                // resolved with no flag and ~15% of all reference edges lost their `field`.
+                // ADD COLUMN is safe here: every pending_edges read uses an explicit column
+                // list (no positional SELECT *). Guarded for the case where the < 2 path above
+                // already recreated the table with the new column.
+                try { _connection.Execute("ALTER TABLE pending_edges ADD COLUMN properties TEXT;"); }
+                catch { /* column already present (table recreated by the < 2 migration) */ }
+                RecordSchemaVersion(3);
+
+                // Existing edges resolved before this migration keep their NULL properties
+                // until the next full rebuild repopulates them through the fixed path.
             }
         }
 
@@ -344,12 +362,12 @@ namespace ArcForge.Hades.Editor.Graph
 
         /// <summary>Batch-inserts pending edges with one reused prepared statement.</summary>
         public void InsertPendingEdgesBatch(
-            System.Collections.Generic.IReadOnlyList<(long sourceNodeId, string edgeType, string targetTypeName, string targetNamespace, string sourceAssetGuid)> rows)
+            System.Collections.Generic.IReadOnlyList<(long sourceNodeId, string edgeType, string targetTypeName, string targetNamespace, string sourceAssetGuid, string properties)> rows)
         {
             if (rows == null || rows.Count == 0) return;
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             using (var stmt = new SQLitePreparedStatement(_connection,
-                "INSERT INTO pending_edges (source_node_id, edge_type, target_type_name, target_namespace, source_asset_guid, created_at) VALUES (?, ?, ?, ?, ?, ?);"))
+                "INSERT INTO pending_edges (source_node_id, edge_type, target_type_name, target_namespace, source_asset_guid, properties, created_at) VALUES (?, ?, ?, ?, ?, ?, ?);"))
             {
                 foreach (var r in rows)
                 {
@@ -358,7 +376,8 @@ namespace ArcForge.Hades.Editor.Graph
                     stmt.Bind(3, r.targetTypeName);
                     stmt.Bind(4, r.targetNamespace);
                     stmt.Bind(5, r.sourceAssetGuid);
-                    stmt.Bind(6, now);
+                    stmt.Bind(6, r.properties);
+                    stmt.Bind(7, now);
                     stmt.Step();
                     stmt.Reset();
                 }
@@ -527,6 +546,46 @@ namespace ArcForge.Hades.Editor.Graph
         public void DeleteNodesByGuid(string guid)
         {
             _connection.Execute("DELETE FROM nodes WHERE guid = ?;", guid);
+        }
+
+        /// <summary>
+        /// Returns the inbound edges that target an asset's guid-bearing node(s), captured BEFORE
+        /// the asset is deleted in an incremental update. DeleteNodesByGuid removes only the
+        /// guid-bearing node (Material / Prefab-root / Scene-root / SO / Script / Texture); its
+        /// ON DELETE CASCADE then drops these inbound edges. The sources are overwhelmingly
+        /// NULL-guid component nodes (never deleted by guid), so their ids stay valid and the edge
+        /// can be re-pointed at the recreated target after the re-scan. Returns the target's
+        /// file_id to re-resolve the exact recreated node.
+        /// </summary>
+        public List<(long sourceId, string edgeType, string properties, long? targetFileId)>
+            GetInboundEdgesToGuid(string guid)
+        {
+            var results = new List<(long, string, string, long?)>();
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "SELECT e.source_id, e.type, e.properties, tn.file_id " +
+                "FROM edges e JOIN nodes tn ON tn.id = e.target_id WHERE tn.guid = ?;"))
+            {
+                stmt.Bind(1, guid);
+                while (stmt.Step() == SQLite3.Result.Row)
+                {
+                    long? targetFileId = stmt.GetString(3) != null ? stmt.GetLong(3) : (long?)null;
+                    results.Add((stmt.GetLong(0), stmt.GetString(1), stmt.GetString(2), targetFileId));
+                }
+            }
+            return results;
+        }
+
+        /// <summary>True if a node row with this id still exists. Used to drop captured inbound
+        /// edges whose source was itself re-scanned (its old node id is gone) — that source
+        /// rebuilds its own outbound edge, so restoring would be redundant/stale.</summary>
+        public bool NodeExists(long id)
+        {
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "SELECT 1 FROM nodes WHERE id = ? LIMIT 1;"))
+            {
+                stmt.Bind(1, id);
+                return stmt.Step() == SQLite3.Result.Row;
+            }
         }
 
         public void UpdateNodePath(long nodeId, string newPath)
@@ -1031,20 +1090,20 @@ namespace ArcForge.Hades.Editor.Graph
         // --- Pending edges ---
 
         public void InsertPendingEdge(long sourceNodeId, string edgeType, string targetTypeName,
-            string targetNamespace, string sourceAssetGuid)
+            string targetNamespace, string sourceAssetGuid, string properties = null)
         {
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             _connection.Execute(@"
-                INSERT INTO pending_edges (source_node_id, edge_type, target_type_name, target_namespace, source_asset_guid, created_at)
-                VALUES (?, ?, ?, ?, ?, ?);",
-                sourceNodeId, edgeType, targetTypeName, targetNamespace, sourceAssetGuid, now);
+                INSERT INTO pending_edges (source_node_id, edge_type, target_type_name, target_namespace, source_asset_guid, properties, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?);",
+                sourceNodeId, edgeType, targetTypeName, targetNamespace, sourceAssetGuid, properties, now);
         }
 
         public List<Models.PendingEdge> GetPendingEdges()
         {
             var results = new List<Models.PendingEdge>();
             using (var stmt = new SQLitePreparedStatement(_connection,
-                "SELECT id, source_node_id, edge_type, target_type_name, target_namespace, source_asset_guid, created_at FROM pending_edges;"))
+                "SELECT id, source_node_id, edge_type, target_type_name, target_namespace, source_asset_guid, properties, created_at FROM pending_edges;"))
             {
                 while (stmt.Step() == SQLite3.Result.Row)
                 {
@@ -1056,7 +1115,8 @@ namespace ArcForge.Hades.Editor.Graph
                         TargetTypeName = stmt.GetString(3),
                         TargetNamespace = stmt.GetString(4),
                         SourceAssetGuid = stmt.GetString(5),
-                        CreatedAt = stmt.GetLong(6)
+                        Properties = stmt.GetString(6),
+                        CreatedAt = stmt.GetLong(7)
                     });
                 }
             }
@@ -1076,7 +1136,7 @@ namespace ArcForge.Hades.Editor.Graph
             var placeholderArr = new string[sourceAssetGuids.Count];
             for (int p = 0; p < placeholderArr.Length; p++) placeholderArr[p] = "?";
             var placeholders = string.Join(",", placeholderArr);
-            var sql = "SELECT id, source_node_id, edge_type, target_type_name, target_namespace, source_asset_guid, created_at "
+            var sql = "SELECT id, source_node_id, edge_type, target_type_name, target_namespace, source_asset_guid, properties, created_at "
                       + "FROM pending_edges WHERE source_asset_guid IN (" + placeholders + ");";
 
             using (var stmt = new SQLitePreparedStatement(_connection, sql))
@@ -1095,7 +1155,8 @@ namespace ArcForge.Hades.Editor.Graph
                         TargetTypeName = stmt.GetString(3),
                         TargetNamespace = stmt.GetString(4),
                         SourceAssetGuid = stmt.GetString(5),
-                        CreatedAt = stmt.GetLong(6)
+                        Properties = stmt.GetString(6),
+                        CreatedAt = stmt.GetLong(7)
                     });
                 }
             }
@@ -1112,7 +1173,7 @@ namespace ArcForge.Hades.Editor.Graph
         {
             var results = new List<Models.PendingEdge>();
             using (var stmt = new SQLitePreparedStatement(_connection,
-                "SELECT id, source_node_id, edge_type, target_type_name, target_namespace, source_asset_guid, created_at " +
+                "SELECT id, source_node_id, edge_type, target_type_name, target_namespace, source_asset_guid, properties, created_at " +
                 "FROM pending_edges WHERE source_node_id = ?;"))
             {
                 stmt.Bind(1, sourceNodeId);
@@ -1126,7 +1187,8 @@ namespace ArcForge.Hades.Editor.Graph
                         TargetTypeName = stmt.GetString(3),
                         TargetNamespace = stmt.GetString(4),
                         SourceAssetGuid = stmt.GetString(5),
-                        CreatedAt = stmt.GetLong(6)
+                        Properties = stmt.GetString(6),
+                        CreatedAt = stmt.GetLong(7)
                     });
                 }
             }

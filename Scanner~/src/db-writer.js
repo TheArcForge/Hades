@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS pending_edges (
     target_type_name TEXT NOT NULL,
     target_namespace TEXT,
     source_asset_guid TEXT,
+    properties TEXT,
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_pending_edges_target ON pending_edges(target_type_name);
@@ -264,6 +265,68 @@ export class DbWriter {
    */
   deletePendingEdgesBySourceAsset(guid) {
     this.#stmtDeletePendingEdgesBySourceAsset.run(guid);
+  }
+
+  /**
+   * Row id of the guid-bearing Script node for a file, or null. Needed before an incremental
+   * re-scan to (a) reach the file's NULL-guid ScriptType/ScriptMethod nodes by file_id and
+   * (b) capture inbound edges before they cascade away.
+   * @param {string} guid
+   * @returns {number|null}
+   */
+  getScriptNodeIdByGuid(guid) {
+    const row = this.#db
+      .prepare("SELECT id FROM nodes WHERE guid = ? AND type = 'Script' LIMIT 1")
+      .get(guid);
+    return row ? row.id : null;
+  }
+
+  /**
+   * Captures inbound edges targeting a file's Script node (guid-bearing) and its ScriptType
+   * nodes (NULL-guid, linked by file_id), BEFORE the file is re-scanned. Those target nodes are
+   * deleted on re-scan (see deleteFileNodes); without capture+restore, references to them from
+   * OTHER, unchanged files (code_references / inherits_from / implements, plus instance_of /
+   * references to the Script) are cascade-deleted and never recreated — the C# analogue of the
+   * Unity-side edge erosion. Re-point after re-scan: Script targets by guid (stable), ScriptType
+   * targets by name.
+   * @param {number} scriptNodeId
+   * @returns {Array<{ sourceId:number, edgeType:string, properties:string|null, targetType:string, targetName:string }>}
+   */
+  captureInboundToFile(scriptNodeId) {
+    return this.#db
+      .prepare(
+        "SELECT e.source_id AS sourceId, e.type AS edgeType, e.properties AS properties, " +
+          "tn.type AS targetType, tn.name AS targetName " +
+          "FROM edges e JOIN nodes tn ON tn.id = e.target_id " +
+          "WHERE (tn.id = ? OR tn.file_id = ?) AND tn.type IN ('Script','ScriptType')"
+      )
+      .all(scriptNodeId, scriptNodeId);
+  }
+
+  /**
+   * Deletes a file's FULL node set on re-scan: the NULL-guid ScriptType/ScriptMethod nodes
+   * (linked by file_id = the Script node's id) plus the guid-bearing Script node itself.
+   * deleteNodesByGuid alone matched only the Script node, leaking the type/method nodes and
+   * stranding their inbound edges on the now-orphaned old node. Cascades to edges.
+   * @param {string} guid
+   * @param {number|null} scriptNodeId
+   */
+  deleteFileNodes(guid, scriptNodeId) {
+    if (scriptNodeId != null) {
+      this.#db.prepare('DELETE FROM nodes WHERE file_id = ?').run(scriptNodeId);
+    }
+    this.#stmtDeleteNodesByGuid.run(guid);
+  }
+
+  /**
+   * True if a node row with this id still exists. Used to drop captured inbound edges whose
+   * source file was itself re-scanned (its old node id is gone) — that file re-emits its own
+   * outbound edges via pending resolution, so restoring would be redundant/stale.
+   * @param {number} id
+   * @returns {boolean}
+   */
+  nodeExists(id) {
+    return !!this.#db.prepare('SELECT 1 FROM nodes WHERE id = ? LIMIT 1').get(id);
   }
 
   /**

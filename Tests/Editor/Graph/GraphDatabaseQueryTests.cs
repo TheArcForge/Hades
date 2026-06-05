@@ -276,5 +276,65 @@ namespace ArcForge.Hades.Editor.Tests.Graph
             Assert.AreEqual(dupLow,  map["Dup"].Id, "lowest id wins for duplicate type names (mirrors first-match)");
             Assert.AreEqual("struct", map["Dup"].Kind);
         }
+
+        // --- Field-patch coverage: deferred-edge properties (#3), incremental-erosion
+        //     helpers (#4), and the query_graph unknown-'from' guardrail (#9). ---
+
+        [Test]
+        public void PendingEdge_Properties_RoundTrip_SingleAndBatch()
+        {
+            var src = _db.InsertNode(new NodeRecord("ScriptType") { Name = "Src", Guid = "src_g" });
+
+            // Single insert carries enrichment through the new pending_edges.properties column.
+            _db.InsertPendingEdge(src, "references", "tgt_guid_1", null, "asset_g",
+                "{\"addressable\":true,\"field\":\"m_AssetGUID\"}");
+
+            // Batch insert (6-tuple) carries properties too.
+            _db.InsertPendingEdgesBatch(new List<(long, string, string, string, string, string)>
+            {
+                (src, "code_references", "SomeType", "field", "asset_g", "{\"reference_kind\":\"field\"}")
+            });
+
+            var all = _db.GetPendingEdges();
+            var refEdge  = all.First(p => p.EdgeType == "references");
+            var codeEdge = all.First(p => p.EdgeType == "code_references");
+
+            Assert.AreEqual("{\"addressable\":true,\"field\":\"m_AssetGUID\"}", refEdge.Properties,
+                "single InsertPendingEdge must persist the properties column");
+            Assert.AreEqual("{\"reference_kind\":\"field\"}", codeEdge.Properties,
+                "InsertPendingEdgesBatch must persist the properties column");
+        }
+
+        [Test]
+        public void GetInboundEdgesToGuid_ReturnsInbound_WithPropsAndFileId_AndNodeExistsTracksDelete()
+        {
+            var target = _db.InsertNode(new NodeRecord("Material") { Name = "Mat", Guid = "mat_g", FileId = 0 });
+            var source = _db.InsertNode(new NodeRecord("Component") { Name = "Renderer" }); // NULL guid → stable id
+            _db.InsertEdge(source, target, "uses_material", "{\"slot\":0}");
+
+            var inbound = _db.GetInboundEdgesToGuid("mat_g");
+            Assert.AreEqual(1, inbound.Count);
+            Assert.AreEqual(source, inbound[0].sourceId);
+            Assert.AreEqual("uses_material", inbound[0].edgeType);
+            Assert.AreEqual("{\"slot\":0}", inbound[0].properties);
+            Assert.AreEqual(0L, inbound[0].targetFileId);
+
+            // NodeExists is used to drop captured inbound edges whose source was itself re-scanned.
+            Assert.IsTrue(_db.NodeExists(source));
+            _db.DeleteNodesByGuid("mat_g");
+            Assert.IsFalse(_db.NodeExists(target), "a deleted node must report NodeExists == false");
+        }
+
+        [Test]
+        public void QueryGraph_UnknownFromType_Errors_ValidTypeDoesNot()
+        {
+            // SeedTestData inserts a Scene, so "Scene" is a known, populated type.
+            var unknown = ArcForge.Hades.Editor.MCP.Tools.GraphQueryTools.QueryGraph("{\"from\":\"NotARealType\"}");
+            Assert.IsTrue(unknown.IsError, "an unknown 'from' type must error, not return count:0");
+            StringAssert.Contains("Unknown 'from' node type", unknown.Text);
+
+            var known = ArcForge.Hades.Editor.MCP.Tools.GraphQueryTools.QueryGraph("{\"from\":\"Scene\"}");
+            Assert.IsFalse(known.IsError, "a valid, populated type must not error");
+        }
     }
 }

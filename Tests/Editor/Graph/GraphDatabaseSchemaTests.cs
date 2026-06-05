@@ -87,8 +87,10 @@ namespace ArcForge.Hades.Editor.Tests.Graph
         [Test]
         public void SchemaVersion_IsRecorded()
         {
+            // Current schema version: 3 (pending_edges gained a `properties` column so deferred
+            // forward-reference edges keep their {field}/{addressable} enrichment on resolution).
             var version = _db.ExecuteScalar<long>("SELECT MAX(version) FROM schema_version;");
-            Assert.AreEqual(2L, version);
+            Assert.AreEqual(3L, version);
         }
 
         [Test]

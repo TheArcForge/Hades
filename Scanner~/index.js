@@ -205,12 +205,20 @@ async function _runIncrementalScan({ db, guids, guidToFile, scannerVersion, tier
 function _writeParseResult({ db, filePath, guid, contentHash, scannerVersion, parsed, projectRoot }) {
   if (parsed.nodes.length === 0) return;
 
-  // Delete old nodes + pending edges for this guid
-  db.deleteNodesByGuid(guid);
+  // Capture inbound edges to this file's Script + ScriptType nodes BEFORE deleting them, so
+  // references from OTHER (unchanged) files survive the re-scan (restored at the end). Then
+  // delete the file's FULL node set — the NULL-guid ScriptType/ScriptMethod nodes (by file_id)
+  // as well as the guid-bearing Script node. deleteNodesByGuid alone left the type/method nodes
+  // orphaned: leaking them, and stranding their inbound edges on the dead old node.
+  const oldScriptId = db.getScriptNodeIdByGuid(guid);
+  const capturedInbound = oldScriptId != null ? db.captureInboundToFile(oldScriptId) : [];
+  db.deleteFileNodes(guid, oldScriptId);
   db.deletePendingEdgesBySourceAsset(guid);
 
   // Local parse id → DB row id mapping
   const idMap = new Map();
+  // New ScriptType name → DB row id, for re-pointing captured inbound edges after re-scan.
+  const newTypeByName = new Map();
 
   // Write Script node first (id=0 in parsed)
   const scriptNode = parsed.nodes.find(n => n.type === 'Script');
@@ -246,6 +254,7 @@ function _writeParseResult({ db, filePath, guid, contentHash, scannerVersion, pa
     // ResolvePendingEdges in GraphBuilder reclassifies them to 'inherits_from' or
     // 'implements' based on the resolved target node's 'kind' property.
     if (node.type === 'ScriptType') {
+      newTypeByName.set(node.name, dbId);
       const props = node.properties ?? {};
       if (Array.isArray(props.supertypes)) {
         for (const st of props.supertypes) {
@@ -284,6 +293,17 @@ function _writeParseResult({ db, filePath, guid, contentHash, scannerVersion, pa
     if (srcDbId != null && tgtDbId != null) {
       db.insertEdge(srcDbId, tgtDbId, edge.type);
     }
+  }
+
+  // Restore captured inbound edges, re-pointed at the recreated nodes: Script targets by guid
+  // (the new Script id), ScriptType targets by name. Skip sources that no longer exist (their
+  // file was itself re-scanned and re-emits its own outbound edges). insertEdge is INSERT OR
+  // IGNORE, so duplicates are harmless.
+  for (const cap of capturedInbound) {
+    if (!db.nodeExists(cap.sourceId)) continue;
+    const newTargetId = cap.targetType === 'Script' ? scriptDbId : newTypeByName.get(cap.targetName);
+    if (newTargetId == null) continue; // target type removed in the new version of the file
+    db.insertEdge(cap.sourceId, newTargetId, cap.edgeType, cap.properties);
   }
 
   // Record scanned asset

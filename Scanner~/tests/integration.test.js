@@ -275,3 +275,71 @@ namespace MyGame {
     expect(countAfter).toBe(countBefore);
   });
 });
+
+describe('integration: incremental edge erosion + node leak (fix #5)', () => {
+  test('re-scanning a referenced .cs preserves inbound code_references and does not leak old type nodes', async () => {
+    const projectRoot = join(tempDir, 'project');
+    const scripts = join(projectRoot, 'Assets', 'Scripts');
+    mkdirSync(scripts, { recursive: true });
+
+    const fooGuid = 'aaaa1111bbbb2222cccc3333dddd4444';
+    const barGuid = 'eeee5555ffff6666aaaa7777bbbb8888';
+
+    writeFileSync(join(scripts, 'Foo.cs'),
+      'namespace MyGame {\n  public class Foo {\n    public void DoThing() {}\n  }\n}\n');
+    writeFileSync(join(scripts, 'Foo.cs.meta'), 'fileFormatVersion: 2\nguid: ' + fooGuid + '\n');
+    writeFileSync(join(scripts, 'Bar.cs'),
+      'namespace MyGame {\n  public class Bar {\n    public void Init() {}\n  }\n}\n');
+    writeFileSync(join(scripts, 'Bar.cs.meta'), 'fileFormatVersion: 2\nguid: ' + barGuid + '\n');
+
+    const dirs = [scripts];
+
+    // Full scan.
+    const writer1 = new DbWriter(dbPath);
+    await scan({ db: writer1, mode: 'full', dirs, projectRoot, scannerVersion: 2, tier: 'project' });
+    writer1.close();
+
+    // Simulate what C# ResolvePendingEdges does after a full build: a RESOLVED inbound
+    // code_references edge from Bar's type to Foo's type (with properties).
+    let rw = new Database(dbPath);
+    const oldFooType = rw.prepare("SELECT id FROM nodes WHERE type='ScriptType' AND name='Foo'").get();
+    const oldFooScript = rw.prepare("SELECT id FROM nodes WHERE type='Script' AND guid=?").get(fooGuid);
+    const barType = rw.prepare("SELECT id FROM nodes WHERE type='ScriptType' AND name='Bar'").get();
+    rw.prepare(
+      "INSERT INTO edges (source_id, target_id, type, properties, created_at, updated_at) " +
+      "VALUES (?, ?, 'code_references', '{\"reference_kind\":\"field\"}', 0, 0)"
+    ).run(barType.id, oldFooType.id);
+    rw.close();
+
+    // Modify Foo.cs and incrementally re-scan ONLY Foo (the referenced file).
+    writeFileSync(join(scripts, 'Foo.cs'),
+      'namespace MyGame {\n  public class Foo {\n    public void DoThing() {}\n    public void NewThing() {}\n  }\n}\n');
+    const writer2 = new DbWriter(dbPath);
+    await scan({ db: writer2, mode: 'incremental', dirs, projectRoot, scannerVersion: 2, guids: [fooGuid], tier: 'project' });
+    writer2.close();
+
+    const db = openReadOnly(dbPath);
+
+    // (a) No node leak: exactly ONE Foo ScriptType, re-created with a new id.
+    //     Before the fix, deleteNodesByGuid left the NULL-guid old type node behind → 2.
+    const fooTypes = db.prepare("SELECT id FROM nodes WHERE type='ScriptType' AND name='Foo'").all();
+    expect(fooTypes.length).toBe(1);
+    const newFooTypeId = fooTypes[0].id;
+    expect(newFooTypeId).not.toBe(oldFooType.id);
+
+    // (b) No stranded nodes still linked to the deleted old Script node.
+    const stranded = db.prepare('SELECT COUNT(*) c FROM nodes WHERE file_id = ?').get(oldFooScript.id);
+    expect(stranded.c).toBe(0);
+
+    // (c) The inbound reference survives AND is re-pointed at the live Foo type (by name),
+    //     with its properties intact. Before the fix it was cascade-deleted / stranded.
+    const refs = db.prepare(
+      "SELECT target_id, properties FROM edges WHERE type='code_references' AND source_id = ?"
+    ).all(barType.id);
+    expect(refs.length).toBe(1);
+    expect(refs[0].target_id).toBe(newFooTypeId);
+    expect(refs[0].properties).toBe('{"reference_kind":"field"}');
+
+    db.close();
+  });
+});

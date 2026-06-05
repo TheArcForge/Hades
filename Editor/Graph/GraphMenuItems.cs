@@ -24,7 +24,11 @@ namespace ArcForge.Hades.Editor.Graph
                 return;
             }
 
-            builder.RebuildAll();
+            // Single canonical rebuild path (also used by the MCP hades_rebuild_graph
+            // tool and the auto-rebuild). RebuildParallel runs the Node.js C# scan,
+            // ScanProjectSettings + ScanAddressables, status flags, and the WAL
+            // checkpoint — none of which the old RebuildAll body did.
+            builder.RebuildParallel();
             Debug.Log($"[Hades] Graph rebuild complete: {GraphDatabase.Instance.GetNodeCount()} nodes, {GraphDatabase.Instance.GetEdgeCount()} edges");
         }
 

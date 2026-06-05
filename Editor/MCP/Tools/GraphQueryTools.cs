@@ -809,6 +809,21 @@ namespace ArcForge.Hades.Editor.MCP.Tools
 
                 var nodes = db.FindNodesByType(fromType);
 
+                // If nothing matched, distinguish an UNKNOWN type name from a valid-but-empty
+                // type. Otherwise a bad 'from' (e.g. the literal "node" instead of a real node
+                // type like "AddressableGroup") returns count:0 and reads as "no such data",
+                // when the real problem is the query. Mirror the hard-error already given to
+                // unknown 'where' keys, and list the valid types so the caller can self-correct.
+                // Only paid when the result is empty, so the common path stays fast.
+                if (nodes.Count == 0)
+                {
+                    var knownTypes = db.GetTypeCounts().Keys;
+                    if (!knownTypes.Contains(fromType))
+                        return MCPToolResult.Error(
+                            $"Unknown 'from' node type '{fromType}'. Valid node types: " +
+                            $"{string.Join(", ", knownTypes.OrderBy(t => t))}.");
+                }
+
                 // Name-based filtering (supports SQL LIKE patterns with %)
                 var whereClause = q["where"];
 

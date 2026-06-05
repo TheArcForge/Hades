@@ -98,156 +98,13 @@ namespace ArcForge.Hades.Editor.Graph
         // Full rebuild (synchronous) — kept for tests and menu items
         // -------------------------------------------------------------------
 
-        public void RebuildAll()
-        {
-            _status = BuildStatus.Rebuilding;
-            ScanResolver.Clear();
-            var allPaths = GetScannablePaths("Assets/");
-
-            _db.SetCurrentOperation("rebuild");
-
-            using (var span = CharonEmitter.StartSpan("graph.build.full_rebuild", SpanKind.Internal))
-            {
-                span.SetAttribute("assets.total", (long)allPaths.Length);
-
-                try
-                {
-                    SeedBuiltinTypes();
-
-                    _db.RunInTransaction(() =>
-                    {
-                        _db.Execute("DELETE FROM pending_edges;");
-                        // Deleting project nodes cascades to remove all edges involving them
-                        _db.DeleteNodesByTier("project");
-                        _db.Execute(@"DELETE FROM scanned_assets WHERE guid NOT IN (
-                            SELECT DISTINCT guid FROM nodes WHERE guid IS NOT NULL);");
-
-                        EnsureProjectNode();
-                        _sessionNodeMap = BuildSessionMapFromExistingNodes();
-
-                        int total = allPaths.Length;
-                        int processed = 0;
-
-                        foreach (var path in allPaths)
-                        {
-                            processed++;
-                            if (processed % 20 == 0)
-                                EditorUtility.DisplayProgressBar("Hades: Rebuilding Graph",
-                                    $"Scanning project assets ({processed}/{total})…",
-                                    (float)processed / total);
-
-                            ScanAsset(path, "project");
-                        }
-
-                        ResolvePendingEdges();
-                    });
-
-                    span.SetAttribute("nodes.count", _db.GetNodeCount());
-                    span.SetAttribute("edges.count", _db.GetEdgeCount());
-                }
-                catch (Exception ex)
-                {
-                    span.SetStatus(SpanStatus.Error);
-                    span.SetAttribute("error.message", ex.Message);
-                    throw;
-                }
-                finally
-                {
-                    _sessionNodeMap = null;
-                    EditorUtility.ClearProgressBar();
-                    _db.ClearCurrentOperation();
-                    _db.SetMetadata("last_full_rebuild_at",
-                        DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
-                    _status = BuildStatus.Idle;
-                    OnRebuildComplete?.Invoke();
-                }
-            }
-        }
-
-        // -------------------------------------------------------------------
-        // Chunked project rebuild (non-blocking, processes over multiple frames)
-        // -------------------------------------------------------------------
-
-        /// <summary>
-        /// Chunked project rebuild with progress bar.
-        /// Preserves package-tier nodes. Blocks the main thread.
-        /// </summary>
-        public void RebuildAllChunked(int assetsPerBatch = 50)
-        {
-            if (_status == BuildStatus.Rebuilding) return;
-
-            _status = BuildStatus.Rebuilding;
-            ScanResolver.Clear();
-            _db.SetCurrentOperation("rebuild");
-
-            try
-            {
-                _buildLog?.BeginStep("Chunked rebuild");
-                EditorUtility.DisplayProgressBar("Hades: Rebuilding Graph",
-                    "Loading project asset list from Unity…", 0f);
-
-                var allPaths = GetScannablePaths("Assets/");
-                int total = allPaths.Length;
-
-                _db.RunInTransaction(() =>
-                {
-                    _db.Execute("DELETE FROM pending_edges;");
-                    _db.DeleteNodesByTier("project");
-                    _db.Execute(@"DELETE FROM scanned_assets WHERE guid NOT IN (
-                        SELECT DISTINCT guid FROM nodes WHERE guid IS NOT NULL);");
-                });
-
-                EnsureProjectNode();
-                SeedBuiltinTypes();
-                _sessionNodeMap = BuildSessionMapFromExistingNodes();
-
-                Debug.Log($"[Hades] Rebuild started: {total} scannable assets (package nodes preserved)");
-                _buildLog?.Detail("Total scannable assets", total);
-
-                for (int index = 0; index < total;)
-                {
-                    var batchEnd = Math.Min(index + assetsPerBatch, total);
-
-                    _db.RunInTransaction(() =>
-                    {
-                        for (; index < batchEnd; index++)
-                        {
-                            ScanAsset(allPaths[index], "project");
-                        }
-                    });
-
-                    EditorUtility.DisplayProgressBar("Hades: Rebuilding Graph",
-                        $"Scanning project assets ({index}/{total})…",
-                        0.05f + 0.85f * ((float)index / total));
-                }
-
-                var pendingCount = _db.GetPendingEdges().Count;
-                EditorUtility.DisplayProgressBar("Hades: Rebuilding Graph",
-                    $"Resolving {pendingCount} cross-file type edges…", 0.95f);
-
-                _db.RunInTransaction(() => ResolvePendingEdges());
-
-                _buildLog?.EndStep();
-
-                _db.SetMetadata("last_full_rebuild_at",
-                    DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
-
-                Debug.Log($"[Hades] Rebuild complete: {_db.GetNodeCount()} nodes, {_db.GetEdgeCount()} edges");
-                OnRebuildComplete?.Invoke();
-            }
-            catch (Exception ex)
-            {
-                _buildLog?.Detail("ERROR", ex.Message);
-                Debug.LogError($"[Hades] Rebuild failed: {ex.Message}\n{ex.StackTrace}");
-            }
-            finally
-            {
-                _sessionNodeMap = null;
-                EditorUtility.ClearProgressBar();
-                _db.ClearCurrentOperation();
-                _status = BuildStatus.Idle;
-            }
-        }
+        // Back-compat shim. The old RebuildAll had its own divergent rebuild body and
+        // RebuildAllChunked was dead code; both omitted ScanProjectSettings/ScanAddressables
+        // (and the Node C# scan / checkpoint / status flags), which is why menu rebuilds
+        // produced no AddressableGroup or RenderPipelineAsset nodes. Collapsed to a single
+        // canonical path: RebuildParallel is now the sole full-rebuild implementation, so
+        // the rebuild logic cannot drift across entry points again.
+        public void RebuildAll() => RebuildParallel();
 
         // -------------------------------------------------------------------
         // Parallel rebuild — Node.js for .cs files, main thread for Unity-API scanners
@@ -751,8 +608,27 @@ namespace ArcForge.Hades.Editor.Graph
                     // scoped to the changed assets instead of the whole table.
                     if (otherGuids.Count > 0)
                     {
+                        // Capture inbound edges to each changed asset's guid-bearing node before the
+                        // cascade delete drops them, then re-point them at the recreated node after
+                        // the re-scan. Without this, modifying asset A erases every reference to A
+                        // from OTHER (unchanged) assets — their pending edge was consumed at the last
+                        // full build, so nothing recreates them — and reference edges erode with each
+                        // incremental update until a full rebuild heals them. Sources are almost all
+                        // NULL-guid component nodes (never deleted by DeleteNodesByGuid → ids stable);
+                        // a source that was itself re-scanned is dropped by the NodeExists check below.
+                        var inboundToRestore =
+                            new List<(long sourceId, string targetGuid, long? targetFileId, string type, string properties)>();
+
                         _db.RunInTransaction(() =>
                         {
+                            // Pass 1 — capture inbound edges, then delete ALL changed assets before
+                            // scanning any. If a source and its target both change in one batch,
+                            // deleting both up front means the source's re-scan can't resolve its edge
+                            // against the target's about-to-be-deleted OLD node — it defers to pending
+                            // and resolves against the NEW node in ResolvePendingEdges below.
+                            // (Interleaving delete+scan per asset left such cross-batch edges
+                            // resolved-then-orphaned until the next full rebuild.)
+                            var toScan = new List<(string assetPath, string tier)>();
                             foreach (var guid in otherGuids)
                             {
                                 var assetPath = AssetDatabase.GUIDToAssetPath(guid);
@@ -763,11 +639,30 @@ namespace ArcForge.Hades.Editor.Graph
 
                                 if (storedHash == currentHash) continue;
 
+                                foreach (var ie in _db.GetInboundEdgesToGuid(guid))
+                                    inboundToRestore.Add((ie.sourceId, guid, ie.targetFileId, ie.edgeType, ie.properties));
+
                                 _db.DeleteNodesByGuid(guid);
                                 _db.DeletePendingEdgesBySourceAsset(guid);
 
                                 var tier = assetPath.StartsWith("Packages/") ? "package" : "project";
-                                ScanAsset(assetPath, tier);
+                                toScan.Add((assetPath, tier));
+                            }
+
+                            // Pass 2 — scan all changed assets (every changed asset's old nodes are
+                            // now gone, so cross-batch references defer to pending).
+                            foreach (var item in toScan)
+                                ScanAsset(item.assetPath, item.tier);
+
+                            // Re-point captured inbound edges at the recreated target node. Skip a
+                            // source whose node no longer exists (it was re-scanned and rebuilds its
+                            // own outbound edge). InsertEdge is INSERT OR IGNORE (dedup-safe).
+                            foreach (var r in inboundToRestore)
+                            {
+                                if (!_db.NodeExists(r.sourceId)) continue;
+                                var target = _db.FindNodeByGuid(r.targetGuid, r.targetFileId);
+                                if (target == null) continue;
+                                _db.InsertEdge(r.sourceId, target.Id, r.type, r.properties);
                             }
 
                             ResolvePendingEdges(guids);
@@ -1047,7 +942,7 @@ namespace ArcForge.Hades.Editor.Graph
             }
 
             var edgesToInsert = new List<(long, long, string, string)>();
-            var pendingToInsert = new List<(long, string, string, string, string)>();
+            var pendingToInsert = new List<(long, string, string, string, string, string)>();
 
             foreach (var edge in scanResult.Edges)
             {
@@ -1086,7 +981,7 @@ namespace ArcForge.Hades.Editor.Graph
 
                     if (_sessionNodeMap != null)
                     {
-                        pendingToInsert.Add((sourceId, edge.Type, targetTypeName, targetNamespace, assetGuid));
+                        pendingToInsert.Add((sourceId, edge.Type, targetTypeName, targetNamespace, assetGuid, edge.PropertiesJson));
                         continue;
                     }
 
@@ -1097,7 +992,7 @@ namespace ArcForge.Hades.Editor.Graph
                     }
                     else
                     {
-                        pendingToInsert.Add((sourceId, edge.Type, targetTypeName, targetNamespace, assetGuid));
+                        pendingToInsert.Add((sourceId, edge.Type, targetTypeName, targetNamespace, assetGuid, edge.PropertiesJson));
                         continue;
                     }
                 }
@@ -1107,7 +1002,7 @@ namespace ArcForge.Hades.Editor.Graph
                     if (_sessionNodeMap != null)
                     {
                         // Full rebuild: target not scanned yet → defer to batched resolution.
-                        pendingToInsert.Add((sourceId, edge.Type, edge.TargetGuid ?? "", null, assetGuid));
+                        pendingToInsert.Add((sourceId, edge.Type, edge.TargetGuid ?? "", null, assetGuid, edge.PropertiesJson));
                         continue;
                     }
 
@@ -1115,7 +1010,7 @@ namespace ArcForge.Hades.Editor.Graph
                     if (targetNode == null) targetNode = _db.FindNodeByGuid(edge.TargetGuid);
                     if (targetNode == null)
                     {
-                        pendingToInsert.Add((sourceId, edge.Type, edge.TargetGuid ?? "", null, assetGuid));
+                        pendingToInsert.Add((sourceId, edge.Type, edge.TargetGuid ?? "", null, assetGuid, edge.PropertiesJson));
                         continue;
                     }
                     targetId = targetNode.Id;
@@ -1197,8 +1092,15 @@ namespace ArcForge.Hades.Editor.Graph
 
                 if (found)
                 {
-                    string propertiesJson = null;
-                    if (pe.EdgeType == "code_references" && !string.IsNullOrEmpty(pe.TargetNamespace))
+                    // Carry the original edge's enrichment (e.g. {"addressable":true,
+                    // "field":"m_AssetGUID"}) through deferral. Before this was threaded, the
+                    // resolved edge was inserted with null properties, dropping the flag.
+                    string propertiesJson = pe.Properties;
+                    // Back-compat: Node-scanner code_references encode reference_kind in the
+                    // target_namespace column rather than properties — reconstruct it when no
+                    // properties were stored.
+                    if (string.IsNullOrEmpty(propertiesJson)
+                        && pe.EdgeType == "code_references" && !string.IsNullOrEmpty(pe.TargetNamespace))
                         propertiesJson = $"{{\"reference_kind\":\"{pe.TargetNamespace}\"}}";
 
                     // Reclassify the neutral supertype edge now that we know the target's kind:
@@ -1238,21 +1140,30 @@ namespace ArcForge.Hades.Editor.Graph
                     {
                         var ext = Path.GetExtension(assetPath)?.ToLowerInvariant();
                         if (ext != null && !coveredExtensions.Contains(ext))
-                            permanent++;
+                            permanent++;          // asset type Hades does not index (texture/mesh/audio)
+                        else if (scopeGuids == null)
+                            permanent++;          // full pass: covered ext but no node = coverage gap, terminal
                         else
-                            transient++;
+                            transient++;          // incremental: may resolve once that asset is scanned
                     }
                     else if (IsKnownExternalTarget(pe))
                     {
                         // Target is a BCL/Unity/framework type or an unstripped generic — no
-                        // user node will ever satisfy it. Count separately so it does not
-                        // depress the "still pending" (will-resolve-next-rebuild) signal.
+                        // user node will ever satisfy it.
+                        external++;
+                    }
+                    else if (scopeGuids == null)
+                    {
+                        // Full pass: ALL user code is already scanned, so a type-name edge still
+                        // unresolved here (code_references to a BCL type, an attribute, a generic
+                        // parameter, or a type defined in an unscanned package) can NEVER resolve —
+                        // it is terminal, not "pending". Previously these (the bulk of pending) were
+                        // mislabeled transient / "will resolve on next rebuild".
                         external++;
                     }
                     else
                     {
-                        // GUID doesn't resolve to any asset — likely a user type for
-                        // inherits_from/implements not yet scanned this pass.
+                        // Incremental (scoped) pass only: the target may simply not be scanned yet.
                         transient++;
                     }
                 }
@@ -1266,9 +1177,9 @@ namespace ArcForge.Hades.Editor.Graph
                 if (permanent > 0)
                     parts.Add($"{permanent} unresolvable (refs to textures, meshes, audio, etc. — asset types not indexed by Hades)");
                 if (external > 0)
-                    parts.Add($"{external} external (BCL/Unity/framework types — not user code)");
+                    parts.Add($"{external} external/unindexed (BCL, framework, attributes, generics, or types in unscanned packages — not user code in this project)");
                 if (transient > 0)
-                    parts.Add($"{transient} still pending (will resolve on next rebuild)");
+                    parts.Add($"{transient} still pending (target not yet scanned this pass)");
 
                 Debug.Log($"[Hades] Pending edges: {string.Join(", ", parts)}");
 
@@ -1276,7 +1187,7 @@ namespace ArcForge.Hades.Editor.Graph
                 if (permanent > 0)
                     _buildLog?.Detail("Edges unresolvable (unscanned types)", permanent);
                 if (external > 0)
-                    _buildLog?.Detail("Edges external (BCL/framework)", external);
+                    _buildLog?.Detail("Edges external/unindexed (BCL/framework/unscanned pkg)", external);
                 if (transient > 0)
                     _buildLog?.Detail("Edges still pending", transient);
             }
