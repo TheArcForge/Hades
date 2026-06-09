@@ -50,9 +50,9 @@ if [[ -n "$PRESERVE_DIR" ]]; then
   rm -rf "$PRESERVE_DIR"
 fi
 
-# Skills and Commands
-rsync -a "$REPO_ROOT/skills/" "$TARGET/skills/"
-rsync -a "$REPO_ROOT/commands/" "$TARGET/commands/"
+# Skills and Commands (strip Unity .meta files — meaningless in the plugin repo)
+rsync -a --exclude='*.meta' "$REPO_ROOT/skills/" "$TARGET/skills/"
+rsync -a --exclude='*.meta' "$REPO_ROOT/commands/" "$TARGET/commands/"
 
 # Bridge — compiled output only (zero runtime deps)
 mkdir -p "$TARGET/Bridge~/launcher/dist" "$TARGET/Bridge~/hub/dist"
