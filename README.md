@@ -9,6 +9,8 @@
 
 > **In the underworld of your Unity project, nothing is hidden from Hades. And now, nothing is hidden from your AI agent.**
 
+![Hades in action — the agent answers project-structure questions from the knowledge graph instead of grepping and guessing](Documentation/demo.gif)
+
 Hades is Unity-aware AI infrastructure for Claude Code. It builds a queryable knowledge graph of your entire Unity project — every scene, prefab, script, asset, and dependency — so your AI agent *knows* your project's structure instead of guessing at it. Out of the box you get 88 MCP tools, 22 skills, and 6 commands. Everything runs locally, and everything is version-controllable.
 
 <!-- ===================== HERO DEMO GIF (placeholder) =====================
