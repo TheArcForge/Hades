@@ -80,7 +80,7 @@ Measured from Charon trace data (total_duration_ms including MCP overhead):
 |------|-------|----------|----------|--------------------------|
 | `hades_ping` | 17 | 3 | 13 | — |
 | `hades_status` | 9 | 20 | 65 | — |
-| `search_by_name` | 69 | 33 | 539 | 5-20ms (FTS5) |
+| `search_by_name` | 69 | 33 | 539 | 5-20ms (LIKE scan) |
 | `query_graph` | 10 | 117 | 503 | 10-100ms (aggregations) |
 | `find_references_to` | 2 | 9 | 16 | 1-5ms (one-hop) |
 | `trace_dependencies` | 3 | 350 | 1,031 | 10-50ms (5-hop) |
@@ -142,4 +142,4 @@ The benchmark graph (163k nodes, 128MB) is representative of a medium-to-large p
 
 A true 50k+ *project asset* benchmark (50k scenes, prefabs, textures — not package scripts) would stress the project-tier scanners differently and is recommended for validation on a real game project.
 
-**Note:** This benchmark predates Phase 9 (v0.9.5), which added the MetaScanner (creates Asset nodes for textures, models, audio, animation, fonts via `.meta` file reads), tree-sitter C# parser (AST-based cross-file reference extraction replacing regex), and Unity builtin type seeding (4,001 ScriptType nodes from Unity assemblies). These additions increase total node/edge counts and may affect build and query timings. A fresh benchmark is recommended after Phase 9 stabilization.
+**Note:** This benchmark predates the v1.0.0 / Phase 10 release. Phase 9 (v0.9.5) added the MetaScanner (Asset nodes for textures, models, audio, animation, fonts via `.meta` file reads), tree-sitter C# parser (AST-based cross-file reference extraction replacing regex), and Unity builtin type seeding (4,001 ScriptType nodes from Unity assemblies); Phase 10 built further on that foundation. These additions increase total node/edge counts and may affect build and query timings. A fresh benchmark against the current codebase is recommended.

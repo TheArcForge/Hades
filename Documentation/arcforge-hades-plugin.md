@@ -67,7 +67,7 @@ Commands in `commands/` are user-invocable slash commands:
 
 ### 1.3 MCP server
 
-The MCP server provides 89 tools across five categories: Graph queries, Charon traces, Asphodel memory, core diagnostics, and editor-action tools (scene, component, prefab, material, animation, asset, and project management). The server runs inside the Unity Editor (C#) and is connected to Claude Code through the Hub architecture described in §3.
+The MCP server provides 90 tools across five categories: Graph queries, Charon traces, Asphodel memory, core diagnostics, and editor-action tools (scene, component, prefab, material, animation, asset, and project management). The server runs inside the Unity Editor (C#) and is connected to Claude Code through the Hub architecture described in §3.
 
 ---
 
@@ -158,8 +158,8 @@ Hades/                          (repository root = Unity Package root)
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "hades",
   "displayName": "Hades",
-  "version": "0.9.9",
-  "description": "Unity-aware AI infrastructure for Claude Code: project knowledge graph, observability, memory, 89 MCP tools, and 22 skills.",
+  "version": "1.0.0",
+  "description": "Unity-aware AI infrastructure for Claude Code: project knowledge graph, observability, memory, 90 MCP tools, and 22 skills.",
   "author": {
     "name": "ArcForge",
     "url": "https://github.com/TheArcForge"
@@ -222,7 +222,7 @@ The full MCP Hub design specification is in `docs/superpowers/specs/2026-05-13-m
 A long-running Node.js HTTP server. One per machine, shared across all Claude Code sessions and Unity instances. Source lives in `Bridge~/hub/`.
 
 **Responsibilities:**
-- Implements the MCP protocol (Streamable HTTP transport) facing Claude Code
+- Implements the MCP protocol (plain JSON-RPC over HTTP POST to `/rpc`) facing Claude Code
 - Maintains a registry of connected Unity instances keyed by project path
 - Routes tool calls to the correct Unity instance based on the session's working directory
 - Validates instance liveness via heartbeat monitoring
@@ -237,10 +237,10 @@ A thin stdio process spawned by Claude Code as declared in `.mcp.json`. Source l
 
 **Behavior:**
 1. Reads `~/.arcforge/hades-hub/hub.json` for hub port and PID
-2. If hub is not running: spawns it as a detached background process, waits up to 5s
-3. Registers with hub as a connected launcher session
-4. Bridges stdio ↔ HTTP: reads JSON-RPC from stdin, POSTs to hub, writes response to stdout
-5. On stdin close: deregisters from hub, exits
+2. If hub is not running: spawns it as a detached background process, waits up to 15s (`HUB_STARTUP_TIMEOUT_MS=15000`)
+3. Registers with hub as a connected launcher session via `POST /api/launcher/connect`
+4. Bridges stdio ↔ HTTP: reads JSON-RPC from stdin, POSTs to hub's `/rpc` endpoint, writes response to stdout
+5. On stdin close: calls `POST /api/launcher/disconnect`, then exits
 
 **Failure recovery:** If the hub dies mid-session, the launcher detects the failed HTTP call, respawns the hub, and retries once.
 
@@ -250,11 +250,14 @@ The existing `MCPServer.cs` HTTP server inside Unity. Modified to register with 
 
 **Lifecycle:**
 - On start: registers with hub via `POST /api/register`
-- Every 30s: heartbeat via `POST /api/heartbeat`
-- On domain reload (before): deregisters with `transient: true` (hub buffers requests)
-- On domain reload (after): re-registers (hub resumes request forwarding)
+- Every 30s: heartbeat via `POST /api/heartbeat` — driven by a background `System.Threading.Timer`, **not** `EditorApplication.update`. This keeps the heartbeat firing even when the editor's main thread is napped or stalled (e.g. a backgrounded macOS editor), which is the condition that previously caused the Hub to evict the instance and surface "No Unity instance found".
+- Eviction recovery: if a heartbeat finds the Hub up but no longer tracking this instance (it was evicted while the main thread was stalled or the machine asleep), the timer re-registers automatically. It also detects a restarted Hub (new PID/port in `hub.json`) and re-registers against it.
+- On domain reload (before): deregisters with `transient: true` (hub buffers requests); the background heartbeat timer is torn down
+- On domain reload (after): re-registers (hub resumes request forwarding). Re-creation is gated on a single `EditorApplication.delayCall` tick — a napped, backgrounded editor can starve this, so a fresh server may fail to bootstrap until the main thread ticks once (see the `wake-unity.sh` recovery in the Troubleshooting guide).
 - On quit: deregisters with `transient: false`
 - If hub is not running: writes breadcrumb to `~/.arcforge/hades-hub/pending/` for next hub start
+
+**Backgrounded-editor note:** While a request is in flight, the server holds a refcounted macOS App Nap opt-out (`NSProcessInfo beginActivityWithOptions`) so the main-thread work queue keeps draining even if the OS tries to throttle a hidden editor. This is cheap insurance layered on top of the HTTP listener (which already runs on background threadpool threads and so accepts requests regardless of editor focus); the steady-state registration guarantee comes from the background-timer heartbeat above.
 
 ### 3.5 Project path routing
 
@@ -270,13 +273,13 @@ This routing solves the `.mcp.json` scoping problems (Known Issues #2 and #4 in 
 
 ### 3.6 Tool catalog
 
-When no Unity instances are connected, `tools/list` returns an empty list. Tools appear when Unity connects and disappear when it disconnects, via MCP `tools/list_changed` notifications.
+The hub proxies `tools/list` and `tools/call` to the matched Unity instance via its `HttpTransport`. When no Unity instance matches the session's working directory, the hub returns a JSON-RPC error (`-32000 No Unity instance found`) listing the currently registered instances. There is no `tools/list_changed` notification mechanism — the tool list reflects whatever Unity reports at the moment of the request.
 
 ### 3.6a Initialize response and agent instructions
 
-The MCP `initialize` response includes an `instructions` field containing agent guidance — a short prose description of the Hades server and how to use its tools. This field is part of the MCP spec and is surfaced to the agent at session start, before any tool calls. It tells the agent which tools exist, what the server does, and any conventions it should follow.
+The launcher answers `initialize` locally without a hub round-trip. The response includes standard MCP fields (`protocolVersion`, `capabilities`, `serverInfo`) but does **not** include an `instructions` field — the launcher has no access to the Unity-side Hades instructions at this point. The `serverInfo.version` in this response is currently `0.9.1` (a stale constant in the launcher source).
 
-This matters for the plugin because it is the agent's first signal that Hades tools are available and how to use them. When no Unity instance is connected (empty tools list), the instructions still describe what the server is — the agent knows to wait or prompt the user to open Unity.
+The Hades agent guidance lives Unity-side and is only reachable after a Unity instance registers. It is not surfaced at `initialize` time via the launcher path.
 
 ### 3.7 Runtime state
 
@@ -296,12 +299,14 @@ This directory is a cross-process coordination point between Unity (C#) and the 
 
 | Scenario | Behavior |
 |---|---|
-| Claude Code starts before Unity | Launcher starts hub. Tools list is empty. Unity registers later, tools appear via `list_changed`. |
+| Claude Code starts before Unity | Launcher starts hub. `tools/list` and tool calls return a JSON-RPC error (`-32000 No Unity instance found`) until Unity registers. Retry after Unity is running. |
 | Unity domain reload | Unity deregisters as transient. Hub buffers requests up to 10s. Unity re-registers after reload. |
 | Unity compilation error | Hub heartbeat monitor probes Unity's HTTP endpoint directly before marking stale. If HTTP listener is alive (background thread), instance stays healthy. |
-| Laptop sleep/wake | All processes resume. Hub checks heartbeats. Unity instances respond normally. |
+| Unity backgrounded / App Nap | The HTTP listener (background threadpool threads) keeps accepting requests, and the heartbeat (background timer) keeps the registration fresh — both survive a napped main thread. An in-flight request also holds an App Nap opt-out to keep the work queue draining. If the Hub evicted the instance while it was stalled, the next heartbeat re-registers it. |
+| Laptop sleep/wake | All processes resume. Hub checks heartbeats. If the instance was evicted during sleep, its next background heartbeat re-registers automatically. Unity instances respond normally. |
+| Stalled after domain reload (napped main thread) | The fresh post-reload server can't bootstrap until the main thread ticks once, so the Hub may show no instance. Bring Unity to the foreground briefly (`Scripts/wake-unity.sh`) to un-nap the main thread; it re-registers immediately. |
 | Multiple Unity instances | Each registers with its project path. Hub routes by matching CWD. |
-| Hub crash | Launcher detects failed HTTP call, respawns hub. Unity re-registers on next heartbeat. |
+| Hub crash | Launcher detects failed HTTP call, respawns hub. Unity re-registers on next heartbeat (it detects the new Hub PID/port and re-registers). |
 | Session ends | Launcher deregisters. Hub auto-exits after 60s if nothing else is connected. |
 | Plugin update | Running hub serves from V8 memory. Auto-exits eventually. Next session starts fresh hub from new plugin root. |
 
@@ -508,7 +513,7 @@ Future consideration: `plugin.json` could declare a `"minMcpVersion"` field. The
 1. Is the plugin installed? Run `/plugin list` — look for `hades`. Without the plugin, Claude Code has no way to discover or connect to the Hub from an unrelated directory. Run `/plugin marketplace add TheArcForge/hades-plugin` then `/plugin install hades` to fix.
 2. Once the plugin is installed, follow checks 2–3 above.
 
-**If Unity is running but tools are empty:** the hub may not have matched your working directory to the Unity project. Run a tool to see the error message listing available instances, or launch Claude Code from within the Unity project directory.
+**If tool calls return "No Unity instance found":** the hub could not match your working directory to a registered Unity instance. Run a tool to see the error message listing available instances, or launch Claude Code from within the Unity project directory.
 
 ### 7.2 Tools disappear after Unity recompile
 

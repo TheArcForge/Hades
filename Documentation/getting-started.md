@@ -30,7 +30,7 @@ Both the Unity package and the Claude Code plugin install directly from GitHub �
 
 6. Wait for the initial graph build to complete. Watch the Unity console — you'll see a log message when it finishes. This takes 10–45 seconds depending on project size.
 
-**Verification:** In the Unity console, you should see messages from Hades including "MCP server started". If you see compilation errors instead, check that you're on Unity 6000.0 or newer.
+**Verification:** In the Unity console, you should see a message from Hades including `[Hades MCP] Server running on {endpoint}`. If you see compilation errors instead, check that you're on Unity 6000.0 or newer.
 
 ### Alternative: Install from local folder
 

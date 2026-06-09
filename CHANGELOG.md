@@ -4,7 +4,47 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Phase 10: Public Release Prep
+## [Unreleased] — Graph relationship & coverage correctness
+
+Post-1.0 correctness round driven by field reports from an Addressables-heavy project. Changes treat the scanner/graph as ground truth and add honest signals where a gap is inherent (precompiled DLL types, runtime dispatch).
+
+### Added
+
+- **`nested_by` on `find_references_to`** — surfaces direct structural parents (nesting prefabs, prefab variants) separately from `references`, so a nested-only asset no longer reads as "unused" while `reference_count` stays free of transitive over-count
+- **Honest coverage signals on relationship tools** — `static_analysis_coverage` (names reflection / runtime dispatch / DI blind spots), `package_scan` degraded, and `supertypes_external_unresolved` counts on `find_references_to` / `trace_dependencies` / inheritance queries
+- **`package_scan_status`** flag in `scan_health` (`get_project_summary`)
+- **Scene→prefab `instantiates` edge** — `find_references_to(prefab)` now surfaces scenes that instantiate it
+- **`kind` property on `ScriptType` nodes** (class / struct / interface / enum / record)
+
+### Changed
+
+- **C# parser** now emits `ScriptType` nodes for enums, records, and nested types (restores coverage lost in the Phase-9 tree-sitter swap); captures `using`-aliases and generic method-invocation / property / generic-return type arguments; replaces the `base_type` node property with a `supertypes` list
+- **`inherits_from` vs `implements`** is decided by the resolved supertype's kind, not base-list position (fixes missed first-party interfaces)
+- **`find_prefabs_with_component`** walks the full containment chain (finds deeply-nested component hosts) and de-dups variant-inherited components (`count` excludes inherited; `total_including_inherited_variants` reported)
+- **Package-tier scan** is non-destructive on failure (scan-then-reconcile instead of delete-then-rescan); longer package-tier timeout
+- **Addressable group→member edge** so addressable groups surface as referrers of their members
+
+### Fixed
+
+- **`trace_dependencies`** no longer reports the queried file's own methods as dependencies
+- **`find_references_to`** no longer over-counts via structural/transitive prefab edges, and no longer merges referrers of co-located sibling types into a `.cs` query
+- **`find_components_using_pattern`** reads the new `supertypes` property (was silently broken by the `base_type` removal)
+- **Inference `NullReferenceException`** on every rebuild after the first (`PatternInferenceEngine` dereferenced a never-persisted `TargetFile`); guarded, and the catch now logs the full exception
+- **Test isolation** — EditMode tests no longer leave the live `GraphDatabase` singleton null after a run (they save/restore it), so the graph stays queryable post-test
+
+### Fixed — field-fix batch (large Addressables project)
+
+- **Rebuild-path unification** — the `Hades → Rebuild Graph` menu ran a divergent `RebuildAll` that skipped `ScanProjectSettings`/`ScanAddressables` (and the Node C# scan), so menu rebuilds produced 0 `AddressableGroup` / 0 `RenderPipelineAsset` nodes. Collapsed all entry points onto `RebuildParallel`; removed dead `RebuildAllChunked`.
+- **Addressable group membership** — `AddressableAssetGroup.entries` was cast `as IList` (a `Dictionary.ValueCollection`, always null) → every group orphaned. Cast to `IEnumerable`; entries + `addressable_for` edges now populate and match the group `.asset` files.
+- **Deferred-edge property loss** — `pending_edges` gained a `properties` column (schema **v3**, additive migration); a forward-reference edge now keeps its `{field}`/`{addressable:true}` enrichment through deferral instead of resolving with `NULL` properties.
+- **`AddressableEntry` path collision** — entries no longer set `Path` to the real asset's path (kept in `properties.asset_path`); fixes path resolution / `trace_dependencies` landing on the entry instead of the asset.
+- **Incremental edge erosion (Unity + C#)** — re-scanning a changed asset cascade-deleted inbound edges from *unchanged* assets, which were never recreated and eroded each incremental. Inbound edges are now captured before delete and re-pointed after re-scan; the C# scanner deletes a file's full node set by `file_id` (was leaking NULL-guid `ScriptType`/`ScriptMethod` nodes).
+- **Pending-edge classification** — on a full pass, unresolved type-name edges (BCL/framework/attributes/generics/unscanned-package types) are now classified terminal (`external`/`unindexed`) instead of being logged "will resolve on next rebuild."
+- **`query_graph` guardrail** — an unknown `from` node type now errors and lists valid types instead of silently returning `count:0`.
+
+---
+
+## [1.0.0] — 2026-05-31 — Phase 10: Public Release
 
 ### Added
 
@@ -20,7 +60,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Renamed `Skills~/` → `skills/` and `Commands~/` → `commands/` (Anthropic standard auto-discovery paths)
 - Enriched `plugin.json` with `$schema`, `displayName`, author object, `license`, `homepage`, `repository`, `keywords`
 - Removed explicit `"skills"` and `"commands"` fields from `plugin.json` (now auto-discovered by convention)
-- Version bumps: product `0.9.5` → `0.9.9`; Bridge, Hub, and Scanner internals to `1.0.0`
+- Version bumps: product `0.9.5` → `1.0.0`; Bridge, Hub, and Scanner internals to `1.0.0`
 
 ---
 
@@ -69,7 +109,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Hub end-to-end validation:** Claude Code → Launcher → Hub → Unity round-trip tested and confirmed; order-independent startup and domain reload resilience verified
 - **Agent routing (three layers):** MCP `instructions` field in initialize response guides agents to use Hades tools instead of bash; `CLAUDE.md` auto-generated to Unity project root on server start; 22 skills copied to `~/.claude/skills/hades-*/` for Claude Desktop
 - **Sync script** (`scripts/sync-plugin.sh`): produces plugin repo content (872KB, 62 files) from main repo for distribution
-- `Documentation/getting-started.md`: full walkthrough for external testers
+- `Documentation/getting-started.md`: full walkthrough for new users
 - Troubleshooting guide consolidating known issues, recovery procedures, and symptom → cause → fix table
 - Validation warning idempotency: `ClearOldWarnings()` strips stale warning blocks before each validation pass
 

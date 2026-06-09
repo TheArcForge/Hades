@@ -1,8 +1,8 @@
 # Hades — Roadmap Document
 
 **Version:** 1.5
-**Status:** Active development — Phase 9.5 (field-report hardening, v1.0 blockers) gating Phase 10 public release
-**Last updated:** 2026-06-01
+**Status:** Phase 10 complete — v1.0.0 shipped (2026-05-31)
+**Last updated:** 2026-06-03
 **Companion to:** Vision document, Architecture document, Plugin document
 
 ---
@@ -2037,6 +2037,140 @@ Phase 9.5 makes Phases 8 and 9 real on a normally-launched Editor and removes th
 
 ---
 
+## 11.6 Phase 9.6: Post-9.5 field-verification fixes
+
+### Strategic intent
+
+After Phase 9.5 shipped, a post-fix field verification on a large production project (order of **~700k nodes / ~1M edges**) confirmed every 9.5 repair holds in the field: the C# reference layer populates, content-asset types are present, the post-rebuild WAL freeze is gone at idle, `traces.db` stays capped, `query_graph` `where` filters, and `find_orphan_scripts` is honest. Graph coverage rose from roughly two-thirds to ~94%.
+
+The same verification surfaced a set of follow-on defects — every one triaged against the current code and confirmed reproducible. This phase commits to fixing **all verified problems**, organized into four workstreams: **(A)** build-write threading, **(B)** busy-mechanism correctness, **(C)** graph data correctness, and **(D)** small tool-output bugs. Two reported items that did **not** reproduce, and the larger architecture bets, are explicitly out of scope and recorded under open questions.
+
+**Workstream A — incremental-update cost + WAL.** Under sustained write churn the Editor hard-hangs, but profiling the incremental path (`GraphBuilder.UpdateAssets`, triggered by Unity's asset post-processor) shows the cost is **O(graph) per write**, not the SQLite commit: every incremental rebuilds the full session node-map (`SELECT` of all ~700k guid nodes) and re-scans the entire `pending_edges` table, on top of Unity's own main-thread asset deserialization. A background writer thread would not touch any of those, so the fix is to make incrementals **O(changed)** — drop the full session-map rebuild in favour of targeted `FindNodeByGuid` lookups for the changed set, and scope pending-edge resolution to the affected source assets — and to **bound WAL** growth (`wal_autocheckpoint` / `journal_size_limit`, retaining the 9.5 finalize `TRUNCATE`). A background single-writer connection is held in reserve (Workstream A4) and added only if, after these fixes, measurement still shows the commit itself blocking — otherwise it stays a deferred architecture question (DB ownership, below).
+
+**Workstream B — busy-mechanism correctness.** The 9.5 busy short-circuit (`MCPServer.EnqueueAndWait`) gates on `GraphBuilder.IsBusy`, which is true for *any* non-Idle status — including the fast transient incremental `Updating` state. After Workstream A made incrementals O(changed) (sub-frame), gating them returns a spurious "busy" and opens an at-least-once retry window: a write lands while idle, its asset-import flips `IsBusy` via `Updating`, and a client retry sees "busy" although the edit already applied. Fix: gate only on a genuine **long, main-thread-blocking op** (`Rebuilding` / `ScanningPackages`) via a distinct `IsInLongOperation` flag, never on transient `Updating`. This closes both defects with a one-flag change — reads and writes flow freely during fast incrementals, and a "busy" is only ever returned when the op genuinely could not be served.
+
+Note on read/write classification: the original draft proposed classifying every tool read-vs-write so reads could run *during* a full rebuild. But all tools execute on the **main thread** through a single shared SQLite connection, and a full rebuild blocks that thread synchronously — so no tool, read or write, can be served mid-rebuild without a second background read connection (the deferred **A4** work). Until A4 exists, classification has no runtime effect (reads and writes are treated identically: both flow during incrementals, both get an honest "busy" during a true rebuild). Per YAGNI it is deferred to A4 rather than added as speculative scaffolding.
+
+**Workstream C — graph data correctness.** Three issues understate or misreport the graph: (1) `Script` nodes are keyed by absolute filesystem path while every other asset uses project-relative `Assets/...`, so `find_references_to` / `trace_dependencies` return 0 for a script addressed by its documented relative path; (2) tens of thousands of pending `code_references` target names match no node — .NET BCL types, attributes, generic/backtick-arity names (from builtin-type seeding), and precompiled-DLL types — and the schema has no terminal `external` state, so they read as permanently unresolved and depress the coverage metric; the asset extension→type map is also missing entries (`.spriteatlasv2`, `.bmp`); (3) some edges are never emitted at all — nested-prefab `m_SourcePrefab` links (only prefab *variants* are walked) and serialized references nested below the top level — so the coverage percentage overstates completeness.
+
+**Workstream D — small tool-output bugs.** `get_recently_changed` has no result cap (can return very large outputs right after a rebuild); `get_project_summary` mixes tier scopes (`script_count` spans all tiers, `script_type_count` is project-only).
+
+Honest scoping: none of this shrinks the ~40-minute full-rebuild wall-clock — that cost is Unity's own scene/prefab deserialization (irreducible without parsing `.unity`/`.prefab` YAML directly), kept on the Phase 11 track.
+
+### Done criteria
+
+**Workstream A — incremental-update cost + WAL**
+- [x] **Incrementals are O(changed), not O(graph):** `UpdateAssets` no longer rebuilds the full session node-map (the `SELECT` of all ~700k guid nodes) on every write, and no longer re-scans the entire `pending_edges` table. The changed set is resolved by targeted `FindNodeByGuid` lookups; pending-edge resolution is scoped to the affected source assets.
+- [x] **No hard-hang under sustained write churn:** a burst of rapid write tools (repeated component/material/tag edits) keeps the Editor responsive; per-write work scales with the number of changed assets, not graph size.
+- [x] **WAL bounded:** the write-ahead log cannot grow without bound between full checkpoints — via a configured `wal_autocheckpoint` / `journal_size_limit`. The 9.5 explicit `wal_checkpoint(TRUNCATE)` at rebuild finalize is retained.
+- [x] **No regression to read latency:** MCP read/query timings stay within the 9.5 envelope; the O(changed) path does not add per-read cost.
+- [ ] **(A4, conditional) Background writer held in reserve:** only if, after the O(changed) + WAL fixes, measurement still shows the SQLite commit itself blocking the main thread, a single dedicated background writer connection is added (serialized work queue, single-writer semantics, flush/close on `beforeAssemblyReload` / `quitting`). Otherwise this stays a deferred architecture question (DB ownership, below).
+
+**Workstream B — busy-mechanism correctness**
+- [x] **No busy during fast incrementals:** the transient `Updating` state never produces a "busy" response. Reads and writes both flow during sub-frame O(changed) incrementals. The gate keys off a distinct `IsInLongOperation` flag (`Rebuilding` / `ScanningPackages` only), not `IsBusy`.
+- [x] **Busy means not-applied:** a `status: "busy"` response is only returned when the request was genuinely **not** applied (the main thread is blocked by a real long op). A write tool can never return "busy" after its mutation already landed.
+- [x] **No double-apply window:** a client that retries on `busy` cannot apply a non-idempotent write twice (no "busy" is returned for an op that already applied during `Updating`).
+- [ ] **(Deferred to A4) Reads served mid-rebuild + tool classification:** serving reads *during* a full rebuild requires the background read connection (A4). The read-vs-write tool classification is added together with A4, when it first has a runtime effect — not before.
+
+**Workstream C — graph data correctness**
+- [x] **Script path lookups work:** `find_references_to` / `trace_dependencies` resolve a `.cs` target given its project-relative path (`Assets/...`), not only its absolute path. Achieved by normalizing the path at the tool boundary and/or indexing the project-relative path for `Script` nodes. A relative-path query for a script returns its real references, not `0`.
+- [x] **Pending edges reflect reality:** terminal external references (.NET BCL types, attributes, precompiled-DLL types, backtick-generics) are tallied as `external` and excluded from the unresolved count (count-only — no fabricated nodes, no schema change); backtick-arity names are normalized in builtin-type seeding; the asset extension→type map covers `.spriteatlasv2` and `.bmp`. The reported coverage metric counts only genuinely-unresolved edges.
+- [x] **Previously-invisible edges are emitted:** nested-prefab `m_SourcePrefab` links are extracted as edges. (The recursive serialized-reference walk is deferred until it has a focused test harness — see open questions.)
+
+**Workstream D — tool-output bugs**
+- [x] **`get_recently_changed` is bounded:** a default result cap (with the limit surfaced in the response) prevents multi-megabyte outputs after a rebuild.
+- [x] **`get_project_summary` scopes are consistent:** counts either share a tier scope or each label its scope explicitly, so `script_count` and `script_type_count` are no longer silently incomparable.
+
+### Scope: what's in
+
+- **(A)** Make `UpdateAssets` **O(changed)** — drop the full session-map rebuild and full pending-edge re-scan in favour of targeted lookups scoped to the changed assets; **WAL bounding** (`wal_autocheckpoint` / `journal_size_limit`, retaining the finalize `TRUNCATE`). A background single-writer (A4) only if commit-bound blocking remains after measurement.
+- **(B)** Busy gate narrowed from `IsBusy` (any non-Idle) to a distinct `IsInLongOperation` flag (`Rebuilding` / `ScanningPackages` only), so the fast transient `Updating` never returns "busy". (Read-vs-write tool classification deferred to A4, where it first has a runtime effect.)
+- **(C)** Script-node **path normalization** (relativize at write in the Node scanner + tolerant query); **pending-edge reclassification** — *count-only*: known-external targets (BCL/attribute/precompiled-DLL/backtick-generic) are tallied separately and excluded from the unresolved coverage count, **no new node rows / no schema change**; backtick-arity normalization in builtin seeding; extension-map additions (`.spriteatlasv2`, `.bmp`); **never-extracted edges** — *conservative*: nested-prefab `m_SourcePrefab` edges this phase, the recursive serialized-reference walk deferred until it has a focused test harness.
+- **(D)** `get_recently_changed` cap; `get_project_summary` tier-scope alignment.
+
+### Scope: what's out (→ open questions)
+
+- Making the Node scanner the sole DB writer, and a persistent off-Editor sidecar — **not** adopted (rationale below).
+- Direct YAML asset parsing to cut the ~40-minute full-rebuild wall-clock — Phase 11.
+- The two reported-but-not-reproduced tool bugs (`analyze_render_pipeline`, `query_graph` `edges` filter) — re-test, do not fix blind.
+
+### Dependencies
+
+- Phase 9.5 complete (the freeze/retention fixes Workstream A builds on).
+- A large, GUI-launched project to reproduce the churn-hang and to re-measure pending-edge / coverage numbers after a fresh rebuild.
+
+### Risk assessment
+
+**Risk: the O(changed) refactor drops nodes/edges the full rebuild used to catch.** Replacing the full session-map rebuild with targeted lookups could miss a node that the old full scan happened to repair.
+*Mitigation:* scope the targeted set conservatively from the changed-asset GUIDs (the same set the debouncer already tracks); keep the full rebuild path intact for explicit `hades_rebuild_graph`; regression-test that an incremental produces the same nodes/edges for a changed asset as a full rebuild.
+
+**Risk: WAL bounding via autocheckpoint adds mid-write checkpoint stalls.** A `wal_autocheckpoint` that fires during a burst could itself introduce a hitch.
+*Mitigation:* size the autocheckpoint / `journal_size_limit` generously relative to per-write page counts; keep the explicit `TRUNCATE` only at rebuild finalize (not per-write); measure WAL growth under a churn burst.
+
+**Risk: (A4) threading a SQLite connection introduces corruption / contention** — *only if A4 is taken.* Moving writes off-thread demands strict ownership.
+*Mitigation:* defer A4 unless measurement proves the commit blocks; if taken, a single dedicated writer thread + serialized queue (no shared connection across threads), flush/close on reload/quit, queued items re-derivable from asset hashes.
+
+**Risk: narrowing the gate lets a request enqueue during a long op and time out** instead of getting a fast "busy."
+*Mitigation:* `IsInLongOperation` covers exactly the two states that block the main thread (`Rebuilding` / `ScanningPackages`); the transient `Updating` is now sub-frame, so a request that enqueues during it drains within a frame, well under the transport timeout. (Read/write classification and its drift risk move to A4, when classification is actually introduced.)
+
+**Risk: path normalization breaks existing relative-path callers** or double-counts a script under two keys.
+*Mitigation:* normalize at the boundary (don't duplicate node rows); regression-test both absolute and relative inputs return the same node.
+
+**Risk: classifying targets as terminal `external` hides genuinely-missing project edges** (a real unresolved edge mislabeled external).
+*Mitigation:* only classify external when the name resolves to a known BCL/attribute/DLL type set; everything else stays pending; re-measure against ground truth.
+
+**Risk: scope balloons across four workstreams.**
+*Mitigation:* land in dependency order — **A → B** first (the stability/regression core, since B depends on A), then **C**, then **D** — each independently shippable and testable.
+
+### Implementation hints
+
+- **(A)** Hot path: `GraphBuilder.UpdateAssets` (asset-postprocessor path). It currently calls `BuildSessionMapFromExistingNodes()` (full `SELECT` of all guid nodes) and `ResolvePendingEdges()` (full `pending_edges` scan) on every incremental — both O(graph). Replace the session-map rebuild with per-changed-GUID `GraphDatabase.FindNodeByGuid` lookups; scope pending-edge resolution to the changed source assets (use `DeletePendingEdgesBySourceAsset` + re-resolve only those, instead of re-scanning the whole table). WAL bound via `PRAGMA journal_size_limit` and/or `PRAGMA wal_autocheckpoint` in `GraphDatabase.ApplyPragmas`, retaining the 9.5 finalize `wal_checkpoint(TRUNCATE)`. **A4 only if needed:** `BlockingCollection<T>` queue drained by one long-lived writer thread, drain/close on `AssemblyReloadEvents.beforeAssemblyReload` / `EditorApplication.quitting`.
+- **(B)** `MCPServer.EnqueueAndWait` shorts on `GraphBuilder.IsBusy` (true for any non-Idle status). Add a distinct `GraphBuilder.IsInLongOperation` volatile, set in the `_status` setter to `Rebuilding || ScanningPackages`, and gate on that instead. `IsBusy` is left intact for its other consumers; the transient `Updating` no longer triggers a busy response. (When A4 lands, also classify tools and let reads bypass to the background read connection.)
+- **(C)** *Path keys:* the Node scanner writes `Script.path = filePath` (absolute) in `Scanner~/src/ts-parser.js`; normalize to project-relative at write time, or normalize the query argument in `find_references_to` / `trace_dependencies` (GraphQueryTools `n.Path == arg`). *Pending edges:* `GraphBuilder.ResolvePendingEdges` only logs permanent/transient counts — add a terminal `external` resolution and persist it; strip backtick arity where builtin seeding sets `type.BaseType.Name` / `iface.Name`; extend the extension map in `Scanner~/src/meta-scanner.js`. *Never-extracted:* read `m_SourcePrefab` in `PrefabScanner` (it currently handles only variants via `GetCorrespondingObjectFromOriginalSource`); recurse `ScanSerializedReferences` past the top level in `SceneScanner` / `ScriptableObjectScanner` / `PrefabScanner`.
+- **(D)** Add a `LIMIT` / default bound to `GraphDatabase.GetRecentlyChanged`; align the tier filters in `get_project_summary` (`GraphQueryTools` ~:41/:46) or annotate each count's scope.
+
+### Tests added
+
+- **(A)** An incremental update for a changed asset produces the same nodes/edges as a full rebuild of that asset (O(changed) parity); per-write cost does not scale with total graph size (no full session-map rebuild / no full pending-edge scan on the incremental path); sustained writes do not grow the WAL past its configured limit. *(A4, if taken:* concurrent reads during a background write return consistent data; a simulated reload mid-queue closes the writer cleanly.)*
+- **(B)** A request during transient `Updating` does **not** receive a `busy` response (it enqueues and applies); a request during `Rebuilding` / `ScanningPackages` receives an immediate `busy` and provably did not apply; retrying a non-idempotent write that returned `busy` applies it exactly once. (Tool-classification and reads-served-mid-rebuild tests arrive with A4.)
+- **(C)** `find_references_to` / `trace_dependencies` return identical results for a script's absolute and project-relative paths; a BCL/attribute/DLL target resolves to `external` and drops out of the pending count; a project with a nested prefab and a nested serialized reference emits those edges; the coverage metric matches the emitted-edge ground truth.
+- **(D)** `get_recently_changed` output is capped; `get_project_summary` counts are scope-consistent (or carry explicit scope labels).
+
+### Happy Path scenarios
+
+**Scenario 9.6a: Responsive under churn**
+
+An agent makes a rapid series of edits (materials, tags, components) on a large project. The Editor stays responsive; the graph catches up in the background instead of freezing.
+**Pass criteria:** no multi-second UI hangs during a write burst; the graph reflects all edits once the queue drains.
+
+**Scenario 9.6b: Incrementals never blocked, busy is honest**
+
+While the graph is catching up on a burst of edits (transient `Updating`), the agent runs `query_graph`, `search_by_name`, and a `material_swap_shader` — all succeed; none receive a spurious "busy." During a genuine full rebuild, a `material_swap_shader` returns `status: "busy"`, the material is provably unchanged, and a retry applies it exactly once.
+**Pass criteria:** no "busy" during fast incrementals; a busy write never half-applies; no double-apply on retry. (Serving reads *during* a full rebuild is an A4 follow-on, not in 9.6.)
+
+**Scenario 9.6c: Scripts answer to their documented path**
+
+The agent asks *"Where do we use `Assets/Scripts/BattleController.cs`?"* using the project-relative path and gets the real C# references.
+**Pass criteria:** a relative-path script query returns references, not `0`; coverage no longer counts BCL/attribute/DLL references as unresolved.
+
+### Regression coverage
+
+All Phase 0–9.5 tests must continue to pass. Workstream B changes tool *gating* behavior (reads previously returned `busy` mid-rebuild) and Workstream C changes *outputs* (script path resolution, pending-edge counts, coverage metric) — update any snapshot tests that encoded the old gated-read or unresolved-`external` behavior, since those encoded the bugs.
+
+### Open questions (deferred, not adopted)
+
+- **A4 — background read connection (+ tool classification).** Serving MCP reads *during* a full rebuild requires a second, read-only SQLite connection owned by a background thread (WAL's one-writer/many-reader guarantee). Only then does a read-vs-write tool classification have any runtime effect, so the two ship together. Deferred until measurement shows reads-during-full-rebuild matters in practice — full rebuilds are now rare (first boot, explicit rebuild, package changes) and incrementals are never gated, so the value is narrow. Workstream B already delivers the high-frequency win (no spurious busy on fast incrementals) without it.
+- **Single-writer ownership.** The graph is currently written by two processes — the C# Editor and the Node scanner. Consolidating to one writer is a sound invariant, but this phase changes only *threading*, not ownership; which side should own the write is left open.
+- **Node as sole writer / persistent off-Editor sidecar.** Evaluated and **not** adopted on performance grounds: the dominant build costs are Unity deserialization (stays in C#) and main-thread blocking (fixed by Workstream A), neither of which DB ownership addresses; routing the ~80 in-process read tools through IPC would tax reads to fix a problem already solved more cheaply. Revisit only if off-Editor persistence (surviving domain reloads, headless operation) becomes an explicit product goal.
+- **Direct YAML asset parsing.** The real lever against the ~40-minute full-rebuild wall-clock is parsing `.unity` / `.prefab` files directly (as the scanner already does for `.cs`), bypassing `OpenScene` / `LoadPrefabContents`. This is the Phase 11 build-speed play, sized separately.
+- **Reported but not reproduced.** `analyze_render_pipeline` reporting Built-in incorrectly, and the `query_graph` `edges` filter being a no-op, were both verified as **working** in the current code (`GraphicsSettings.defaultRenderPipeline` is read correctly; the `edges` filter is applied). Likely fixed since the reported build — re-test on a fresh rebuild before assuming a defect.
+
+### Bridge to next phase
+
+Phase 9.6 closes every verified follow-on defect from the field verification — threading/WAL stability, busy-mechanism correctness, the graph data-correctness gaps, and the small tool-output bugs — without committing to an architecture change. With the verified defects closed, Phase 10 (public release) proceeds on a graph whose read path is honest under load and whose coverage metric reflects reality. The deferred architecture questions feed Phase 11 (build-speed via direct YAML parsing, single-writer consolidation).
+
+---
+
 ## 12. Phase 10: Public release (v1.0)
 
 ### Strategic intent
@@ -2129,6 +2263,38 @@ All Phase 0–9 tests must continue to pass.
 ### Bridge to next phase
 
 Phase 10 declares Hades publicly released at v1.0. Phase 11 is post-launch evolution.
+
+---
+
+## 12.5 Phase 10.1: Graph relationship & coverage correctness (post-1.0 field report)
+
+**Status:** Code-complete, validated; pending release tag.
+**Trigger:** Two v0.9.9 field reports from an Addressables-heavy production project — one on addressable group-membership references, one a 240-sample trustworthiness audit of the C# relationship layer. Code was treated as ground truth; every finding was confirmed against source before any change.
+
+### Strategic intent
+
+Restore C# graph coverage that had regressed, fix the C#-relationship and prefab-query inaccuracies that made "who references X / is X used" unreliable, and — where a gap is inherent (precompiled DLL types, runtime dispatch) — make it *honest* (visible degraded/coverage signals) instead of silently wrong.
+
+### Scope (four waves)
+
+- **Wave A — coverage restoration.** The tree-sitter parser now emits `ScriptType` nodes for enums, records, and nested types (a Phase-9 parser swap had silently dropped them); the package-tier scan was made non-destructive on failure (scan-then-reconcile instead of wipe-first) with a `package_scan_status` flag and a longer package-tier timeout.
+- **Wave B — relationship correctness.** The parser captures previously-missed reference forms (`using`-aliases, generic method-invocation type args, property and generic-return type args); base-list supertypes are now classified as `inherits_from` vs `implements` by the *resolved* target type's kind (a new `kind` node property) rather than by base-list position — fixing missed first-party interfaces.
+- **Wave C — query-layer correctness.** `trace_dependencies` no longer pads results with the file's own methods; `find_references_to` no longer over-counts via structural/transitive edges and no longer merges co-located sibling types; `find_prefabs_with_component` walks the full containment chain (finds deeply-nested hosts) and de-dups variant-inherited components; `SceneScanner` emits a scene→prefab `instantiates` edge (previously an under-count).
+- **Wave D — Addressables + honesty.** An addressable group→member edge so a group surfaces as a referrer; honest signals on the relationship tools (`static_analysis_coverage`, `package_scan` degraded, `supertypes_external_unresolved`).
+
+### Follow-ups (found during validation)
+
+- **`find_references_to` `nested_by` bucket** — excluding structural edges to kill the over-count also hid the *direct* nesting parent, which would report a false "unused" for a nested prefab. Direct structural parents (nesting prefabs, prefab variants) now surface in a separate `nested_by` array, keeping `reference_count` clean.
+- **Inference NRE** — `PatternInferenceEngine` threw a swallowed `NullReferenceException` on every rebuild after the first (an inferred pattern's `TargetFile` was never round-tripped through frontmatter, then dereferenced in conflict detection); guarded, and the catch now logs the full exception.
+- **Test-isolation** — EditMode tests constructed `GraphDatabase` with temp DBs that hijacked and then nulled the process-wide singleton, leaving the live graph unqueryable after any test run. All graph-using tests now save/restore the singleton around each test.
+
+### Validation
+
+`Scanner~` JS tests green; Unity EditMode suite green. Live MCP validation against a sandbox confirmed the behavior of every wave end-to-end (deep-nested component discovery, variant de-dup, honesty signals, `nested_by`, URP detection, and — notably — the graph surviving a full test run). Items needing a richer project to exercise at scale (scene→prefab instantiation, the Addressables group edge, at-scale relationship reliability) are deferred to validation on a real Addressables project.
+
+### Inherent limits (documented, not "fixed")
+
+Precompiled DLL types cannot be source-scanned into nodes; the honest signals make that visible rather than closing it. Static analysis does not see reflection, runtime/string dispatch, or DI-resolved wiring — surfaced via the coverage caveat.
 
 ---
 
@@ -2292,6 +2458,19 @@ The actual problem: `MCPServer.Stop()` calls `MCPClientConfig.OnServerStop()` wh
 
 **Resolution:** The MCP Hub architecture (`Documentation/arcforge-hades-plugin.md`, §3) eliminates file-based discovery entirely. Unity registers with the Hub via HTTP. The Hub's heartbeat monitor probes Unity's HTTP endpoint directly before marking an instance stale, keeping the connection alive even during compilation failures. See also the MCP Hub design spec (`docs/superpowers/specs/2026-05-13-mcp-hub-design.md`).
 
+### MCP connection lost while editor backgrounded / idle (napped main thread)
+
+**Discovered:** 2026-06-02, during connection-resilience work
+**Severity:** Medium — surfaces as "Server hades unavailable" / "No Unity instance found" while the Unity Editor is still running, requiring manual recovery
+**Status:** Resolved (background-timer heartbeat + eviction recovery); reload/cold-bootstrap boundary covered by a recovery script
+**Ref:** `Editor/MCP/MCPServer.cs`, `Editor/MCP/AppNapGuard.cs`, `Scripts/wake-unity.sh`
+
+The original heartbeat rode `EditorApplication.update`, which runs on Unity's main thread. When a backgrounded macOS editor's main thread is napped or stalled (App Nap / background-timer coalescing), the heartbeat stops firing, the Hub's TTL expires, and the instance is evicted — even though the HTTP listener (on background threadpool threads) is still alive and able to serve requests.
+
+**Resolution (two layers):**
+- **Steady-state idle** — the heartbeat now runs on a dedicated background `System.Threading.Timer` that survives a napped main thread, with cached project values so it never touches a main-thread-only Unity API. If a heartbeat finds the Hub up but no longer tracking this instance, it re-registers automatically; it also detects a restarted Hub (new PID/port) and re-registers. A refcounted macOS App Nap opt-out (`AppNapGuard`) is held while a request is in flight as cheap extra insurance. *Verified by a 5-minute hidden-editor soak: the Hub reported `healthy` throughout and `lastHeartbeat` advanced every 30s with no eviction.*
+- **Reload / cold-bootstrap boundary** — the one gap the background timer cannot close is the moment just after a domain reload, when the fresh server must wait for a single `EditorApplication.delayCall` tick to bootstrap. A napped backgrounded editor starves that tick. The `Scripts/wake-unity.sh` helper recovers this by briefly bringing Unity to the foreground (un-napping the main thread so it re-registers) and then restoring the user's previous app focus. Documented in the Troubleshooting guide ("Recovering a stalled MCP connection").
+
 ### MCP config scoped to Unity project, not package source
 
 **Discovered:** Phase 5a development (2026-05-13)
@@ -2327,14 +2506,14 @@ When a Unity project lives in a subdirectory of the git repo (e.g., `MyRepo/MyUn
 
 ### Field bugs (Phase 7 feedback)
 
-**Status:** Tracked in Phase 8 (first-run reliability) and Phase 9 (graph coverage)
+**Status:** Resolved — bugs 1–3 shipped in v0.9.1 (Phase 8); bug 4 shipped in v0.9.5 (Phase 9)
 
 Four reproducible bugs discovered during the first external smoke-test on a large-scale production project:
 
-1. **macOS quarantine blocks native dylib** — `com.apple.quarantine` on zip distribution blocks `libgilzoide-sqlite-net.dylib`. Workaround: `xattr -dr com.apple.quarantine`. Fix: Phase 8.
-2. **Scanner npm install silently fails** — first-boot graph missing all C# nodes (38% smaller). Exit code 3 overloaded. Workaround: manual `cd Scanner~ && npm install`. Fix: Phase 8.
-3. **Launcher startup race** — MCP "failed" on every cold start; Reconnect succeeds. stdin not consumed until after Hub bootstrap. Fix: Phase 8.
-4. **pending_edges misleading log** — "Resolved 80/67504" when 99.88% are expected-unresolvable (unscanned asset types). Fix: Phase 8 (log), Phase 9 (MetaScanner).
+1. **macOS quarantine blocks native dylib** — `com.apple.quarantine` on zip distribution blocked `libgilzoide-sqlite-net.dylib`. Workaround: `xattr -dr com.apple.quarantine`. Fixed in v0.9.1 (Phase 8).
+2. **Scanner npm install silently fails** — first-boot graph was missing all C# nodes (38% smaller). Exit code 3 was overloaded. Workaround: manual `cd Scanner~ && npm install`. Fixed in v0.9.1 (Phase 8).
+3. **Launcher startup race** — MCP reported "failed" on every cold start; Reconnect succeeded. stdin was not consumed until after Hub bootstrap. Fixed in v0.9.1 (Phase 8).
+4. **pending_edges misleading log** — "Resolved 80/67504" when 99.88% were expected-unresolvable (unscanned asset types). Fixed in v0.9.5 (Phase 9): log updated and MetaScanner added to cover previously unscanned asset types.
 
 
 ---

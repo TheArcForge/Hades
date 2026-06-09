@@ -104,7 +104,7 @@ Within the Unity Package and its supporting infrastructure, there are four logic
 
 **Hades Charon** — observability. Trace events emitted from every MCP tool call, every graph query, every memory operation. Persisted to a SQLite database at `.arcforge/traces.db`. Visualizable via the Charon dashboard.
 
-**Hades Asphodel** — memory. Markdown files at `.arcforge/memory/` providing both Tier 1 (explicit, human-curated, git-tracked) and Tier 2 (inferred, auto-generated, gitignored). Read by MCP tools that inject relevant memory into agent context.
+**Hades Asphodel** — memory. Markdown files at `.arcforge/memory/` providing both Tier 1 (explicit, human-curated, git-tracked) and Tier 2 (inferred, auto-generated, also git-tracked alongside Tier 1). Read by MCP tools that inject relevant memory into agent context.
 
 **Hades Skills** — distributed via the Claude Code plugin. Not technically part of the Unity Package; lives in the agent client's plugin directory. But integrated with the other three layers: skills query Graph state and Asphodel context to give project-specific guidance.
 
@@ -119,14 +119,14 @@ A substantial portion of Hades's runtime infrastructure is reused from UniClaude
 - **`MCPDispatcher`** — reflection-based discovery of methods decorated with `[MCPTool]`, parameter mapping via `[MCPToolParam]`, response wrapping via `MCPToolResult`.
 - **Main Thread Bridge** — `ConcurrentQueue<WorkItem>` that funnels HTTP requests onto Unity's main thread, drained by `EditorApplication.update`. Required because Unity APIs are not thread-safe.
 - **Domain Reload Resilience** — server state (port, PID) persisted in `SessionState` so it survives Unity's assembly reloads. `IDomainReloadStrategy` with `EditorApplication.LockReloadAssemblies()` to prevent reloads mid-tool-execution.
-- **Path Sandboxing** — `PathSandbox.cs` ensures all file operations happen within the project root or the `.arcforge/` directory. No accidental writes outside.
-- **Tool primitives** — 68 of UniClaude's 75 MCP tools have been ported to Hades (7 skipped as redundant). These provide direct editor actions: scene manipulation, component management, prefab operations, material editing, animation controller authoring, asset management, and more.
+- **Path Sandboxing** — `PathSandbox.cs` ensures all file operations happen within the project root (`.arcforge/` is simply a subdirectory of it). Write operations to `.git/` are additionally blocked regardless of path. No accidental writes outside.
+- **Tool primitives** — 68 of UniClaude's MCP tools have been ported to Hades. These provide direct editor actions: scene manipulation, component management, prefab operations, material editing, animation controller authoring, asset management, and more.
 
 What changes from UniClaude:
 
 - **No Node.js Sidecar (but an MCP Hub).** UniClaude had a separate Node.js process running the Anthropic Agent SDK, which called the MCP server's `/rpc` endpoint via custom JSON-RPC. Hades does not embed the Agent SDK and therefore does not need a sidecar. The agent client is external (Claude Code or Claude Desktop), and it speaks the standard MCP protocol. Hades uses a three-component connectivity model — Launcher (thin stdio process) → Hub (long-running HTTP router) → Unity Instance(s) — described in the **Plugin document** §3. The Hub and Launcher have zero npm runtime dependencies (Node.js built-ins only). **Node.js is a runtime dependency for MCP connectivity** (both Claude Code and Claude Desktop route through the Hub).
 - **No chat UI.** UniClaude exposed a chat window in the Unity Editor as the user's primary interaction surface. Hades has no chat UI; the user interacts through their agent client.
-- **MCP-compliant transport.** UniClaude used custom JSON-RPC over HTTP. Hades uses the MCP protocol's official transport (HTTP/SSE per the spec). The `MCPServer.cs` infrastructure is upgraded to expose MCP-compliant endpoints, but the underlying threading model and lifecycle handling stay identical.
+- **MCP-compliant transport.** UniClaude used custom JSON-RPC over HTTP. Hades uses the MCP protocol's official transport (HTTP/JSON-RPC-over-POST). The `MCPServer.cs` infrastructure is upgraded to expose MCP-compliant endpoints, but the underlying threading model and lifecycle handling stay identical.
 
 The reuse is significant. We estimate approximately 60% of Hades's runtime infrastructure code is direct reuse from UniClaude with small adaptations, primarily around the MCP transport layer.
 
@@ -149,8 +149,8 @@ Claude Code ←(stdio)→ Launcher ←(HTTP)→ Hub ←(HTTP)→ Unity Instance(
 
 **Why HTTP on localhost:**
 
-- HTTP/SSE is platform-portable — identical on Windows, macOS, and Linux.
-- The MCP protocol specifies HTTP and SSE as primary transports, ensuring compatibility with all MCP clients.
+- HTTP is platform-portable — identical on Windows, macOS, and Linux.
+- The MCP protocol specifies HTTP as a primary transport, ensuring compatibility with all MCP clients. The Unity-side server handles `POST /rpc` (JSON-RPC) and `GET /sse`; the Hub forwards requests as `POST` to `/rpc` — no SSE streaming is used in practice.
 - HTTP infrastructure (request handling, error codes, content negotiation) is mature and well-understood.
 - The localhost-only constraint provides sufficient security for the threat model (same-machine, same-user processes).
 
@@ -165,19 +165,22 @@ Unity APIs are not thread-safe. Most Unity calls (`AssetDatabase`, `SerializedOb
 The bridge between these two worlds is the **Main Thread Bridge** pattern, inherited from UniClaude:
 
 1. An HTTP request arrives on a background thread (let's call it `T_http`).
-2. `T_http` parses the request, identifies the tool to call, and constructs a `WorkItem` describing the operation.
-3. `T_http` enqueues the `WorkItem` onto a `ConcurrentQueue<WorkItem>` and blocks on a per-WorkItem `ManualResetEventSlim`.
-4. On every `EditorApplication.update` tick (called by Unity on the main thread), the queue is drained: each `WorkItem` is executed (Unity APIs are now safe to call), the result is stored on the `WorkItem`, and the event is signaled.
-5. `T_http` wakes up, reads the result from the `WorkItem`, and writes the HTTP response.
+2. `T_http` parses the request, identifies the tool to call, and constructs a `WorkItem` with a `TaskCompletionSource<string>`.
+3. `T_http` enqueues the `WorkItem` onto a `ConcurrentQueue<WorkItem>` and `await`s the `TaskCompletionSource`'s task. No thread blocks — the `async`/`await` machinery suspends `T_http` until the result is ready.
+4. On every `EditorApplication.update` tick (called by Unity on the main thread), the queue is drained: each `WorkItem` is executed (Unity APIs are now safe to call), the result is set on the `TaskCompletionSource`, which resumes `T_http`.
+5. `T_http` reads the result and writes the HTTP response.
 
 This design has these properties:
 
 - All Unity API calls happen on the main thread.
 - HTTP threads can serve multiple concurrent requests (up to the .NET HTTP listener's pool size).
 - Each request has a 30-second timeout. If a request takes longer (e.g., a graph rebuild on a large project), the HTTP thread returns a timeout error while the main thread continues processing. The result is discarded when it eventually arrives.
-- Domain reloads are blocked during in-flight requests via `EditorApplication.LockReloadAssemblies()`. This prevents Unity from reloading assemblies mid-operation, which would corrupt state.
+- Domain reloads are blocked for the duration of a **turn** (not just a single request) via `EditorApplication.LockReloadAssemblies()`. The lock is acquired on the first tool call of a turn and released when `OnTurnComplete()` fires or a 120-second safety timeout elapses (`AutoReloadStrategy.cs`). This prevents Unity from reloading assemblies mid-turn, which would corrupt state.
+- **Busy fast-path**: if the graph is currently in a long-running rebuild operation (`GraphBuilder.IsInLongOperation`), incoming requests are answered immediately from the background thread with a `"busy"` / `rebuild_in_progress` response — bypassing the main-thread queue entirely. This only gates genuine long operations; fast incremental updates do not trigger it.
 
-The threading model is robust but adds latency. Worst-case, a request waits up to 16ms for the next `EditorApplication.update` tick (Unity's default frame rate). This is acceptable for the use cases Hades supports.
+The threading model is robust but adds latency. A request waits until the next `EditorApplication.update` tick before its `WorkItem` is processed. The wait is typically sub-millisecond at normal frame rates. *(Note: no specific worst-case tick guarantee applies — Unity's frame rate varies and the backgrounded editor case is described below.)*
+
+**Backgrounded editor.** When the editor is hidden (macOS ⌘H) or otherwise backgrounded, the OS coalesces its timers and `EditorApplication.update` slows to roughly ~6/s instead of the normal frame rate. The drain loop still empties within a fraction of a second, so tool calls keep working while Unity is in the background — the HTTP listener itself runs on background threadpool threads and never depended on focus. Two things harden this further: (1) while a request is in flight the server holds a refcounted macOS App Nap opt-out (`NSProcessInfo beginActivityWithOptions`) so a deeper throttle can't stall the queue; and (2) the Hub heartbeat does **not** ride `EditorApplication.update` — it runs on a dedicated background `System.Threading.Timer` (see Plugin doc §3.4), so registration stays fresh even if the main thread is fully napped. The one case the background timer cannot cover is the moment just after a domain reload, when the new server must wait for a single main-thread tick to bootstrap; a napped backgrounded editor can starve that tick, which is what the `wake-unity.sh` recovery in the Troubleshooting guide addresses.
 
 ### 1.7 The lifecycle
 
@@ -204,7 +207,7 @@ The design property that makes this work: **Hades is fully project-scoped. Each 
 What this looks like concretely:
 
 - **Per-project storage.** Each project has its own `.arcforge/graph.db`, `.arcforge/traces.db`, `.arcforge/memory/`. Project A's data lives in Project A's directory; Project B's lives in Project B's. No cross-contamination.
-- **Independent MCP servers.** Each Unity instance starts its own MCP server on its own port. If the requested port is busy, an ephemeral port is used. Each instance registers independently with the MCP Hub, keyed by project path.
+- **Independent MCP servers.** Each Unity instance starts its own MCP server on an OS-assigned ephemeral port (default `Port=0`). Each instance registers independently with the MCP Hub, keyed by project path.
 - **Hub-based routing.** The MCP Hub maintains a registry of all connected Unity instances. When Claude Code makes a tool call, the Hub routes it to the correct instance by matching the session's working directory to registered project paths. See **Plugin document** §3.5 for the matching algorithm.
 - **Independent dashboards.** When the user launches the Charon dashboard from Unity instance A, the dashboard process is scoped to Project A's traces database and binds to an OS-assigned ephemeral port. If the user launches a dashboard from Unity instance B, it gets its own OS-assigned port and reads Project B's traces. The two dashboards run simultaneously without interference. The user can have multiple browser tabs open, one per project.
 - **Independent skills config.** Skills are installed globally in the Claude Code config (per Vision §7.5), not per project. Both instances of the agent client read from the same global skill library. This is the correct shape — skills are meant to be shared across projects.
@@ -230,7 +233,7 @@ A Unity project, viewed as an abstract structure, has two interlocking represent
 
 These two representations overlap. A scene asset (asset-level) contains GameObjects (runtime-level). A prefab asset contains a tree of GameObjects with Components. A Component on a GameObject in a scene may have a serialized reference to a ScriptableObject asset.
 
-Hades Graph models both representations in a single coherent schema. Every asset is a node. Every GameObject within an asset is a node. Every Component within a GameObject is a node. Edges connect them with typed relationships: `contains`, `references`, `inherits_from` (for prefab variants), `instantiates`, `uses_material`, and so on.
+Hades Graph models both representations in a single coherent schema. Every asset is a node. Every GameObject within an asset is a node. Every Component within a GameObject is a node. Edges connect them with typed relationships: `contains`, `references`, `inherits_from` (for prefab variants), `nests_prefab` (prefab-to-prefab nesting), `uses_material`, and so on.
 
 This unified view is what allows queries like "find all prefabs that reference a deprecated script" to compose naturally. The query traverses asset edges (prefab references script) using the same machinery as "find all GameObjects in this scene that have a Light component" (which traverses runtime edges).
 
@@ -244,6 +247,7 @@ The schema is implemented as a SQLite database with two primary tables and sever
 CREATE TABLE nodes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   type TEXT NOT NULL,                   -- node type discriminator
+  tier TEXT NOT NULL DEFAULT 'project', -- 'project', 'package', or 'builtin'
   guid TEXT,                            -- Unity GUID for asset nodes; NULL otherwise
   file_id INTEGER,                      -- Unity fileID for sub-objects within an asset
   parent_node_id INTEGER REFERENCES nodes(id),  -- for runtime hierarchy
@@ -259,6 +263,8 @@ CREATE INDEX idx_nodes_type ON nodes(type);
 CREATE INDEX idx_nodes_guid ON nodes(guid);
 CREATE INDEX idx_nodes_path ON nodes(path);
 CREATE INDEX idx_nodes_parent ON nodes(parent_node_id);
+CREATE INDEX idx_nodes_name_type ON nodes(name, type);
+CREATE INDEX idx_nodes_tier ON nodes(tier);
 CREATE UNIQUE INDEX idx_nodes_guid_fileid ON nodes(guid, file_id) WHERE guid IS NOT NULL;
 ```
 
@@ -317,7 +323,31 @@ CREATE TABLE scanned_assets (
   scanner_version INTEGER NOT NULL      -- so we can re-scan if scanner changed
 );
 
--- Tracks pending invalidations for the lazy-update mode (currently unused, reserved)
+-- Holds unresolved cross-asset edges until the target node is created.
+-- Used by the tree-sitter C# parser to emit type-reference edges
+-- before all scripts have been scanned. target_namespace repurposes
+-- its column to store reference_kind at scan time.
+-- Supertype entries are stored with edge_type = 'extends_or_implements'
+-- (a neutral pre-resolution form); ResolvePendingEdges promotes each
+-- to 'inherits_from' or 'implements' based on the resolved target's kind.
+CREATE TABLE pending_edges (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_node_id INTEGER NOT NULL,
+  edge_type TEXT NOT NULL,
+  target_type_name TEXT NOT NULL,
+  target_namespace TEXT,               -- repurposed: stores reference_kind at scan time
+  source_asset_guid TEXT,
+  properties TEXT,                      -- schema v3: carries the original edge's properties
+                                        -- (e.g. {"addressable":true,"field":"m_AssetGUID"}) through
+                                        -- deferral so a forward-reference edge keeps its enrichment
+                                        -- when ResolvePendingEdges re-inserts it
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_pending_edges_target ON pending_edges(target_type_name);
+CREATE INDEX idx_pending_edges_source_asset ON pending_edges(source_asset_guid);
+
+-- Tracks pending invalidations for the lazy-update mode (reserved; not used at runtime)
 CREATE TABLE pending_invalidations (
   guid TEXT PRIMARY KEY,
   invalidated_at INTEGER NOT NULL,
@@ -329,7 +359,10 @@ CREATE TABLE graph_metadata (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
--- Example keys: "last_full_rebuild_at", "last_incremental_at", "build_count", "unity_version"
+-- Example keys: "last_full_rebuild_at", "last_incremental_at", "build_count",
+--               "unity_version", "builtin_unity_version", "current_operation",
+--               "csharp_scan_status", "meta_scan_status", "addressables_scan_status",
+--               "package_scan_status"  -- "ok" | "degraded" | "unknown"
 ```
 
 #### 2.2.4 Node types
@@ -342,25 +375,30 @@ The set of node types is closed (not arbitrary strings) and is extended only via
 - `Prefab` — a `.prefab` asset
 - `PrefabVariant` — a prefab whose root is marked as a variant of another prefab
 - `Script` — a `.cs` source file
-- `ScriptType` — a class or struct defined within a script (substructure of `Script`)
+- `ScriptType` — a type defined within a script (substructure of `Script`). Carries a `kind` property: one of `class`, `struct`, `interface`, `enum`, or `record`. Covers top-level declarations and nested types; enums and records (including record structs) each produce their own `ScriptType` node.
 - `ScriptMethod` — a method within a `ScriptType` (substructure)
-- `ScriptableObject` — a `.asset` file containing a ScriptableObject instance
-- `ScriptableObjectType` — a class inheriting from `UnityEngine.ScriptableObject`
+- `ScriptableObject` — a `.asset` file containing a ScriptableObject instance (emits one node + `instance_of` edge to its MonoScript; no separate type node)
 - `Material` — a `.mat` asset
 - `Shader` — a `.shader` or `.shadergraph` asset
-- `Texture` — image assets (png, jpg, tga, bmp, psd, gif, hdr, exr, tif, tiff)
+- `Texture` — image assets (png, jpg, jpeg, tga, psd, gif, hdr, exr, bmp)
 - `AudioClip` — audio assets (wav, mp3, ogg, aif, aiff)
 - `AnimationClip` — `.anim` assets
-- `AnimatorController` — `.controller` assets
-- `Mesh` — model assets (a mesh extracted from a model asset)
-- `Model` — `.fbx`, `.obj`, `.blend`, `.dae`, `.3ds`, `.max`, `.ma`, `.mb`
-- `Font` — font assets (`.ttf`, `.otf`, `.fontsettings`)
+- `AnimatorController` — `.controller`, `.overrideController` assets
+- `Model` — `.fbx`, `.obj`, `.blend`, `.dae`, `.3ds`
+- `Font` — font assets (`.ttf`, `.otf`)
 - `SignalAsset` — Timeline signal assets (`.signal`)
 - `PlayableAsset` — Timeline playable assets (`.playable`)
-- `SpriteAtlas` — sprite atlas assets (`.spriteatlas`)
+- `SpriteAtlas` — sprite atlas assets (`.spriteatlas`, `.spriteatlasv2`)
+- `RenderTexture` — `.renderTexture` assets
+- `Cubemap` — `.cubemap` assets
+- `AvatarMask` — `.mask` assets
+- `PhysicsMaterial` — `.physicMaterial`, `.physicsMaterial` assets
+- `Flare` — `.flare` assets
+- `GUISkin` — `.guiskin` assets
+- `AudioMixer` — `.mixer` assets
 - `RenderPipelineAsset` — URP/HDRP/custom SRP asset
 - `AddressableGroup` — addressable group definition
-- `AddressableEntry` — individual addressable entry within a group
+- `AddressableEntry` — individual addressable entry within a group. Given a synthetic guid (`addr_entry:{group}:{entry}`); its asset path is stored in `properties.asset_path`, **not** `Path`, so it never collides with the real asset node (the link to the asset is the `addressable_for` edge)
 - `BuildSettings` — project's build settings (singleton)
 - `PhysicsSettings` — physics settings (singleton)
 - `InputSettings` — input system settings (singleton)
@@ -370,13 +408,12 @@ The set of node types is closed (not arbitrary strings) and is extended only via
 
 - `GameObject` — a GameObject within a scene or prefab
 - `Component` — a Component on a GameObject
-- `ComponentField` — a serialized field on a Component (substructure)
 
 **Project-level types:**
 
 - `Project` — singleton root node, parent of nothing in the runtime sense, but a useful anchor for global queries
 
-This list will expand over time. Adding a new type requires a schema migration that records the new type in a `node_types` reference table (not shown above; reserved for future use). Code paths that handle nodes must accept unknown types gracefully — log and skip rather than crash.
+This list will expand over time. Code paths that handle nodes must accept unknown types gracefully — log and skip rather than crash.
 
 #### 2.2.5 Edge types
 
@@ -388,12 +425,12 @@ Similarly closed set. Currently defined:
 
 **Reference:**
 
-- `references` — a serialized reference between objects. Component → ScriptableObject. Component → another GameObject. Scene → Prefab (via instantiation). Properties JSON describes the field name.
+- `references` — a serialized reference between objects. Component → ScriptableObject. Component → another GameObject. Properties JSON describes the field name.
 
 **Type relationships:**
 
-- `instance_of` — links instance node to its type node. Component instance → ScriptType. ScriptableObject instance → ScriptableObjectType.
-- `inherits_from` — type-level inheritance. PrefabVariant → Prefab base. ScriptType → ScriptType base class. Populated by the tree-sitter parser (user scripts) and builtin type seeding (Unity types).
+- `instance_of` — links instance node to its type node. Component instance → ScriptType. ScriptableObject instance → Script (the MonoScript asset for the SO's class).
+- `inherits_from` — type-level inheritance. PrefabVariant → Prefab base. ScriptType → ScriptType base class (non-interface supertype). Populated by the tree-sitter parser (user scripts) and builtin type seeding (Unity types). The parser emits a transient `extends_or_implements` pending edge for each base-list entry; `GraphBuilder.ResolvePendingEdges` promotes it to `inherits_from` when the resolved target's `kind` is `class` or `struct`, or to `implements` when the target's `kind` is `interface` — replacing the prior position-in-base-list heuristic.
 
 **Asset relationships:**
 
@@ -401,21 +438,21 @@ Similarly closed set. Currently defined:
 - `uses_shader` — Material → Shader
 - `uses_texture` — Material → Texture
 - `uses_mesh` — Component (MeshFilter, etc.) → Mesh
-- `uses_animation` — AnimatorController → AnimationClip
 - `uses_audio` — AudioSource → AudioClip
-- `uses_render_pipeline` — Project → RenderPipelineAsset
+- `nests_prefab` — Prefab → Prefab (a prefab contains an instance of another prefab as a sub-object)
+- `instantiates` — Scene → Prefab. Emitted by `SceneScanner` for each unique source prefab instantiated within a scene. This is a real reference edge (counts as a referrer in `find_references_to`) and is intentionally absent from `StructuralEdgeTypes`.
 
 **Build relationships:**
 
-- `included_in_build` — Scene → BuildSettings (with build index in properties)
-- `addressable_for` — AddressableEntry → Asset
+- `included_in_build` — Scene → BuildSettings (only emitted for *enabled* build scenes; with build index in properties)
+- `addressable_for` — AddressableEntry → Asset, and also AddressableGroup → Asset. Both the entry and its group emit this edge to each member asset, so groups surface as referrers of their members.
 
 **Script-level:**
 
 - `defines` — Script → ScriptType. ScriptType → ScriptMethod.
-- `code_references` — ScriptType → ScriptType. Cross-file type references extracted by the tree-sitter C# parser. Properties JSON includes `reference_kind` (one of: `field`, `parameter`, `constructor`, `cast`, `attribute`, `return_type`, `local_var`, `generic_arg`). Resolved during `ResolvePendingEdges()` by matching type names.
+- `code_references` — ScriptType → ScriptType. Cross-file type references extracted by the tree-sitter C# parser. Properties JSON includes `reference_kind` (stored via the `target_namespace` column in `pending_edges` at scan time, then promoted to edge properties on resolution). Values: `field`, `parameter`, `constructor`, `cast`, `attribute`, `return_type`, `property`, `local_var`, `generic_arg`. `using`-alias targets are resolved to the aliased outer type name before emission; generic type arguments from method invocations (e.g. a generic service-resolution call) and from generic return/base types are also captured as `generic_arg` references. Resolved during `ResolvePendingEdges()` by matching type names.
 - `implements` — ScriptType → ScriptType. Interface implementation relationships extracted by the tree-sitter parser.
-- `calls` — ScriptMethod → ScriptMethod. (Optional, only populated if Roslyn analysis is enabled; expensive.)
+- `calls` — ScriptMethod → ScriptMethod. *(Planned — not yet implemented as of v1.0.0. Would require Roslyn analysis, which is not currently enabled.)*
 
 This list, like node types, is closed and expanded via migration.
 
@@ -430,7 +467,10 @@ The scanners are the C# code inside the Unity Package that read the project and 
 ```csharp
 public class GraphBuilder
 {
-    public void RebuildAll();                    // full rebuild from scratch
+    public void RebuildAll();                    // back-compat shim → RebuildParallel
+    public void RebuildParallel();               // the single canonical full-rebuild path
+                                                 // (Node.js C# scan + Unity-API scanners +
+                                                 //  ScanProjectSettings/ScanAddressables + checkpoint)
     public void UpdateAssets(string[] guids);    // incremental update for specific assets
     public BuildStatus GetStatus();              // current build state
 }
@@ -447,10 +487,11 @@ Each asset-type scanner implements:
 ```csharp
 public interface IAssetScanner
 {
-    string SupportedAssetType { get; }       // e.g., "Prefab"
-    int Version { get; }                      // bumps when scanner output changes
-    
-    ScanResult Scan(string assetPath, AssetDatabase db);
+    string[] SupportedExtensions { get; }    // file extensions this scanner handles
+    string ScannerName { get; }              // e.g., "PrefabScanner"
+    int Version { get; }                     // bumps when scanner output changes
+
+    ScanResult Scan(string assetPath);
 }
 
 public class ScanResult
@@ -461,11 +502,11 @@ public class ScanResult
 }
 ```
 
-The scanner is given the asset path. It returns the nodes and edges that should exist in the graph as a result of that asset, plus any warnings (e.g., "this prefab has missing references"). The coordinator merges these results into the database.
+The scanner is given the asset path (no `AssetDatabase` parameter; scanners call Unity APIs directly). It returns the nodes and edges that should exist in the graph as a result of that asset, plus any warnings (e.g., "this prefab has missing references"). The coordinator merges these results into the database.
 
 #### 2.3.3 The individual scanners
 
-**`SceneScanner`** scans a scene asset, walks the GameObject hierarchy, and produces a `Scene` node with `contains` edges to each top-level GameObject. For each GameObject, it produces a `GameObject` node with `contains` edges to its Components. For each Component, it produces a `Component` node with edges to: its `ScriptType` (`instance_of`), any referenced GameObjects (`references`), any referenced assets (`references`, `uses_material`, etc.), and so on.
+**`SceneScanner`** scans a scene asset, walks the GameObject hierarchy, and produces a `Scene` node with `contains` edges to each top-level GameObject. For each GameObject, it produces a `GameObject` node with `contains` edges to its Components. For each Component, it produces a `Component` node with edges to: its `ScriptType` (`instance_of`), any referenced GameObjects (`references`), any referenced assets (`references`, `uses_material`, etc.), and so on. For each unique source prefab instantiated anywhere in the scene, the scanner also emits an `instantiates` edge from the `Scene` node to the source `Prefab`, deduped per scene so each prefab appears at most once per scene.
 
 The scanner has two operational modes depending on whether the scene is currently open in the editor:
 
@@ -476,19 +517,17 @@ The distinction matters significantly for performance. Open-scene mode is sub-se
 
 For full rebuilds that must process many closed scenes, the scanner runs in batches with progress reported through `EditorUtility.DisplayProgressBar`. Scenes are processed sequentially because `OpenScene` operates on the global scene state — concurrent opens would conflict.
 
-A second optimization: when scanning multiple scenes in a row in closed-scene mode, the scanner detects "scene reopen storms" (>5 scenes opened/closed in 10 seconds) and switches to a **single-scene-at-a-time strategy with cached results** to avoid Unity's scene-management overhead from accumulating.
-
 **`PrefabScanner`** is similar to `SceneScanner` and follows the same two-mode pattern. For prefabs currently open in the prefab stage (detected via `PrefabStageUtility.GetCurrentPrefabStage()`), the scanner walks the in-memory state directly. For other prefabs, it uses `PrefabUtility.LoadPrefabContents()` to load and `PrefabUtility.UnloadPrefabContents()` to release. It detects prefab variants by checking `PrefabUtility.GetCorrespondingObjectFromOriginalSource()` on the prefab root. For variants, it produces a `PrefabVariant` node and an `inherits_from` edge to the base prefab. Override information is recorded in the edge properties.
 
 **Script scanning (Node.js)** — `.cs` files are scanned by a standalone Node.js process in `Scanner~/`, not by a C# `IAssetScanner`. This architectural exception exists because script scanning is pure file I/O — it needs no Unity APIs (`SerializedObject`, `AssetDatabase`, scene loading). Running on V8 instead of Mono yields a 15-30x speedup.
 
-The Node.js scanner (`Scanner~/index.js`) uses a **tree-sitter C# grammar** for AST-based parsing (since v0.9.5). The tree-sitter parser extracts: namespace declarations, type declarations (class/struct/interface/enum with base types and interfaces), method signatures, field declarations, and **cross-file type references**. Reference extraction walks the full AST to find type usage in fields, parameters, constructors, casts, attributes, return types, local variables, and generic arguments. These produce `code_references` pending edges that are resolved during `ResolvePendingEdges()`.
+The Node.js scanner (`Scanner~/index.js`) uses a **tree-sitter C# grammar** for AST-based parsing (since v0.9.5). The tree-sitter parser extracts: namespace declarations, type declarations (class/struct/interface/enum/record with base types), method signatures, field declarations, and **cross-file type references**. Each type declaration — including enums, records (and record structs), and nested types — produces a `ScriptType` node with a `kind` property. Supertype entries from the base list are written as `extends_or_implements` pending edges carrying the `supertypes` array property (`[{ name, genericArgs? }]`) on the type node. Reference extraction walks the full AST to find type usage in fields, properties, parameters, constructors, casts, attributes, return types, local variables, and generic arguments from method invocations. `using`-aliases are resolved to the aliased type before emission. These produce `code_references` pending edges that are resolved during `ResolvePendingEdges()`.
 
-The tree-sitter parser replaced the original regex-based parser (`parser.js`, still present as fallback). The regex parser extracted the same structural information (namespace, type, method, field) but could not perform cross-file reference analysis.
+The tree-sitter parser replaced the original regex-based parser (`parser.js`). The regex parser extracted the same structural information (namespace, type, method, field) but could not perform cross-file reference analysis. `index.js` imports only `ts-parser.js`; `parser.js` is retained as dead code.
 
 GUIDs are resolved by reading `.meta` files directly (no `AssetDatabase.AssetPathToGUID()` call needed). Content-hash caching via the `scanned_assets` table ensures only changed files are re-parsed on subsequent boots.
 
-**MetaScanner** — alongside script scanning, the Node.js scanner also runs a MetaScanner pass that creates Asset nodes for non-script types (textures, models, audio, animation, fonts, sprite atlases, signals, playables) by reading `.meta` files. This brings the graph's pending edge count to near-zero by providing target nodes for cross-asset references. The MetaScanner reads GUID, file path, and infers the Unity node type from file extension (34 extensions mapped to 16 node types).
+**MetaScanner** — alongside script scanning, the Node.js scanner also runs a MetaScanner pass that creates Asset nodes for non-script types (textures, models, audio, animation, fonts, sprite atlases, render textures, audio mixers, and more) by reading `.meta` files. This brings the graph's pending edge count to near-zero by providing target nodes for cross-asset references. The MetaScanner reads GUID, file path, and infers the Unity node type from file extension (36 extensions mapped to 16 node types).
 
 For full scans with 1000+ files, the scanner parallelizes parsing across CPU cores using Node.js `worker_threads`. Workers handle file reading, GUID resolution, and tree-sitter parsing; the main thread handles all SQLite writes in a single transaction via `better-sqlite3`.
 
@@ -496,19 +535,19 @@ For full scans with 1000+ files, the scanner parallelizes parsing across CPU cor
 
 The scanner uses version 3 (version 1 was the original C# scanner, version 2 was the Node.js regex scanner). When projects upgrade, the version mismatch in `scanned_assets` triggers a full re-scan automatically.
 
-**`ScriptableObjectScanner`** distinguishes the type and the instance. For each `ScriptableObject` derivative type discovered (via `TypeCache.GetTypesDerivedFrom<ScriptableObject>()`), it creates a `ScriptableObjectType` node. For each `.asset` file containing a ScriptableObject instance, it loads the asset, identifies its type, creates a `ScriptableObject` node with an `instance_of` edge to the type node, and records serialized field values in properties.
+**`ScriptableObjectScanner`** scans `.asset` files. For each file, it loads the asset, identifies its concrete type, and creates a single `ScriptableObject` node with an `instance_of` edge pointing to the MonoScript asset for that type. Serialized field values and cross-asset references are extracted via `SerializedReferenceExtractor`. No separate type node is created — the `instance_of` edge resolves to the script's existing `Script` node in the graph.
 
 **`MaterialScanner`** extracts shader, color, texture references, and rendering-pipeline-specific properties.
 
 **`ShaderScanner`** distinguishes legacy shaders, surface shaders, and Shader Graph assets. For Shader Graph, it can extract input/output properties; for legacy shaders, it parses the `.shader` file for property declarations.
 
-**`AddressablesScanner`** reads the addressable settings asset and produces `AddressableGroup` and `AddressableEntry` nodes with appropriate edges.
+**`AddressablesScanner`** reads the addressable settings asset and produces `AddressableGroup` and `AddressableEntry` nodes. For each member asset, it emits `addressable_for` edges from both the `AddressableEntry` and the `AddressableGroup` to the member asset, so that `find_references_to` returns the group as a referrer alongside the entry.
 
 **`ProjectSettingsScanner`** reads the various `ProjectSettings/*.asset` files and produces singleton nodes for `BuildSettings`, `PhysicsSettings`, `InputSettings`, etc.
 
 **`RenderPipelineScanner`** detects which render pipeline is active and produces a `RenderPipelineAsset` node with its features and quality settings.
 
-Asset types that don't require Unity APIs for node creation (Texture, AudioClip, AnimationClip, AnimatorController, Model, Font, SignalAsset, PlayableAsset, SpriteAtlas) are handled by the **MetaScanner** in the Node.js scanner pipeline, not by C# `IAssetScanner` implementations. The MetaScanner reads `.meta` files to extract GUIDs and infers node types from file extensions (34 extensions mapped to 16 node types). This is a lightweight approach that creates Asset nodes sufficient for reference resolution without needing Unity's import pipeline.
+Asset types that don't require Unity APIs for node creation (Texture, AudioClip, AnimationClip, AnimatorController, Model, Font, SignalAsset, PlayableAsset, SpriteAtlas, RenderTexture, Cubemap, AvatarMask, PhysicsMaterial, Flare, GUISkin, AudioMixer) are handled by the **MetaScanner** in the Node.js scanner pipeline, not by C# `IAssetScanner` implementations. The MetaScanner reads `.meta` files to extract GUIDs and infers node types from file extensions (36 extensions mapped to 16 node types). This is a lightweight approach that creates Asset nodes sufficient for reference resolution without needing Unity's import pipeline.
 
 #### 2.3.4 Scanner versioning
 
@@ -518,11 +557,11 @@ This is the safety net for graph correctness when scanners evolve.
 
 #### 2.3.5 Unity builtin types
 
-During graph rebuild, `GraphBuilder.SeedBuiltinTypes()` uses runtime reflection to enumerate public types from loaded Unity assemblies (`UnityEngine`, `UnityEditor`, and related). Each type is inserted as a `ScriptType` node with `source=builtin` in its properties. Inheritance (`inherits_from`) and interface implementation (`implements`) edges are created between builtin types.
+During graph rebuild, `GraphBuilder.SeedBuiltinTypes()` uses runtime reflection to enumerate public types from loaded Unity assemblies (`UnityEngine`, `UnityEditor`, and related). Each type is inserted as a `ScriptType` node with `source=builtin` and a `kind` property (`class`, `struct`, or `interface`) in its properties. Inheritance (`inherits_from`) and interface implementation (`implements`) edges are created between builtin types.
 
 This provides resolution targets for `inherits_from` and `implements` pending edges when user scripts inherit from Unity base classes (e.g., `MonoBehaviour`, `ScriptableObject`, `Editor`). Without these nodes, those edges would remain unresolved. The seeding produces approximately 4,000 type nodes and 3,600 edges, varying by Unity version.
 
-Builtin type nodes are re-seeded on every full rebuild (they are not cached across sessions). The operation takes approximately 200-400ms.
+Builtin type nodes are cached across sessions — seeding is skipped when the `builtin_unity_version` metadata key already matches the current Unity version. A version upgrade or manual full rebuild clears and re-seeds them. The seeding operation takes approximately 200-400ms when it runs.
 
 ### 2.4 Incremental updates
 
@@ -559,12 +598,11 @@ When the debouncer flushes:
 2. For deletions: remove the corresponding nodes from the database. CASCADE removes edges automatically.
 3. For moves: update the `path` column on existing nodes. No re-scan needed if content didn't change.
 4. For imports and modifications: `.cs` files are routed to the Node.js scanner (`--mode incremental`); all other asset types are re-scanned via their C# scanner.
-5. The re-scan produces new nodes and edges. Compare with existing nodes/edges for the asset. Compute diffs.
-6. Apply diffs in a single SQLite transaction: `INSERT` new nodes, `UPDATE` changed nodes, `DELETE` removed nodes, similarly for edges.
+5. For each changed asset, the existing nodes and edges are deleted (`DeleteNodesByGuid`) and fresh nodes and edges from the new scan are inserted. AUTOINCREMENT IDs are not preserved — this is a delete-and-rescan approach per asset, not a diff.
+6. Cross-asset edges that referenced the deleted nodes survive via the pending-edge re-resolution mechanism: after nodes are re-inserted with new IDs, `ResolvePendingEdges()` reconnects them by matching type names and GUIDs.
 7. Update `scanned_assets` table with new content hash.
-8. Emit a `graph.updated` event via Charon describing what changed.
 
-The diff-based update is more complex than a wipe-and-rewrite per asset, but it preserves node IDs across updates. This matters because edges from other assets may reference these nodes; re-creating them with new IDs would require re-scanning every asset that links to them. The diff approach is significantly faster for large projects.
+Note: incremental updates are not gated by the "busy" fast-path — they are O(changed assets) and complete well within a frame, so returning a busy response would produce spurious errors on non-idempotent writes that already applied.
 
 #### 2.4.4 Failure modes and recovery
 
@@ -577,12 +615,14 @@ Incremental updates can drift out of sync with reality. Possible causes:
 
 The system has multiple safety nets:
 
-- **Periodic full validation**: every 24 hours of accumulated editor time, a background check compares `scanned_assets.content_hash` against actual file hashes for a sample of 5% of assets. Mismatches trigger re-scans.
+- **Periodic full validation** *(Planned — not yet implemented as of v1.0.0.)* A planned background check would compare `scanned_assets.content_hash` against actual file hashes for a sample of assets every 24 hours of editor time; mismatches would trigger re-scans.
 - **Manual rebuild command**: `Hades: Rebuild Graph` menu option triggers a full rebuild. Documented as the recovery action for "the agent seems confused about my project."
 - **Stale-on-startup detection**: when Unity opens, every asset's hash is checked against the recorded `scanned_assets.content_hash`. Mismatched assets are queued for re-scan during startup.
 - **Scanner version check**: as described in 2.3.4, scanner version mismatch triggers re-scan.
 
 These are belt-and-suspenders. The expected normal behavior is that incremental updates stay perfectly synchronized; the safety nets are there for the failure cases.
+
+**Package-scan robustness**: `GraphBuilder.ScanPackages` uses a non-destructive update strategy. Rather than deleting the package tier upfront before scanning (which would leave the graph empty if the scan timed out), it performs a scan-then-reconcile approach: it scans first, writes new nodes, then removes only nodes whose backing file is no longer present. If the scan fails or times out, existing package nodes are preserved and `package_scan_status` is set to `"degraded"` in `graph_metadata`. The package-tier scanner timeout (10 minutes) is longer than the project-tier timeout (5 minutes) because the Unity PackageCache can be substantially larger than the project's own scripts.
 
 ### 2.5 Querying the graph
 
@@ -595,20 +635,20 @@ Per the architectural decision in the planning phase (hybrid approach), Hades ex
 - **A small number of granular tools** for the most common queries. These are well-documented, deterministic, and easy for the agent to choose correctly.
 - **A general-purpose query tool** as an escape hatch for cases the granular tools don't cover. This tool accepts a structured query expression rather than raw SQL, to keep the abstraction at the right level.
 
-Hades exposes 89 MCP tools total: 21 graph/observability/memory tools built natively for Hades, plus 68 editor-action tools migrated from UniClaude. The graph tools are listed below; the editor-action tools are catalogued in the Roadmap §7 (Phase 5 migration section).
+Hades exposes 90 MCP tools total: 22 graph/observability/memory tools built natively for Hades, plus 68 editor-action tools migrated from UniClaude. The graph tools are listed below; the editor-action tools are catalogued in the Roadmap §7 (Phase 5 migration section).
 
 #### 2.5.2 Granular query tools
 
-- `get_project_summary(depth: shallow|medium|deep)` — returns a structured summary of the project: counts, render pipeline, key directories.
-- `find_components_using_pattern(pattern_name: string)` — finds all components matching a known structural pattern (e.g., "ScriptableObjectChannel<T>"). Patterns are pre-defined.
-- `find_references_to(target_path: string)` — finds all assets and components that reference a given asset.
-- `trace_dependencies(asset_path: string, max_depth: int)` — recursively follows references from an asset.
+- `get_project_summary(depth: shallow|medium|deep)` — returns a structured summary of the project: counts, render pipeline, key directories. The `scan_health` block reports per-scanner status: `csharp`, `meta`, `addressables`, and `packages`.
+- `find_components_using_pattern(pattern_name: string)` — finds all components matching a known structural pattern (e.g., "ScriptableObjectChannel<T>"). Patterns are pre-defined. Matches against the `supertypes` property of `ScriptType` nodes.
+- `find_references_to(target_path: string)` — finds all assets and components that reference a given asset. Structural/containment edges (`defines`, `contains`, `nests_prefab`) are excluded from `references` and `reference_count`; for Prefab/PrefabVariant targets, variant `inherits_from` edges are also excluded. For a `.cs` target the query attributes referrers to the `ScriptType` whose name matches the file stem (falling back to all co-located types), preventing sibling types in the same file from inflating each other's counts. The response includes a `nested_by` array listing direct structural parents (prefabs that nest the asset via `nests_prefab`; prefab variants that derive from it via `inherits_from`) so a nested-only asset is not mistaken for unused. Always includes a `static_analysis_coverage: partial` confidence factor naming blind spots (reflection, runtime dispatch, DI containers, dynamic instantiation) with the recommendation to check `nested_by` before treating an asset as unused.
+- `trace_dependencies(asset_path: string, max_depth: int)` — recursively follows references from an asset, excluding `defines` edges so a script's own declared methods are not returned as dependencies. Always includes a `static_analysis_coverage: partial` confidence factor.
 - `find_orphan_scripts()` — scripts not referenced anywhere.
-- `find_prefabs_with_component(component_type: string)` — locate all prefabs containing a given component type.
+- `find_prefabs_with_component(component_type: string)` — locate all prefabs containing a given component type. Ascends the full `contains` chain from each matching `Component` to the prefab root, so deeply-nested component hosts are found, not only direct children. Variant-inherited components are labelled `source: "inherited"` and excluded from the headline `count`; the response includes `total_including_inherited_variants` for completeness.
 - `get_scene_summary(scene_path: string)` — high-level overview of a scene's structure.
 - `get_prefab_inheritance(prefab_path: string)` — variant chain for a prefab.
 - `analyze_render_pipeline()` — current pipeline, custom features, render features.
-- `search_by_name(name_pattern: string, type_filter: string, path_prefix: string, match_mode: string)` — search across nodes by name. `path_prefix` filters results to a directory subtree. `match_mode` supports `contains` (default), `exact`, and `startswith`.
+- `search_by_name(name_pattern: string, type_filter: string, path_prefix: string, match_mode: string)` — search across nodes by name. `path_prefix` filters results to a directory subtree. `match_mode` supports `contains` (default), `exact`, and `prefix`.
 - `get_recently_changed(hours: int)` — assets changed in the last N hours.
 
 Each tool has a clear input schema, a clear output schema, and clear documentation in the MCP `tools/list` response.
@@ -636,7 +676,7 @@ This is translated server-side to SQL with appropriate joins. The translation is
 
 #### 2.6.1 Build performance
 
-Measured performance after the Node.js script scanner migration (Phase 5):
+Illustrative performance ranges after the Node.js script scanner migration (Phase 5). These figures are drawn from a single measured data point (163k-node project at ~10 seconds) and representative estimates; they are not a formal benchmark suite and should be treated as indicative, not guaranteed:
 
 | Project size | Asset count | Full rebuild | Incremental (single asset) |
 |---|---|---|---|
@@ -652,7 +692,7 @@ Scene and prefab scanners (which open assets via Unity APIs) remain the bottlene
 
 #### 2.6.2 Query performance
 
-For the schema and indexes described:
+Illustrative latency targets for the schema and indexes described. Name search uses `LIKE` on a B-tree index, not an FTS table:
 
 | Query type | Expected latency |
 |---|---|
@@ -661,7 +701,7 @@ For the schema and indexes described:
 | List all nodes of a type | 1-10ms |
 | Find references (one-hop) | 1-5ms |
 | Find dependencies (5-hop traversal) | 10-50ms |
-| Full-text search across names | 5-20ms (with FTS5 index) |
+| Name search (`contains` mode) | 5-20ms (LIKE on B-tree; no FTS index) |
 | Project-wide aggregations | 10-100ms |
 
 These are generally well below the latency of agent reasoning, so the graph is unlikely to be the bottleneck in agent interactions.
@@ -686,13 +726,15 @@ The graph database must support concurrent reads (from MCP tool calls served on 
 The database is initialized with explicit pragmas that enable concurrent access and tune for the Hades workload:
 
 ```sql
-PRAGMA journal_mode = WAL;          -- Write-Ahead Logging: readers don't block writers
-PRAGMA synchronous = NORMAL;        -- safer than OFF, faster than FULL; OK for our durability needs
-PRAGMA busy_timeout = 5000;         -- wait up to 5 sec for locks before erroring
-PRAGMA cache_size = -65536;         -- 64MB page cache (negative = KB)
-PRAGMA temp_store = MEMORY;         -- temp tables in memory, not on disk
-PRAGMA mmap_size = 268435456;       -- 256MB memory-mapped I/O
-PRAGMA foreign_keys = ON;           -- enforce ON DELETE CASCADE
+PRAGMA journal_mode = WAL;              -- Write-Ahead Logging: readers don't block writers
+PRAGMA synchronous = NORMAL;            -- safer than OFF, faster than FULL; OK for our durability needs
+PRAGMA busy_timeout = 5000;             -- wait up to 5 sec for locks before erroring
+PRAGMA cache_size = -65536;             -- 64MB page cache (negative = KB)
+PRAGMA temp_store = MEMORY;             -- temp tables in memory, not on disk
+PRAGMA mmap_size = 268435456;           -- 256MB memory-mapped I/O
+PRAGMA foreign_keys = ON;               -- enforce ON DELETE CASCADE
+PRAGMA wal_autocheckpoint = 1000;       -- checkpoint after 1000 WAL pages (explicitly set)
+PRAGMA journal_size_limit = 67108864;   -- cap WAL file at 64MB to bound disk usage
 ```
 
 `WAL` mode is the most consequential. Without it, SQLite uses rollback journaling, where readers block during writes. With WAL, readers see a consistent snapshot from before the in-progress write, and writes append to a separate WAL file that is checkpointed back to the main DB periodically. This is the precondition that makes the entire Hades concurrency model viable.
@@ -721,38 +763,37 @@ With this configuration:
 
 - Writes acquire SQLite's exclusive lock briefly, on the order of microseconds. During this window, other writers block; readers do not.
 - The Main Thread Bridge ensures writes are serialized at the application level — only one update is processed at a time. Even if multiple sources trigger updates concurrently, they queue.
-- WAL checkpoints happen automatically (default: every 1000 pages of WAL). Checkpoints briefly hold a lock that blocks new writers; readers continue. Checkpoint duration is sub-millisecond for typical Hades load.
+- WAL checkpoints happen automatically (set to every 1000 pages via `wal_autocheckpoint`; WAL file is capped at 64MB via `journal_size_limit`). Checkpoints briefly hold a lock that blocks new writers; readers continue. Checkpoint duration is sub-millisecond for typical Hades load.
 
 #### 2.7.5 The "rebuild in progress" signal
 
 Per the failure scenario in Pipeline 12, queries during a graph rebuild can return partial data. To prevent silent staleness:
 
-The `graph_metadata` table holds a row with key `current_operation`:
+The `graph_metadata` table holds a row with key `current_operation`. When a rebuild starts, this row is set to a JSON object describing the operation. When the rebuild completes, the row is **deleted** (not set to null — `DELETE FROM graph_metadata WHERE key = 'current_operation'`):
 
 ```
-key                     value
-current_operation       null  -- normal state
-current_operation       '{"kind":"rebuild","started_at":1715240000,"affected_guids":[...]}'  -- mid-rebuild
+key                     value (present only during rebuild)
+current_operation       '{"kind":"rebuild","started_at":1715240000}'
 ```
 
-Every query tool checks this row before executing. If a rebuild is in progress and the query touches affected GUIDs, the response includes a warning attribute: `"graph_state": "rebuilding", "affected_assets": ["guid1", "guid2"], "consider_retry_after_ms": 2000`.
+Every query tool checks `IsRebuildInProgress()` before executing. If a rebuild is in progress, the `ConfidenceBlock` in the response is downgraded unconditionally (no per-GUID intersection gating) — the response receives `level: "medium"` with factor `graph_freshness: "rebuilding"` and a recommendation to retry after the rebuild completes.
 
-The agent reads this attribute and either retries (for short rebuilds) or proceeds with explicit acknowledgment ("graph rebuild is in progress, results may be incomplete; here is what I see now").
+The agent reads the `confidence` block and either retries (for short rebuilds) or proceeds with explicit acknowledgment.
 
-This is the mechanism that prevents the failure mode from Pipeline 12: queries during rebuild no longer return empty silently; they return empty with explicit "this is incomplete" signaling.
+> **Status: Planned — not yet implemented as of v1.0.0.** The per-tool response fields `"graph_state"`, `"affected_assets"`, and `"consider_retry_after_ms"` described in earlier design drafts do not exist; the real mechanism is the unconditional `ConfidenceBlock` downgrade described above.
 
 ### 2.8 Edge cases and known gotchas
 
 Issues that the design must handle:
 
-- **Missing references**: a prefab references a script, the script is deleted. The prefab now has a "missing reference" placeholder. The scanner detects this and creates a `Component` node with a `references_missing` flag in properties.
+- **Missing references**: a prefab references a script, the script is deleted. The prefab now has a "missing reference" placeholder. The scanner detects null components (missing script), emits a `ScanWarning`, and skips the component. A `references_missing` flag on Component nodes is not currently set — the warning is in the scan log only.
 - **Circular prefab references**: prefab A contains prefab B, prefab B contains prefab A. Unity allows this in some configurations. The scanner detects cycles and emits a warning but does not crash.
-- **Nested prefabs**: prefab A contains an instance of prefab B as a sub-object. The scanner produces nodes for B's sub-objects with appropriate `contains` edges, plus an `instantiates` edge from the GameObject in A to the prefab asset B.
+- **Nested prefabs**: prefab A contains an instance of prefab B as a sub-object. The scanner produces nodes for B's sub-objects with appropriate `contains` edges, plus a `nests_prefab` edge from the prefab asset A to the prefab asset B (not a GameObject-level edge).
 - **Prefab variants with deep override chains**: variant V1 inherits from variant V2 inherits from base prefab P. The `inherits_from` edges form a chain. Override information is recorded at each level.
 - **Multi-scene setups**: scenes loaded additively. The graph captures all referenced scenes via build settings. Runtime additive loading is captured if it goes through `BuildSettings.scenes` or addressables.
 - **GUID collisions**: extraordinarily rare but possible if a project imports an asset package that uses the same GUIDs as existing assets. The scanner detects collisions and logs warnings.
 - **`.meta` file desync**: if a file's content hash doesn't match its `.meta`, Unity's behavior is undefined. The scanner records both hashes in node properties for debugging.
-- **Deleted-but-referenced assets**: an asset is deleted but other assets still reference it (Unity creates "missing" placeholders). The scanner records these as `references_missing` for visibility.
+- **Deleted-but-referenced assets**: an asset is deleted but other assets still reference it (Unity creates "missing" placeholders). The scanner skips null components and emits `ScanWarning` entries; no special `references_missing` property is set on surviving nodes.
 
 ### 2.9 Static analysis boundaries
 
@@ -780,19 +821,19 @@ The following patterns produce edges that are missing or incorrect in the static
 
 #### 2.9.2 How the graph signals incompleteness
 
-Where the scanner can detect that a static reference is incomplete (e.g., a Component with a missing reference, an Addressables call with a non-literal key), it emits explicit signals:
+The tools that depend most heavily on complete static data surface incompleteness via explicit confidence factors rather than silently returning empty results:
 
-- Nodes have `analysis_completeness: full | partial | runtime_only` properties.
-- Edges have `confidence: high | medium | low` properties where applicable.
-- Detected dynamic patterns (reflection calls, addressable loads, etc.) produce `dynamic_dispatch_marker` nodes that are visible to the agent.
+- `find_references_to` and `trace_dependencies` always include a `static_analysis_coverage: partial` confidence factor in every response, naming the specific blind spots (reflection, runtime/string-based dispatch, DI containers, dynamic instantiation) and recommending that "no results" not be read as "definitely unused/unreferenced".
+- When the package tier is degraded, both tools additionally emit a `package_scan: degraded` confidence factor and a `supertypes_external_unresolved` count (the number of pending supertype edges pointing at precompiled/external types Hades cannot index).
+- `find_references_to` populates a `nested_by` array (structural parents) so callers can distinguish "zero runtime referrers" from "truly unused".
 
-The agent, when asked questions whose answers depend on these blind spots, surfaces the limitation: "I see UseLegacyAuth is called from 4 places statically, but I notice the codebase uses reflection in 3 spots that might invoke it dynamically. Static analysis cannot detect those."
+Node-level `analysis_completeness` properties and `dynamic_dispatch_marker` nodes are not yet emitted; the signals described above apply at the tool-response level. *(Planned — not yet implemented as of v1.0.0.)*
 
 #### 2.9.3 Future runtime instrumentation
 
 The boundaries described above are the limits of static analysis. A future Hades version may add **runtime instrumentation** — hooks that capture actual relationships during play mode (which addressables actually loaded, which systems actually processed which entities, which DI bindings actually resolved). This would supplement the static graph with runtime evidence.
 
-This is explicitly out of scope for v1. Static graph is hard enough; runtime instrumentation is a substantially larger undertaking. But the graph schema is designed to accommodate it later: edges have a `evidence_source: static | runtime | both` property already reserved.
+This is explicitly out of scope for v1. Static graph is hard enough; runtime instrumentation is a substantially larger undertaking. But the graph schema is designed to accommodate it later: edges could have a `evidence_source: static | runtime | both` property reserved for this purpose. *(Planned — not yet implemented as of v1.0.0.)*
 
 #### 2.9.4 Implications for users
 
@@ -859,12 +900,10 @@ CREATE TABLE traces (
   root_span_name TEXT NOT NULL,
   start_time INTEGER NOT NULL,
   end_time INTEGER,
-  status TEXT,                    -- OK, ERROR, TIMEOUT, IN_PROGRESS
+  status TEXT,                    -- OK, ERROR, TIMEOUT (SpanStatus enum; no IN_PROGRESS)
   total_duration_ms INTEGER,
   span_count INTEGER,
-  user_outcome TEXT,              -- accepted, rejected, edited (set later)
-  user_outcome_set_at INTEGER,
-  attributes TEXT                 -- top-level trace attributes as JSON
+  attributes TEXT                 -- top-level trace attributes as JSON (always null in current build)
 );
 
 CREATE TABLE spans (
@@ -877,14 +916,13 @@ CREATE TABLE spans (
   end_time INTEGER,
   status TEXT,
   attributes TEXT,                -- JSON
-  events TEXT                     -- JSON array
+  events TEXT                     -- JSON array (written at emit time; not read back on the C# read path)
 );
 
 CREATE INDEX idx_spans_trace ON spans(trace_id, start_time);
 CREATE INDEX idx_spans_name ON spans(name);
 CREATE INDEX idx_traces_start_time ON traces(start_time DESC);
 CREATE INDEX idx_traces_status ON traces(status);
-CREATE INDEX idx_traces_outcome ON traces(user_outcome);
 ```
 
 The denormalization is intentional: traces have a few summary fields lifted from their root span for fast filtering, while detailed span data lives in `spans`.
@@ -914,10 +952,10 @@ using (var span = Charon.StartSpan("mcp.tool.find_prefabs_with_component", SpanK
 
 The emitter handles:
 
-- Generating IDs (using a snowflake-style scheme for time-orderability).
+- Generating IDs (random bytes via `RandomNumberGenerator` — not time-orderable; ordering relies on the `start_time` column).
 - Tracking the active span via `AsyncLocal<Span>` so child spans implicitly nest correctly.
 - Buffering writes to avoid blocking work on disk I/O. A background task drains the buffer to SQLite every 500ms or when the buffer reaches 1000 spans, whichever comes first.
-- Handling crashes: spans are written to a write-ahead log first, and the WAL is checkpointed to the main DB periodically. Even if Unity crashes mid-trace, completed spans are not lost.
+- **Crash behavior**: the buffer is in-memory (`ConcurrentQueue`). Spans not yet flushed at crash time are lost. Worst-case data loss is the last 500ms of spans. SQLite WAL mode handles database-level consistency across crashes but does not preserve the in-flight buffer.
 
 #### 3.3.1 Cross-process trace IDs
 
@@ -935,7 +973,7 @@ Every incoming MCP tool call creates a root span with:
 
 - `name`: `mcp.tool.<tool_name>`
 - `kind`: `Server`
-- attributes: tool name, parameter values (PII-redacted if configured), client identifier (which agent client called us)
+- attributes: tool name, parameter values (written verbatim — no redaction currently applied), client identifier (which agent client called us)
 - child spans for any sub-operations the tool performs
 
 #### 3.4.2 Graph queries
@@ -981,17 +1019,21 @@ Errors are also flagged at the trace level so they're easy to filter in the dash
 
 ### 3.5 Privacy and data handling
 
+> **Status: Planned — not yet implemented as of v1.0.0.** The path redaction, content redaction, and export-controls behaviors described here are design targets. Currently, `tool.input` is written verbatim to trace attributes with no redaction. The local-only and retention-policy behaviors are real.
+
 Traces can contain sensitive information: file paths, user-typed prompts (if forwarded by the agent client), code snippets, project structure. Because traces are local-first, this is controllable but still important.
 
-Defaults:
+Current behavior:
 
-- **Local-only by default.** Traces are stored in `.arcforge/traces.db` and never transmitted unless the user explicitly exports.
+- **Local-only.** Traces are stored in `.arcforge/traces.db` and never transmitted.
+- **Retention policy**: 30 days. Older traces are auto-pruned at Unity startup.
+- **No redaction**: tool input parameters are stored verbatim. Path and content redaction are planned future features.
+
+Planned (not yet implemented):
+
 - **Path redaction**: configurable. Off by default (paths help debug). Can be enabled to replace project paths with hashes.
-- **Content redaction**: file contents are not captured by default. Only metadata about content (hash, size, type) is stored. This prevents traces from accumulating sensitive code.
-- **Retention policy**: configurable. Default is 30 days. Older traces are pruned by a background task that runs on Unity startup.
-- **Export controls**: the user can export traces (e.g., to share with us for debugging). Export goes through an explicit UI action, never silently. Exports can be filtered (date range, trace ID, scrubbed of paths, etc.).
-
-The eval dataset feature (described in 3.7) operates on traces that the user has explicitly opted into. By default, eval-datasets-from-production is opt-in.
+- **Content redaction**: file contents not captured by default.
+- **Export controls**: explicit UI-gated export with filtering options.
 
 ### 3.6 The Charon dashboard
 
@@ -1007,12 +1049,17 @@ The dashboard is local-first and does not require an internet connection.
 
 #### 3.6.1 What the dashboard shows
 
-The main views:
+The main views (shipped in v1.0.0):
 
-- **Trace list**: filterable, sortable. Default view shows recent traces with their status, duration, and outcome. Filters: time range, status (OK/ERROR), trace name pattern, outcome.
-- **Trace detail**: a flame graph or waterfall view of the trace's spans. Click any span to see its attributes and events. Useful for understanding what happened during a single agent interaction.
-- **Aggregations**: latency distribution per tool, error rate per tool, throughput over time. Useful for identifying performance regressions.
-- **Eval datasets**: sets of traces marked as "this is canonical behavior we want to preserve" or "this was a failure that shouldn't recur." Used for regression testing.
+- **Traces**: filterable, sortable list. Default view shows recent traces with their status and duration. Filters: time range, status (OK/ERROR), trace name pattern. Paginated at 50 per page (cap 200).
+- **Trace detail**: waterfall view of the trace's spans. Click any span to see its attributes.
+- **Memory**: view of current Asphodel memory state.
+- **Proposals**: view of pending `propose_memory_update` proposals awaiting review.
+
+Planned (not yet in v1.0.0):
+
+- **Aggregations**: latency distribution per tool, error rate per tool, throughput over time.
+- **Eval datasets**: sets of traces for regression testing.
 - **Settings**: retention policy, redaction options, export controls.
 
 #### 3.6.2 The dashboard's tech stack
@@ -1036,7 +1083,9 @@ A subset of Charon's value is in the eval framework: using accumulated traces to
 
 #### 3.7.1 Datasets
 
-A dataset is a curated set of traces, each tagged with an expected outcome. Datasets are stored in the same `traces.db` with extra tagging:
+> **Status: Planned — not yet implemented as of v1.0.0.** The eval dataset schema exists in the database but the LLM-as-judge and full dataset workflow described below are design targets. The actual record/replay tools (`hades_regression_record` / `hades_regression_replay`) use the schema for tool-level snapshot replay — see §3.7.2.
+
+A dataset is a curated set of tool-level snapshots with expected outputs. Datasets are stored in the same `traces.db`:
 
 ```sql
 CREATE TABLE eval_datasets (
@@ -1047,12 +1096,13 @@ CREATE TABLE eval_datasets (
 );
 
 CREATE TABLE eval_dataset_members (
-  dataset_id TEXT REFERENCES eval_datasets(dataset_id),
-  trace_id TEXT REFERENCES traces(trace_id),
-  expected_outcome TEXT,                -- accepted, rejected, custom
-  expected_attributes TEXT,             -- JSON, for custom assertion
+  dataset_id TEXT NOT NULL REFERENCES eval_datasets(dataset_id) ON DELETE CASCADE,
+  trace_id TEXT REFERENCES traces(trace_id) ON DELETE SET NULL,
+  tool_name TEXT NOT NULL,
+  input_json TEXT NOT NULL,
+  expected_output_json TEXT NOT NULL,
   notes TEXT,
-  PRIMARY KEY (dataset_id, trace_id)
+  PRIMARY KEY (dataset_id, tool_name, input_json)
 );
 ```
 
@@ -1082,13 +1132,15 @@ This realistic framing shapes what we build. We invest in good annotation toolin
 
 #### 3.7.3 LLM-as-judge
 
-For certain trace types (suggestion-and-outcome traces), we use a separate LLM call to judge whether the agent's suggestion was good. This requires:
+> **Status: Planned — not yet implemented as of v1.0.0.** The behavior described here is a design target; the current build does not implement it.
+
+For certain trace types (suggestion-and-outcome traces), we plan to use a separate LLM call to judge whether the agent's suggestion was good. This would require:
 
 - Sending the trace context (prompts, responses, project structure summary) to a separate LLM endpoint.
 - Receiving a structured judgment.
 - Storing the judgment in the trace's attributes.
 
-This feature is opt-in because it sends data to an external LLM. When enabled, the user configures which LLM endpoint to use (their own Claude API key, or another provider).
+This feature would be opt-in because it sends data to an external LLM. When enabled, the user would configure which LLM endpoint to use (their own Claude API key, or another provider).
 
 ### 3.8 Internal use during Hades development
 
@@ -1107,16 +1159,16 @@ Traces grow. A heavy-use day might produce 10,000 spans, totaling tens of MB. Ov
 
 Retention defaults:
 
-- 30 days of traces by default. Older are auto-pruned at startup.
+- 30 days of traces by default. Older are auto-pruned at Unity startup via `PruneOlderThan`.
 - Eval-dataset traces are exempt from auto-pruning regardless of age.
-- Manual pruning: `hades-charon prune --older-than 7d` for explicit control.
-- Compression: SQLite supports compression of certain payload types via VACUUM. Not used by default; available if the database grows uncomfortably large.
+- **Hard size cap** (default 500MB, configurable via `CharonMaxSizeMb` in EditorPrefs): if `traces.db` exceeds the cap at startup, `EnforceSizeLimit` drops the oldest traces down to ~90% of the cap in a single pass, then runs `PRAGMA wal_checkpoint(TRUNCATE)` and `VACUUM` to reclaim disk space.
+- *(Planned — not yet implemented as of v1.0.0.)* A `hades-charon prune` CLI for manual pruning outside of Unity startup.
 
 ### 3.10 Edge cases
 
-- **Trace explosion under bursty load**: the agent makes 1000 tool calls in a session. The buffer absorbs short bursts; sustained load eventually backpressures (the emitter will block briefly waiting for the buffer drain). Users notice as a small latency increase, not as failure.
+- **Trace explosion under bursty load**: the agent makes 1000 tool calls in a session. The buffer (`ConcurrentQueue`) absorbs bursts without blocking callers. The flush task drains on a 500ms timer or when 1000 spans accumulate. No backpressure to callers is applied in the current implementation.
 - **Concurrent emitters from multiple Unity processes**: a common scenario — the user has multiple Unity instances open on different projects simultaneously. Each instance writes to its own per-project `traces.db` (per §1.8). There is no shared trace database, so SQLite's single-writer constraint is automatically satisfied within each project. Resource contention (CPU, disk I/O) scales with the number of concurrent instances but does not affect correctness.
-- **Disk full**: if the trace database can't be written, the emitter fails the write and increments an internal error counter. After 100 consecutive failures, Charon goes into a degraded "drop traces" mode and surfaces a warning. Trace data is lossy in this mode but Hades does not crash.
+- **Disk full**: if the trace database can't be written, the emitter logs the error and continues. There is no degraded "drop traces" mode or counter in the current implementation — disk-full conditions are surfaced via Unity console logs only. The hard 500MB size cap (§3.9) is the main guard against disk exhaustion. *(A formal drop-traces mode after repeated failures is planned — not yet implemented as of v1.0.0.)*
 - **Clock skew**: timestamps come from the system clock. On most modern systems, NTP keeps this accurate. If the clock jumps backwards, span ordering can become incorrect. This is acceptable degradation, not a hard failure.
 
 
@@ -1255,16 +1307,16 @@ We chose ScriptableObject event channels over UnityEvents and direct references 
 **Status:** Active
 **Scope:** Editor infrastructure (used by Charon Dashboard, potentially all external process invocations)
 
-`ProcessResolver.cs` provides two capabilities: (1) resolving the full path of an executable by name across platforms, and (2) running synchronous commands with deadlock-safe I/O handling.
+`ProcessResolver.cs` provides four capabilities: (1) resolving the full path of an executable by name across platforms, (2) running synchronous commands with deadlock-safe I/O handling, (3) injecting a child `PATH` that includes the resolved executable's directory (`ApplyChildPath`), and (4) `NativeBuildEnv` which exposes C++20 build environment settings for Node 25 native addon builds.
 
 **The problem:** Unity's `Process.Start` does not inherit the user's login shell PATH. On macOS/Linux, Node.js installed via nvm/fnm/Homebrew is invisible to Unity. On Windows, `where.exe` resolves differently than Unix `which`. Passing just `"node"` to `Process.Start` fails with "Cannot find the specified file."
 
 **The solution:**
-- `FindExecutable(string name)` — resolves via `bash -lc "which {name}"` on macOS/Linux (login shell, picks up nvm/fnm), `cmd.exe /c where {name}` on Windows. Results cached per session in a static dictionary.
+- `FindExecutable(string name)` — resolves via `$SHELL -lc "which {name}"` on macOS/Linux (uses the user's actual login shell from the `$SHELL` environment variable; falls back to `/bin/bash` if `$SHELL` is unset, non-existent, or not a POSIX shell), `cmd.exe /c where {name}` on Windows. Results cached per session in a static dictionary.
 - `Run(string executable, string arguments, string workingDirectory, int timeoutMs)` — runs a resolved executable synchronously. Reads stderr asynchronously (`ReadToEndAsync()`) while reading stdout synchronously to prevent pipe buffer deadlock. Kills process on timeout.
 
 **Key design decisions:**
-- Login shell (`-lc`) on bash is deliberate: non-login shells don't source `.bash_profile`/`.zshrc` where nvm/fnm inject their PATH modifications.
+- Login shell (`-lc`) is deliberate: non-login shells don't source `.bash_profile`/`.zprofile`/`.zshrc` where nvm/fnm inject their PATH modifications. Using `$SHELL` (often zsh on macOS) ensures the user's actual shell profile is sourced.
 - Per-session caching (static dictionary) is appropriate because executable locations don't change within a Unity session. Cache is lost on domain reload (static field reset), which is acceptable.
 - Stderr read is async to prevent deadlock when both stdout and stderr have data. This is a well-known .NET process I/O pattern.
 
@@ -1307,7 +1359,7 @@ Tier 2 is auto-generated from observability traces. It captures patterns the sys
 - "Suggestions involving Resources.Load were rejected 89% of the time. The project appears to use Addressables instead."
 - "User mentions performance optimization in 30% of requests."
 
-Tier 2 files live at `.arcforge/memory/inferred/` and are gitignored by default. They are noisy, frequently updated, and not directly informative for humans (they are essentially statistical summaries).
+Tier 2 files live at `.arcforge/memory/inferred/` and are git-tracked alongside Tier 1 memory (`.gitignore` un-ignores `.arcforge/memory/`; the maintainer keeps inferred files committed). Teams that do not want behavioral inference in their repository can gitignore `inferred/` explicitly.
 
 When confidence in an inferred pattern is high (configurable threshold, default 90% over a minimum sample size), the system can promote the pattern to Tier 1 — but always with developer review. The promotion is not automatic; it appears as a suggestion in a queue, the developer either approves (in which case the pattern is added to `patterns.md`) or dismisses.
 
@@ -1327,7 +1379,7 @@ This design ensures the agent cannot silently rewrite the project's memory. Huma
 
 #### 4.3.3 Inferred update
 
-The Tier 2 system writes to inferred files automatically based on trace analysis. These updates are unrestricted because they are scoped to Tier 2 (gitignored, auto-generated). They are clearly labeled as inferred so a human reading the file knows the data is statistical.
+The Tier 2 system writes to inferred files automatically based on trace analysis. These updates are unrestricted because they are scoped to Tier 2 (auto-generated and clearly labeled as inferred). They are clearly labeled as inferred so a human reading the file knows the data is statistical.
 
 Promotion from Tier 2 to Tier 1 goes through the proposal queue, same as agent proposals.
 
@@ -1370,27 +1422,26 @@ This separation matters for three reasons. First, it makes validation determinis
 
 #### 4.5.2 The validation rules
 
-Each memory entry can have associated validation rules. The rules are encoded as graph queries in YAML frontmatter:
+Each memory entry can have associated validation rules. The rules are encoded as **inline `<!-- hades-validation … -->` HTML comments** in the markdown body (not YAML frontmatter — `ValidationRuleParser.cs` parses these comment blocks):
 
-```yaml
----
-patterns:
-  - name: "SO Event Channels"
-    validation:
-      query_type: "exists"
-      query: "find_assets({type: 'ScriptableObject', name_pattern: '*Channel'})"
-      min_count: 3
-      validation_failure_message: "Pattern claims SO event channels are used but found fewer than 3 in the project."
----
+```markdown
+<!-- hades-validation
+query_type: exists
+query: search_by_name(*Channel, ScriptableObject)
+min_count: 3
+failure_message: Pattern claims SO event channels are used but found fewer than 3 in the project.
+-->
 ```
+
+Supported query types dispatch to real graph tools (`search_by_name`, `find_nodes_by_type`). Object-literal syntax (e.g. `find_assets({…})`) is not supported.
 
 When the C# validator runs:
 
-1. Reads the memory file and parses frontmatter.
+1. Reads the memory file body and parses `<!-- hades-validation -->` comment blocks.
 2. For each rule with a query, the query is executed against the current graph state.
-3. The result is compared against the expected outcome encoded in the rule.
+3. The result is compared against `min_count`.
 4. The validator updates the file's frontmatter (`validation_status: ok | warning | error`) and timestamp.
-5. On mismatch, an inline HTML comment is added to the file describing the inconsistency.
+5. On mismatch, an inline HTML comment block is appended to the file describing the inconsistency.
 
 The result is that the memory file itself becomes the authoritative record of validation state. Anyone reading the file — human or agent — sees the current validation status without any additional lookup.
 
@@ -1434,7 +1485,7 @@ The Tier 2 inferred memory is produced by a background task that runs periodical
 - **Time-of-day patterns**: when does the user work, on what kinds of problems?
 - **Failure correlations**: when suggestions fail (rejected or edited), what features are correlated?
 
-These patterns are written to `inferred/observed_patterns.md`, `inferred/preferences.md`, etc. The task runs daily and is rate-limited to avoid overhead.
+These patterns are written to `inferred/observed_patterns.md`, `inferred/preferences.md`, etc. The task runs on every graph rebuild (triggered by `GraphBuilder.OnRebuildComplete`) — there is no daily timer or rate limiter in the current implementation.
 
 #### 4.6.1 Inference labeling discipline
 
@@ -1445,14 +1496,15 @@ In the markdown files themselves, every inferred entry has frontmatter and inlin
 ```yaml
 ---
 status: inferred
+analyzer: AcceptanceRateAnalyzer
 confidence: 0.93
 sample_size: 67
 first_observed: 2026-04-15
 last_confirmed: 2026-05-08
-promotion_status: candidate  # candidate | proposed | promoted | dismissed
+promotion_status: pending  # pending | proposed | accepted | dismissed | deferred
 ---
 
-# INFERRED PATTERN (not confirmed by team)
+INFERRED PATTERN (not confirmed by team)
 
 **Apparent preference for minimal refactoring scope**
 
@@ -1473,12 +1525,14 @@ This is meaningfully different from how Tier 1 memory is treated. Tier 1 entries
 
 When a Tier 2 entry's confidence and sample size cross thresholds (defaults: 90% confidence, 50 samples), the system creates a **promotion proposal** in the proposal queue. The proposal asks the user: "I've observed pattern X consistently. Should I add it to your patterns.md as a recorded team preference?"
 
-The user's options:
+The user's options (matching `PromotionStatus` enum values):
 
-- **Accept**: pattern moves to Tier 1 with explicit confirmation. The Tier 2 entry is archived.
-- **Modify and accept**: user edits the proposed text before accepting. Useful when the inference is approximately right but needs refinement.
-- **Dismiss**: the pattern is marked dismissed in Tier 2. The system stops proposing it but keeps observing (in case the underlying behavior changes).
-- **Defer**: review later. The pattern stays as Tier 2 candidate until acted on.
+- **Accept** (`Accepted`): pattern moves to Tier 1 with explicit confirmation. The Tier 2 entry is archived.
+- **Modify and accept**: user edits the proposed text before accepting. The status becomes `Accepted`.
+- **Dismiss** (`Dismissed`): the pattern is marked dismissed in Tier 2. The system stops proposing it but keeps observing (in case the underlying behavior changes).
+- **Defer** (`Deferred`): review later. The pattern stays in Tier 2 with a cooldown before re-proposing.
+
+Initial state is `Pending`; moves to `Proposed` when surfaced to the user.
 
 The promotion is never automatic. This is intentional. Inference is suggestion, not authority. The user holds the final word on what enters Tier 1.
 
@@ -1488,7 +1542,7 @@ The pattern-detection logic is open-source and inspectable. Users who don't trus
 
 Memory in Tier 1 is git-tracked and shared with the team. The developer has full control over what goes in (directly via text editing or via approving proposals).
 
-Memory in Tier 2 is local and gitignored by default. It contains aggregate behavioral data — what kinds of things the user accepts and rejects. This is sensitive in some senses (it reflects working habits) and innocuous in others (it's anonymized and statistical).
+Memory in Tier 2 is git-tracked alongside Tier 1 (see §4.2.2). It contains aggregate behavioral data — what kinds of things the user accepts and rejects. This is sensitive in some senses (it reflects working habits) and innocuous in others (it's anonymized and statistical). Teams that do not want inferred behavioral data in their repository can add `.arcforge/memory/inferred/` to their project's `.gitignore`.
 
 The user can:
 
@@ -1499,10 +1553,10 @@ The user can:
 
 ### 4.8 Edge cases
 
-- **Memory file deleted while running**: Asphodel detects the deletion and treats it as "this memory no longer exists." The agent is informed via an updated summary.
+- **Memory file deleted while running**: Asphodel detects the deletion (via `FileSystemWatcher`) and treats it as "this memory no longer exists." The deletion is logged; no active notification to the agent occurs — the file simply stops appearing in summaries and recall results. *(Active agent notification is planned — not yet implemented as of v1.0.0.)*
 - **Memory file with invalid frontmatter**: parser logs a warning and skips that file. The rest of the system continues.
 - **Conflicting rules between memory entries**: e.g., one entry says "use Pattern X," another says "Pattern X is deprecated." Asphodel does not resolve these automatically; both are surfaced to the agent, which then has to reason about the conflict (or asks the user).
-- **Memory grows unboundedly**: each memory file has a soft size limit (default 50KB). Above this, a warning is surfaced suggesting archival. The user can override the limit.
+- **Memory grows unboundedly**: no size check is enforced in the current implementation. A soft 50KB size limit with warning is planned but not yet implemented. *(Planned — not yet implemented as of v1.0.0.)*
 - **Multi-developer memory churn**: two developers edit the same memory file in different branches, then merge. Standard git merge conflicts apply. Asphodel does not have its own conflict resolution; it relies on git's.
 - **Validation queries become slow**: as the graph grows, some validation queries may become expensive. Validation has a per-query budget (default 1 second). Queries exceeding the budget are skipped with a warning.
 
@@ -1553,6 +1607,7 @@ These activate for procedural tasks:
 - `scene-authoring` — how to create and modify scenes via the agent.
 - `prefab-workflow` — creating, editing, instantiating prefabs.
 - `animation-workflow` — Animator Controller, Animation, AnimationClip relationships.
+- `unity-workflow` — general Unity Editor workflow patterns and automation.
 
 #### 5.2.3 Domain skills (planned expansion)
 
@@ -1640,14 +1695,16 @@ The user will review and approve the memory update.
 
 ### 5.5 Skill versioning and compatibility
 
-Skills are versioned via the plugin manifest. Each skill change increments the plugin's minor version. The plugin's `plugin.json` declares its compatibility range with Hades MCP server versions.
+Skills are versioned via the plugin manifest. Each skill change increments the plugin's minor version.
 
-When the agent client loads the plugin, it checks for compatibility:
+> **Status: Planned — not yet implemented as of v1.0.0.** The `plugin.json` compatibility range declaration and the version-check logic described below are design targets; no such field exists in `plugin.json` and no version-check code is implemented.
+
+When the agent client loads the plugin, it would check for compatibility:
 
 - If the plugin's required MCP server version is higher than what's installed, the agent client warns and asks the user to update.
 - If the MCP server's version is much newer than the plugin expects, the plugin still loads but a warning is shown.
 
-This versioning model is essential because skill behavior often depends on specific MCP tool signatures. Mismatched versions silently producing wrong behavior is the failure mode we are trying to avoid.
+This versioning model is a goal because skill behavior often depends on specific MCP tool signatures. Mismatched versions silently producing wrong behavior is the failure mode we are trying to avoid.
 
 ### 5.6 Distribution
 
@@ -1680,7 +1737,9 @@ Three principles govern how the layers compose:
 
 ### 6.2 The event flow
 
-The system has an internal event bus inside the Unity Package. Events flow as follows:
+> **Status: Planned — not yet implemented as of v1.0.0.** A named internal event bus (`Dictionary<string,List<Action<Event>>>`) does not exist. Integration is currently achieved via one C# event (`GraphBuilder.OnRebuildComplete`) that triggers Asphodel validation and inference, plus Charon span emission. The diagram below represents the intended design target, not the current wiring.
+
+The planned event flow:
 
 ```
 Graph                     Asphodel              Charon
@@ -1700,9 +1759,7 @@ Graph                     Asphodel              Charon
   │                          │                    │
 ```
 
-All events go to Charon as trace spans. Some events are also consumed by Asphodel for self-validation triggering.
-
-The event bus implementation is straightforward — a `Dictionary<string, List<Action<Event>>>` keyed by event name. Subscribers register handlers, publishers invoke them. The bus runs on the main thread; subscribers don't need to be thread-safe.
+All events would go to Charon as trace spans. Some events would also be consumed by Asphodel for self-validation triggering. Currently, this wiring is a direct `GraphBuilder.OnRebuildComplete` callback rather than a named event bus.
 
 ### 6.3 The query flow
 
@@ -1763,7 +1820,7 @@ The interesting integration behavior is the feedback loops that emerge when the 
 As the graph changes (project evolves), some changes are noteworthy enough to trigger memory considerations:
 
 1. Graph rebuild adds new node type usage in the project (e.g., the project now uses Addressables when it didn't before).
-2. Graph emits `graph.pattern_emerged` event.
+2. `GraphBuilder.OnRebuildComplete` fires, which triggers Asphodel inference. *(The planned event bus would emit a `graph.pattern_emerged` event; currently the wiring is a direct C# callback.)*
 3. Asphodel's pattern detector (in the Tier 2 generator) picks this up.
 4. Tier 2 inferred memory updates: `inferred/observed_patterns.md` notes "Addressables usage detected, 12 instances."
 5. After confidence threshold (more instances over time), promotion to Tier 1 is proposed.
@@ -1809,33 +1866,30 @@ These are the cross-layer behaviors that need to work correctly. They form the b
 
 ### 6.6 Configuration and customization
 
-Hades has user-configurable options. These live in `.arcforge/config.yaml`:
+> **Status: Planned — not yet implemented as of v1.0.0.** The nested `graph:`/`charon:`/`mcp:` config blocks shown below are design targets. The only `.arcforge/config.yaml` reader currently implemented is Asphodel's flat `InferenceConfig` parser. Graph, Charon, and MCP settings live in Unity **EditorPrefs** (accessible via the Hades preferences panel), not in `config.yaml`. A `.arcforge/config.local.yaml` per-developer override file has no loader and is not currently gitignored.
+
+Planned `.arcforge/config.yaml` schema (when implemented):
 
 ```yaml
 graph:
   scanner_versions: auto    # or pin to specific versions
-  deep_script_analysis: false  # enable Roslyn-based call graphs (Phase 8+)
-  rebuild_threshold_ms: 30000  # max acceptable rebuild time before falling back
+  deep_script_analysis: false  # enable Roslyn-based call graphs (planned)
 
 charon:
   retention_days: 30
-  redact_paths: false
-  redact_user_input: false  # whether to scrub user prompts from traces
+  max_size_mb: 500          # hard size cap; excess traces are trimmed at startup
+  redact_paths: false       # planned
+  redact_user_input: false  # planned
 
 asphodel:
-  tier2_enabled: true
+  enabled: true             # master switch for Tier 2 inference
   promotion_confidence: 0.90
   promotion_min_samples: 50
   validation_on_startup: true
   validation_query_budget_ms: 1000
-
-mcp:
-  request_timeout_ms: 30000
 ```
 
-**Removed fields:** `charon.dashboard_port` was removed when the dashboard switched to OS-assigned ephemeral ports (Phase 2 ADR). `mcp.port_range` was removed when the MCP Hub architecture replaced direct port management (Phase 5a). Both port concerns are now handled automatically — the OS assigns ports and the Hub routes connections.
-
-This file is git-tracked. Teams can share configuration. Per-developer overrides go to `.arcforge/config.local.yaml`, which is gitignored.
+Currently implemented Asphodel config keys (flat, read from `InferenceConfig`): `enabled`, `promotion_confidence`, `promotion_min_samples`.
 
 ### 6.7 Confidence modeling and graceful uncertainty
 
@@ -1845,7 +1899,7 @@ Hades is a system where wrong answers are worse than no answer. If the agent mak
 
 Every layer can produce uncertain or incomplete data:
 
-- **Graph**: stale due to in-progress rebuild, incomplete due to scanner failures, blind to dynamic patterns (per §2.9).
+- **Graph**: stale due to in-progress rebuild, incomplete due to scanner failures (surfaced via per-scanner `scan_health` flags including `packages`), blind to dynamic patterns (per §2.9).
 - **Memory**: claims may be unvalidated, contradicted by graph state, or outdated relative to recent code changes.
 - **Charon-derived inference**: Tier 2 patterns are statistical, not absolute. Confidence varies with sample size.
 - **Skills**: generic skills applied without project-specific verification produce generic answers.
@@ -1861,11 +1915,13 @@ Every MCP tool that can return uncertain data includes a `confidence` block in i
     "level": "high|medium|low",
     "factors": [
       {"factor": "graph_freshness", "value": "rebuilding"},
-      {"factor": "static_analysis_coverage", "value": "partial", "blind_spots": ["reflection", "addressables_by_key"]}
+      {"factor": "static_analysis_coverage", "value": "partial", "blind_spots": ["reflection", "runtime/string-based dispatch", "DI containers", "dynamic instantiation"]},
+      {"factor": "package_scan", "value": "degraded"}
     ],
     "recommendations": [
       "consider retrying after rebuild completes (estimated 2-5 seconds)",
-      "manually verify reflection-based code paths"
+      "'No references' means none were statically detected; dynamic/runtime references are not visible to this tool. Check 'nested_by' before treating an asset as unused",
+      "Package/external base types may be unindexed; supertypes/dependencies into packages may be missing"
     ]
   }
 }
@@ -1878,8 +1934,9 @@ The agent receives this alongside the data. Skills are calibrated to read the co
 Each layer has a defined behavior when uncertainty becomes unmanageable:
 
 - **Graph rebuild in progress**: queries return current-best data with explicit "rebuilding" attribute. Agent decides to wait or proceed with caveat.
+- **Package scan degraded**: `find_references_to` and `trace_dependencies` emit a `package_scan: degraded` confidence factor and a `supertypes_external_unresolved` count. Inheritance and supertype edges into package/precompiled types may be absent; the signals make this visible rather than silent.
 - **Memory validation failure**: contradicting memory entries surface to the agent as "your memory says X, the project shows Y". Agent does not silently choose one.
-- **Tier 2 inference low confidence**: never injected as authoritative pattern. Available via explicit `recall_inferred(query)` tool, where the response is clearly labeled as "INFERRED, sample size N, confidence X".
+- **Tier 2 inference low confidence**: never injected as authoritative pattern. Surfaced via `recall_memory(query)` — inferred memory files are returned with their `status: inferred` frontmatter preserved, clearly labeling them as statistical observations. *(A dedicated `recall_inferred` tool is planned — not yet implemented as of v1.0.0.)*
 - **Skill applied without project context**: response includes "this is a generic recommendation; I did not verify it against your project's actual patterns. Consider checking..."
 
 #### 6.7.4 The "I don't know" capability
@@ -2182,11 +2239,11 @@ A working inventory system, integrated with project patterns, plus a memory prop
 
 1. Agent calls `recall_memory("patterns")`.
    - Returns all documented patterns from `patterns.md`.
-2. For each pattern, agent calls a corresponding `find_violations` tool (e.g., for "use SO event channels," it calls `find_components_using_pattern("UnityEvent", inverse: true)` to find places using UnityEvent that should use SO channels).
-3. Agent collects violations across all patterns.
-4. Agent calls `validate_memory_against_graph()` (a meta-tool that runs all memory validations).
+2. For each pattern, the agent uses available graph tools to look for counter-evidence (e.g., for "use SO event channels," it calls `find_components_using_pattern(pattern_name: "UnityEvent")` to find places using UnityEvent that should use SO channels). Note: there is no `inverse:` argument and no `find_violations` tool — the agent reasons about violations from positive query results.
+3. Agent collects findings across all patterns.
+4. Agent calls `validate_memory()` (empty arguments = validate all memory files).
    - This returns the system's own automatic validation results.
-5. Agent combines manual and automatic results into a report.
+5. Agent combines its own findings and the automatic validation results into a report.
 
 **Expected output:** Report of pattern violations with specific file locations and recommended fixes.
 
@@ -2210,7 +2267,7 @@ A working inventory system, integrated with project patterns, plus a memory prop
 **Step-by-step:**
 
 1. Agent reads both files.
-2. Agent calls `find_recently_changed(hours: 24)` to confirm these are recent changes.
+2. Agent calls `get_recently_changed(hours: 24)` to confirm these are recent changes.
 3. Agent calls `find_references_to("Assets/Scripts/Player/PlayerHealth.cs")`.
    - Returns: 3 prefabs, 2 scenes, 1 other script depend on PlayerHealth.
 4. Agent calls `recall_memory("review")` and `recall_memory("conventions")` for review context.
@@ -2285,7 +2342,7 @@ A working inventory system, integrated with project patterns, plus a memory prop
 
 **Day 1 of new developer:**
 
-1. New dev clones the repo. `.arcforge/memory/` (Tier 1) comes with the clone. Tier 2 directory is gitignored, so empty.
+1. New dev clones the repo. `.arcforge/memory/` comes with the clone — Tier 1 decisions, plus any Tier 2 inferred patterns the team has committed (Tier 2 is git-tracked alongside Tier 1).
 2. New dev opens Unity. Hades Unity Package is installed (from UPM, in the project's `Packages/manifest.json`). Hades scanner runs and builds the local graph from scratch (15-30 sec for medium project).
 3. New dev opens Claude Code. Plugin is installed globally.
 4. Plugin connects to Hades MCP server via the discovery file.
@@ -2311,10 +2368,9 @@ A working inventory system, integrated with project patterns, plus a memory prop
 
 **Step-by-step:**
 
-1. Agent calls `find_method_callers(class: "AuthManager", method: "UseLegacyAuth")`.
-   - This is the kind of query that requires the deep script analysis (Roslyn `calls` edges).
-   - If deep analysis is enabled, returns precise callers: 4 scripts, 12 call sites.
-   - If deep analysis is disabled, returns a less precise set via text search: ~5 scripts that mention the method.
+1. Agent uses `search_by_name(name_pattern: "UseLegacyAuth")` and `find_references_to` to locate scripts that reference `AuthManager` or the method by name.
+   - Note: there is no `find_method_callers` tool. Precise caller analysis would require Roslyn `calls` edges, which are planned but not implemented. The current approach relies on text-pattern search and reference traversal — less precise but available.
+   - Returns approximately: ~5 scripts that mention the method.
 2. Agent calls `trace_dependencies("Assets/Scripts/Auth/AuthManager.cs", max_depth: 3)`.
    - Returns assets that depend on AuthManager.
 3. Agent calls `recall_memory("auth")`.
@@ -2349,12 +2405,12 @@ A working inventory system, integrated with project patterns, plus a memory prop
 
 1. User runs `/hades:show-traces` in Claude Code.
 2. Charon dashboard opens in browser.
-3. User filters traces by date (yesterday) and trace name (`mcp.tool.modify_prefab` or similar).
+3. User filters traces by date (yesterday) and trace name (e.g. `mcp.tool.prefab_edit_property` or `mcp.tool.prefab_apply_overrides`).
 4. User finds the trace where the prefab modification happened.
 5. User clicks into the trace. Sees the full span tree:
-   - Root span: `mcp.tool.modify_prefab(path: "Assets/Prefabs/Player.prefab", change: {...})`
+   - Root span: `mcp.tool.prefab_edit_property(path: "Assets/Prefabs/Player.prefab", ...)`
    - Child span: `graph.query.find_references(asset: "Assets/Prefabs/Player.prefab")` — this returned empty.
-   - Child span: `unity.action.modify_prefab` — successful.
+   - Child span: `unity.action.prefab_edit_property` — successful.
 6. User notices the empty result on the references query. This is suspicious because Player.prefab is referenced from many scenes.
 7. User clicks the empty-result span. Attributes show: `query.executed_at: 2026-05-08T14:30:21Z`, `graph.last_rebuild: 2026-05-08T14:30:18Z` (3 seconds before the query).
 8. Diagnosis: a graph rebuild was in progress at the moment the agent queried. The rebuild had not yet processed Player.prefab's references when the query ran. The query returned empty, and the agent assumed no references existed.
@@ -2384,7 +2440,7 @@ This chapter inventories the things that can go wrong and how the system handles
 
 `EditorApplication.LockReloadAssemblies()` is called at the start of every tool execution and released at the end. This blocks domain reload during in-flight operations. If the user triggers a reload (via script edit), Unity defers it until all locks are released.
 
-**Edge case:** if the user force-quits Unity during a tool call, the lock is dropped and the next reload proceeds normally. The trace span for the interrupted call is left open with `status: TIMEOUT` after a recovery sweep on next startup.
+**Edge case:** if the user force-quits Unity during a tool call, the lock is dropped and the next reload proceeds normally. The trace span for the interrupted call is left open — orphaned open spans are not reconciled on next startup. *(A startup recovery sweep to close orphaned spans with `status: TIMEOUT` is planned — not yet implemented as of v1.0.0.)*
 
 #### 8.1.2 Play mode transition
 
@@ -2392,7 +2448,7 @@ This chapter inventories the things that can go wrong and how the system handles
 
 **Risk to Hades:** Asset state may differ between edit and play mode. Scanners running during play mode could capture transient runtime state.
 
-**Mitigation:** Hades pauses incremental graph updates during play mode by default. The graph reflects the edit-mode state. If the user enters play mode and the project is modified there (via runtime inspector edits), those changes are not reflected in the graph until exit. A configuration option allows opt-in graph updates during play mode for users who want it.
+**Mitigation:** *(Planned — not yet implemented as of v1.0.0.)* Pausing incremental graph updates during play mode and a configuration opt-in for play-mode updates are design targets; no play-mode handling exists in the current build.
 
 Charon continues operating during play mode — observability of agent actions during play sessions is valuable.
 
@@ -2404,10 +2460,10 @@ Charon continues operating during play mode — observability of agent actions d
 
 **Mitigation:**
 
-- SQLite is in WAL mode with default checkpoint frequency. After a crash, SQLite automatically replays the WAL on next open. Database integrity is preserved unless the disk itself is corrupted.
-- Charon's trace buffer flushes every 500ms or 1000 spans. Worst-case data loss is the last 500ms of traces.
-- Memory file writes use atomic rename (write to temp file, fsync, rename over original). Either the old or new content exists, never partial.
-- On startup, Hades runs a recovery check: integrity-check the SQLite databases, verify memory files parse, rebuild if necessary.
+- SQLite is in WAL mode with explicit checkpoint pragmas. After a crash, SQLite automatically replays the WAL on next open. Database integrity is preserved unless the disk itself is corrupted.
+- Charon's trace buffer flushes every 500ms or 1000 spans. Worst-case data loss is the last 500ms of in-flight spans.
+- Memory file writes use delete-then-move (write to temp file, move over original). This is not a fully atomic replace — there is a brief window where neither file exists. *(True atomic-rename + fsync is planned — not yet implemented as of v1.0.0.)*
+- On startup, Hades verifies memory files parse and checks asset hashes for stale detection. *(Startup `PRAGMA integrity_check` on the SQLite databases and a "rebuild recommended" surface are planned — not yet implemented as of v1.0.0. A corrupt database currently throws unhandled at open.)*
 
 #### 8.1.4 Editor freeze (long-running tool call)
 
@@ -2420,7 +2476,7 @@ Charon continues operating during play mode — observability of agent actions d
 - Default 30-second timeout on all tool calls. After 30 seconds, the HTTP thread returns a timeout error to the client.
 - The main thread continues processing the tool call — it may eventually succeed or fail naturally. Result is discarded if the client has timed out.
 - For known long-running operations (full graph rebuild), the tool surfaces progress via `EditorApplication.DisplayProgressBar` so the user knows Unity is working, not frozen.
-- A `Hades: Cancel In-Flight Operations` menu command allows the user to forcibly cancel main-thread operations. Implementation uses `CancellationToken` checks at scanner work boundaries.
+- *(Planned — not yet implemented as of v1.0.0.)* A `Hades: Cancel In-Flight Operations` menu command and scanner `CancellationToken` checks at work boundaries are design targets; they do not exist in the current build.
 
 ### 8.2 Graph-level failures
 
@@ -2432,10 +2488,10 @@ Charon continues operating during play mode — observability of agent actions d
 
 **Mitigation:**
 
-- Each scanner invocation is wrapped in try-catch. Exceptions are caught, logged, and the scanner is marked as failed for that asset.
-- Failed assets get a `Component` node with `scan_status: failed` and the exception message in properties. The agent can see this and report "I can't analyze this asset; the scanner failed."
-- Failed assets are added to a retry queue. After 5 minutes, they are re-attempted. After 3 retries, they are quarantined and surfaced in a warning to the user.
+- Each scanner invocation is wrapped in try-catch. Exceptions are caught, logged, and scanning continues for other assets.
 - The build itself continues. One bad asset doesn't halt scanning the rest.
+
+*(Planned — not yet implemented as of v1.0.0.)* The following are design targets, not current behavior: emitting a `scan_status: failed` property on a node for the failed asset; a retry queue with 5-minute delay; a quarantine mechanism after 3 retries surfacing a user warning.
 
 #### 8.2.2 Database corruption
 
@@ -2445,9 +2501,10 @@ Charon continues operating during play mode — observability of agent actions d
 
 **Mitigation:**
 
-- On startup, run `PRAGMA integrity_check`. If failure detected, surface to user: "graph database may be corrupted, rebuild recommended."
-- Provide easy `Hades: Rebuild Graph` command. The graph is recomputable from the project source — corruption is annoying but not catastrophic.
+- `Hades: Rebuild Graph` command. The graph is recomputable from the project source — corruption is annoying but not catastrophic.
 - If corruption recurs, hint at filesystem investigation (different machines? cloud-synced project directory?).
+
+*(Planned — not yet implemented as of v1.0.0.)* Startup `PRAGMA integrity_check` with a "rebuild recommended" surface is a design target. Currently, a corrupt database throws unhandled at open.
 
 #### 8.2.3 Graph and reality drift
 
@@ -2457,7 +2514,7 @@ Charon continues operating during play mode — observability of agent actions d
 
 **Mitigation:**
 
-- Periodic 5%-sample integrity check (every 24 hours of editor time) compares `scanned_assets.content_hash` to actual file hashes. Mismatches trigger re-scan.
+- *(Planned — not yet implemented as of v1.0.0.)* A periodic 5%-sample integrity check every 24 hours of editor time is a design target.
 - Memory self-validation surfaces inconsistencies between memory claims and graph state. If the graph itself is wrong, this often surfaces as "memory says X, graph says Y" warnings.
 - The user can run `/hades:rebuild-graph` at any time as recovery.
 
@@ -2494,13 +2551,14 @@ Charon continues operating during play mode — observability of agent actions d
 
 **What happens:** Heavy use over months without pruning. Trace database reaches GBs.
 
-**Risk to Hades:** Disk full prevents writes. Hades emitter can't flush. Eventually backpressures all operations.
+**Risk to Hades:** Disk full prevents writes. Hades emitter can't flush.
 
 **Mitigation:**
 
 - Default retention: 30 days. Auto-prune on startup.
-- Soft warning at 1GB trace database size: dashboard surfaces a notification.
-- Hard guard at 80% disk fill: emitter switches to drop-traces mode rather than blocking. Trace data is sacrificed to keep Hades functional.
+- **Hard size cap** (default 500MB): at startup, `EnforceSizeLimit` trims the oldest traces down to ~90% of the cap and runs VACUUM. This is the main guard against unbounded growth.
+
+*(Planned — not yet implemented as of v1.0.0.)* A soft warning at 1GB and a hard guard at 80%-disk-fill emitter drop-mode are design targets; they do not exist in the current build.
 
 #### 8.3.2 Dashboard process crashes
 
@@ -2579,7 +2637,7 @@ Charon continues operating during play mode — observability of agent actions d
 
 **Mitigation:**
 
-- Falls back to a random ephemeral port if the requested port is unavailable.
+- The server always binds to an OS-assigned ephemeral port (default `Port=0`) — there is no fixed port to collide on.
 - Selected port is registered with the Hub via `POST /api/register`, so the Hub always knows the current port.
 - The Hub abstracts port changes entirely — clients never need to know Unity's port.
 
@@ -2605,9 +2663,9 @@ Charon continues operating during play mode — observability of agent actions d
 
 **Mitigation:**
 
-- The Launcher starts the Hub on demand. The Hub has no registered Unity instances, so `tools/list` returns an empty list — no errors, just no tools available.
-- When Unity starts and registers with the Hub, the Hub sends a `tools/list_changed` notification. Claude Code refreshes its tool catalog — Hades tools appear automatically.
-- Claude Code and Claude Desktop do not need to be restarted. The Hub handles the wait transparently.
+- The Launcher starts the Hub on demand. With no registered Unity instances, tool calls return a JSON-RPC error (`-32000 No Unity instance found`) rather than succeeding — there is no separate "empty tools list" state.
+- When Unity starts and registers with the Hub, subsequent tool calls are routed to it and succeed. (Note: there is no `tools/list_changed` push notification — the tool list reflects whatever Unity reports at the moment of each request. *Automatic catalog refresh via `list_changed` is Planned — not yet implemented as of v1.0.0.*)
+- Claude Code and Claude Desktop do not need to be restarted once Unity is up; retrying the call after Unity registers succeeds.
 
 #### 8.5.4 Claude Desktop vs Claude Code transport differences
 
@@ -2671,9 +2729,10 @@ Charon continues operating during play mode — observability of agent actions d
 
 **Mitigation:**
 
-- Per-scanner-invocation timeout (default 60 seconds). Asset is marked as failed if it exceeds.
-- User can tag assets to skip scanning (configuration in `.arcforge/config.yaml`).
+- The Node.js subprocess has a 5-minute overall timeout.
 - Parallel scanning of independent assets where Unity API permits.
+
+*(Planned — not yet implemented as of v1.0.0.)* A per-scanner 60-second timeout, an asset tag-to-skip configuration in `config.yaml`, and selective-directory scanning are design targets.
 
 ### 8.7 Security and integrity
 
@@ -2697,9 +2756,9 @@ Charon continues operating during play mode — observability of agent actions d
 
 **Mitigation:**
 
-- All file operations go through `PathSandbox.cs` (inherited from UniClaude). Sandbox restricts paths to the project root and `.arcforge/` directories.
-- Symlinks are resolved before validation.
-- Attempts to escape are logged as security events in Charon.
+- All file operations go through `PathSandbox.cs` (inherited from UniClaude). Sandbox restricts paths to the project root; `.git/` writes are additionally blocked.
+- Path normalization uses `Path.GetFullPath` — symlinks are not resolved before validation (symlink resolution is a planned improvement).
+- *(Planned — not yet implemented as of v1.0.0.)* Logging path-escape attempts as Charon security events is a design target.
 
 #### 8.7.3 Network access
 

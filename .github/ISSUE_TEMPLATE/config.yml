@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & Discussion
+    url: https://github.com/TheArcForge/Hades/discussions
+    about: Ask questions, share your setup, or propose ideas — for anything that isn't a bug or feature request.

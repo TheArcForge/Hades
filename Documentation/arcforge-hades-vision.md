@@ -22,7 +22,7 @@ Hades is an integrated AI development stack for Unity projects. It augments Clau
 
 1. **Hades Graph** — a Unity-aware semantic knowledge graph of the project, built from inside the Unity Editor using `AssetDatabase` and `SerializedObject` introspection. It captures scenes, prefab variants, ScriptableObject instances, addressable groups, render pipeline configuration, and the relationships between them.
 
-2. **Hades Charon** — observability infrastructure that instruments every MCP tool call with OpenTelemetry traces, eval scoring, and a local trace viewer. Built first as an internal engineering necessity for ArcForge itself, exposed second as a user-facing feature for debugging AI workflows.
+2. **Hades Charon** — observability infrastructure that instruments every MCP tool call with structured traces, eval scoring, and a local trace viewer. Built first as an internal engineering necessity for ArcForge itself, exposed second as a user-facing feature for debugging AI workflows.
 
 3. **Hades Asphodel** — persistent project memory in version-controlled markdown files. Captures architectural decisions, learned team patterns, and inferred preferences across sessions. Travels with the project in git.
 
@@ -129,7 +129,7 @@ The agent connects to the MCP server. The MCP server reads from artifacts produc
 
 Explicit non-goals. These boundaries matter because they keep scope coherent.
 
-- **Not a replacement for existing Unity MCP servers' action tooling.** Hades does not aim to be the most complete editor-manipulation MCP. Existing tools are adequate at that and we will not duplicate the surface area unnecessarily. Where action tools are needed, we provide the minimum required for our knowledge-and-memory features to function.
+- **Not a replacement for existing Unity MCP servers' action tooling in the sense of being knowledge-and-memory-only.** Hades ships a broad Unity action surface (~90 MCP tools total) covering editor manipulation, scene authoring, prefab editing, material management, and more — because action capability is required for the knowledge-and-memory features to be useful in practice. The distinction from action-only MCP servers is the addition of the graph, memory, and observability layers, not a reduction of action surface.
 - **Not a code generation tool.** It does not generate code itself. It provides the agent with the context the agent needs to generate code well.
 - **Not a chat interface.** UniClaude was a chat interface in the Unity Editor. Hades is not. The agent lives in Claude Code or Cursor or another MCP-compatible client.
 - **Not a Unity Editor replacement.** The Unity Editor remains the source of truth. Hades is read-mostly; it observes and structures, it does not own state.
@@ -142,12 +142,12 @@ Explicit non-goals. These boundaries matter because they keep scope coherent.
 
 A semantic knowledge graph of the Unity project. Built from inside the Unity Editor using `AssetDatabase` and `SerializedObject` APIs (not by parsing YAML from disk — that path is a known engineering trap and has been explicitly rejected; see Architecture document).
 
-Nodes represent the meaningful entities of a Unity project: Scenes, GameObjects, Components, Prefabs, Prefab Variants, ScriptableObject instances, Scripts, Materials, Shaders, Render Pipeline Assets, Addressable Entries, Audio Mixers, Animator Controllers, and others. Edges represent the relationships: contains, references, inherits, instantiates, listens to, uses material, depends on.
+Nodes represent the meaningful entities of a Unity project: Scenes, GameObjects, Components, Prefabs, Prefab Variants, ScriptableObject instances, Scripts, Materials, Shaders, Render Pipeline Assets, Addressable Entries, and others. Audio Mixers and Animator Controllers are not yet modeled in the graph. *(Planned — not yet implemented as of v1.0.0.)* Edges represent the relationships: contains, references, inherits, instantiates, uses material, depends on. A dedicated "listens to" edge for event channel relationships is not yet implemented — event relationships are currently captured via reference edges. *(Planned — not yet implemented as of v1.0.0.)*
 
 The graph is queryable through the MCP server using a fixed set of high-value queries rather than ad-hoc Cypher-like syntax. Examples:
 
 - `find_components_using_pattern(pattern)` — find all components matching a structural pattern (e.g., implementing a specific interface, inheriting from a base type)
-- `trace_asset_dependencies(asset_path)` — recursively follow dependency edges from an asset to identify everything it touches
+- `trace_dependencies(asset_path)` — recursively follow dependency edges from an asset to identify everything it touches
 - `find_prefabs_with_component(component_type)` — locate every prefab containing a specific component
 - `analyze_render_pipeline()` — summarize URP/HDRP/built-in usage, custom features, and render features
 - `find_orphan_scripts()` — scripts not referenced by any prefab, scene, or other script
@@ -161,7 +161,7 @@ The graph is persisted to `.arcforge/graph.db` (SQLite-based) in the project roo
 
 Observability infrastructure for everything the agent does. Charon — the ferryman who transports souls between worlds — is the metaphor. Each agent action is a soul; Charon transports it and keeps a record.
 
-Implemented as OpenTelemetry instrumentation on every MCP tool call, every graph query, every memory read, every action performed against the Unity Editor. Each operation becomes a span. Spans nest into traces. Traces map to user-visible interactions ("user asked X", "agent did Y, Z, W in response").
+Implemented as a bespoke OpenTelemetry-inspired span system on every MCP tool call, every graph query, every memory read, every action performed against the Unity Editor. The design borrows OpenTelemetry concepts (spans, traces, attributes, nesting) but uses no OTel SDK and emits no OTLP — spans are persisted directly to a local SQLite database. Each operation becomes a span. Spans nest into traces. Traces map to user-visible interactions ("user asked X", "agent did Y, Z, W in response").
 
 The trace structure captures:
 
@@ -199,11 +199,11 @@ Two tiers:
 
 The agent can read these directly via MCP tools. The agent can propose updates that the developer reviews before committing. The developer can edit these files directly in any text editor.
 
-**Tier 2: Inferred memory** — auto-generated from observability traces, gitignored by default. The system observes patterns across sessions: which suggestion shapes the user accepts, which they reject, which architectural choices keep recurring. When confidence in an inferred pattern is high, it is promoted to Tier 1 with the developer's review.
+**Tier 2: Inferred memory** — auto-generated from observability traces, git-tracked alongside Tier 1 (teams that prefer to keep inferred data out of the repo can gitignore the `inferred/` subdirectory). The system observes patterns across sessions: which suggestion shapes the user accepts, which they reject, which architectural choices keep recurring. When confidence in an inferred pattern is high, it is promoted to Tier 1 with the developer's review.
 
 A critical design constraint: **memory must self-validate against the graph.** Stale memory is worse than no memory. If `patterns.md` claims "we use ScriptableObject event channels" but the graph shows the project has shifted to `UnityEvent`-based communication, this is a flag, not a silent inconsistency. The MCP server detects mismatches and surfaces them for review.
 
-A second critical design constraint: **memory does not auto-load wholesale into context.** Tier 1 short summaries inject into the system prompt. Detailed memory is retrieved on demand by the agent through a `recall_relevant_memory(query)` tool. This avoids burning tokens on memory the current task does not need.
+A second critical design constraint: **memory does not auto-load wholesale into context.** Tier 1 short summaries inject into the system prompt. Detailed memory is retrieved on demand by the agent through a `recall_memory(query)` tool. This avoids burning tokens on memory the current task does not need.
 
 Because memory lives in the project's git repository, **team sharing is automatic**. A new developer joining the team runs `git pull` and their AI assistant immediately knows the team's patterns, decisions, and conventions. This is — to our current knowledge — not offered by any other Unity AI tool.
 

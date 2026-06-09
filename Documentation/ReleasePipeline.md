@@ -23,7 +23,7 @@ Purpose: catch regressions before merging.
 Sequential steps:
 1. Builds Bridge from TypeScript to JavaScript.
 2. Runs `scripts/sync-plugin.sh` to produce the plugin repo content.
-3. Validates the output: 22 skills, 6 commands, valid JSON, no leaked Unity files.
+3. Validates the output: 22 skills, 6 commands, valid JSON, no leaked Unity files, and presence of `Bridge~/launcher/dist/index.js` and `Bridge~/hub/dist/index.js`.
 4. Clones `TheArcForge/hades-plugin` using the `PLUGIN_REPO_TOKEN` secret.
 5. Copies the validated plugin content into the clone.
 6. Updates `marketplace.json` version to match the tag.
@@ -102,7 +102,7 @@ Complete all items before creating a release tag.
 
 - [ ] Bridge is built (`cd Bridge~ && npm run build`)
 - [ ] Sync script runs cleanly: `bash scripts/sync-plugin.sh /path/to/hades-plugin`
-- [ ] Plugin repo validation passes (all 12 checks from plugin-publish-pipeline.md §2)
+- [ ] Plugin repo validation passes (all checks from plugin-publish-pipeline.md §2)
 
 ### Final
 
