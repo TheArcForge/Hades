@@ -16,6 +16,7 @@ This is the Claude Code plugin half of [**Hades**](https://github.com/TheArcForg
 
 ## Prerequisites
 
+- **macOS** — currently the only tested platform. Windows and Linux are untested; reports welcome.
 - **Node.js 20+** — the MCP launcher and hub are Node.js processes
 - **Claude Code** — install from [claude.ai/download](https://claude.ai/download)
 - **Hades Unity Package** — installed in your Unity project (separate from this plugin; see the [main repo](https://github.com/TheArcForge/Hades))

@@ -127,6 +127,7 @@ Hades is a **navigator, not an oracle**: it makes understanding your project fas
 
 ## Prerequisites
 
+- **macOS** — currently the only tested platform. Windows and Linux are untested; reports welcome.
 - **Unity 6000.0+**
 - **Node.js 20+**
 - **Claude Code** (or any MCP-compatible agent client)
