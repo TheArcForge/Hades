@@ -4,12 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Graph relationship & coverage correctness
+## [1.0.0] - 2026-06-09 — Phase 10: Public Release
 
-Post-1.0 correctness round driven by field reports from an Addressables-heavy project. Changes treat the scanner/graph as ground truth and add honest signals where a gap is inherent (precompiled DLL types, runtime dispatch).
+The first public release: Phase 10 release/distribution infrastructure plus a graph relationship & coverage correctness round driven by field reports from a large Addressables-heavy project. The correctness work treats the scanner/graph as ground truth and adds honest signals where a gap is inherent (precompiled DLL types, runtime dispatch).
 
 ### Added
 
+- Self-hosted marketplace listing (`marketplace.json` in plugin repo)
+- CI workflow for Bridge + Scanner tests on push/PR (`ci.yml`)
+- CI workflow for auto-syncing plugin repo on release tag (`release.yml`)
+- Plugin repo structural validation CI (`validate.yml`)
+- Release documentation: `ReleasePipeline.md`, `plugin-publish-pipeline.md`, `anthropic-plugin-reference.md`
+- Marketplace install path documented in `plugin-README.md`
 - **`nested_by` on `find_references_to`** — surfaces direct structural parents (nesting prefabs, prefab variants) separately from `references`, so a nested-only asset no longer reads as "unused" while `reference_count` stays free of transitive over-count
 - **Honest coverage signals on relationship tools** — `static_analysis_coverage` (names reflection / runtime dispatch / DI blind spots), `package_scan` degraded, and `supertypes_external_unresolved` counts on `find_references_to` / `trace_dependencies` / inheritance queries
 - **`package_scan_status`** flag in `scan_health` (`get_project_summary`)
@@ -18,6 +24,10 @@ Post-1.0 correctness round driven by field reports from an Addressables-heavy pr
 
 ### Changed
 
+- Renamed `Skills~/` → `skills/` and `Commands~/` → `commands/` (Anthropic standard auto-discovery paths)
+- Enriched `plugin.json` with `$schema`, `displayName`, author object, `license`, `homepage`, `repository`, `keywords`
+- Removed explicit `"skills"` and `"commands"` fields from `plugin.json` (now auto-discovered by convention)
+- Version bumps: product `0.9.5` → `1.0.0`; Bridge, Hub, and Scanner internals to `1.0.0`
 - **C# parser** now emits `ScriptType` nodes for enums, records, and nested types (restores coverage lost in the Phase-9 tree-sitter swap); captures `using`-aliases and generic method-invocation / property / generic-return type arguments; replaces the `base_type` node property with a `supertypes` list
 - **`inherits_from` vs `implements`** is decided by the resolved supertype's kind, not base-list position (fixes missed first-party interfaces)
 - **`find_prefabs_with_component`** walks the full containment chain (finds deeply-nested component hosts) and de-dups variant-inherited components (`count` excludes inherited; `total_including_inherited_variants` reported)
@@ -41,26 +51,6 @@ Post-1.0 correctness round driven by field reports from an Addressables-heavy pr
 - **Incremental edge erosion (Unity + C#)** — re-scanning a changed asset cascade-deleted inbound edges from *unchanged* assets, which were never recreated and eroded each incremental. Inbound edges are now captured before delete and re-pointed after re-scan; the C# scanner deletes a file's full node set by `file_id` (was leaking NULL-guid `ScriptType`/`ScriptMethod` nodes).
 - **Pending-edge classification** — on a full pass, unresolved type-name edges (BCL/framework/attributes/generics/unscanned-package types) are now classified terminal (`external`/`unindexed`) instead of being logged "will resolve on next rebuild."
 - **`query_graph` guardrail** — an unknown `from` node type now errors and lists valid types instead of silently returning `count:0`.
-
----
-
-## [1.0.0] — 2026-05-31 — Phase 10: Public Release
-
-### Added
-
-- Self-hosted marketplace listing (`marketplace.json` in plugin repo)
-- CI workflow for Bridge + Scanner tests on push/PR (`ci.yml`)
-- CI workflow for auto-syncing plugin repo on release tag (`release.yml`)
-- Plugin repo structural validation CI (`validate.yml`)
-- Release documentation: `ReleasePipeline.md`, `plugin-publish-pipeline.md`, `anthropic-plugin-reference.md`
-- Marketplace install path documented in `plugin-README.md`
-
-### Changed
-
-- Renamed `Skills~/` → `skills/` and `Commands~/` → `commands/` (Anthropic standard auto-discovery paths)
-- Enriched `plugin.json` with `$schema`, `displayName`, author object, `license`, `homepage`, `repository`, `keywords`
-- Removed explicit `"skills"` and `"commands"` fields from `plugin.json` (now auto-discovered by convention)
-- Version bumps: product `0.9.5` → `1.0.0`; Bridge, Hub, and Scanner internals to `1.0.0`
 
 ---
 
