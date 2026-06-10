@@ -2,6 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/TheArcForge/Hades?sort=semver)](https://github.com/TheArcForge/Hades/releases)
+[![OpenUPM](https://img.shields.io/npm/v/com.arcforge.hades?label=openupm&registry_uri=https://package.openupm.com)](https://openupm.com/packages/com.arcforge.hades/)
 [![CI](https://github.com/TheArcForge/Hades/actions/workflows/ci.yml/badge.svg)](https://github.com/TheArcForge/Hades/actions/workflows/ci.yml)
 [![Unity 6000.0+](https://img.shields.io/badge/Unity-6000.0%2B-black?logo=unity)](https://unity.com)
 [![Node 20+](https://img.shields.io/badge/Node-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org)
@@ -130,7 +131,7 @@ Hades is a **navigator, not an oracle**: it makes understanding your project fas
 - **macOS** — currently the only tested platform. Windows and Linux are untested; reports welcome.
 - **Unity 6000.0+**
 - **Node.js 20+**
-- **Claude Code** (or any MCP-compatible agent client)
+- **Claude Code** — other MCP clients are untested in v1
 
 ## Installation
 
