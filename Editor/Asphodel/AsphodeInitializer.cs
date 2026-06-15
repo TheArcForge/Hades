@@ -7,7 +7,8 @@ using UnityEngine;
 
 namespace ArcForge.Hades.Editor.Asphodel
 {
-    [InitializeOnLoad]
+    // NOTE: no [InitializeOnLoad] — HadesBootstrap calls Initialize() AFTER Charon, so
+    // CharonEmitter.Database is non-null here and InferenceEngine is created (fixes #6).
     public static class AsphodeInitializer
     {
         static MemoryManager _manager;
@@ -27,13 +28,9 @@ namespace ArcForge.Hades.Editor.Asphodel
             _validator = new MemoryValidator(manager, db);
         }
 
-        static AsphodeInitializer()
+        internal static void Initialize()
         {
-            EditorApplication.delayCall += Initialize;
-        }
-
-        static void Initialize()
-        {
+            if (_manager != null) return; // idempotent
             var projectRoot = Path.GetDirectoryName(Application.dataPath);
             var memoryDir = Path.Combine(projectRoot, ".arcforge", "memory");
             _manager = new MemoryManager(memoryDir);

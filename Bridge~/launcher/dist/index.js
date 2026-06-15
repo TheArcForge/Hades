@@ -3,6 +3,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
+import { resolveProjectPath } from "./project-path.js";
+import { acquireSpawnLock, releaseSpawnLock } from "./spawn-lock.js";
 const HUB_DIR = path.join(process.env.HOME ?? process.env.USERPROFILE ?? "", ".arcforge", "hades-hub");
 const HUB_JSON_PATH = path.join(HUB_DIR, "hub.json");
 const HUB_ENTRY = findHubEntry();
@@ -23,7 +25,7 @@ function findHubEntry() {
     }
     return relative;
 }
-const PROJECT_PATH = process.cwd();
+const PROJECT_PATH = resolveProjectPath(process.cwd());
 const HUB_STARTUP_TIMEOUT_MS = 15000;
 const PROTOCOL_VERSION = "2024-11-05";
 const SERVER_NAME = "hades";
@@ -85,18 +87,36 @@ async function ensureHub() {
             // ignore
         }
     }
-    startHub();
-    const deadline = Date.now() + HUB_STARTUP_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 200));
-        const info = readHubJson();
-        if (info && isProcessAlive(info.pid)) {
-            const healthy = await probeHealth(info.port);
-            if (healthy)
-                return info.port;
-        }
+    // Only one launcher spawns the hub when several race at once. Hold an exclusive lock
+    // across spawn + readiness wait; a launcher that loses the lock skips spawning and just
+    // waits for hub.json — preventing orphaned, duplicate (zombie) hubs.
+    try {
+        fs.mkdirSync(HUB_DIR, { recursive: true });
     }
-    throw new Error("Hub failed to start within timeout");
+    catch {
+        // already exists
+    }
+    const lockPath = path.join(HUB_DIR, "hub.lock");
+    const lockFd = acquireSpawnLock(lockPath);
+    try {
+        if (lockFd !== null)
+            startHub();
+        const deadline = Date.now() + HUB_STARTUP_TIMEOUT_MS;
+        while (Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, 200));
+            const info = readHubJson();
+            if (info && isProcessAlive(info.pid)) {
+                const healthy = await probeHealth(info.port);
+                if (healthy)
+                    return info.port;
+            }
+        }
+        throw new Error("Hub failed to start within timeout");
+    }
+    finally {
+        if (lockFd !== null)
+            releaseSpawnLock(lockFd, lockPath);
+    }
 }
 function httpPost(port, urlPath, body, headers) {
     return new Promise((resolve, reject) => {

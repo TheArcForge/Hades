@@ -361,3 +361,42 @@ describe('DbWriter', () => {
     });
   });
 });
+
+describe('owner_guid', () => {
+  test('insertNode persists owner_guid and deleteByOwnerGuid removes the whole set', () => {
+    const root = writer.insertNode({
+      type: 'Script', guid: 'script_guid', name: 'Player', path: 'Assets/Player.cs',
+      ownerGuid: 'script_guid',
+    });
+    writer.insertNode({
+      type: 'ScriptType', name: 'Player', fileId: root, ownerGuid: 'script_guid',
+    });
+
+    const dbBefore = openReadOnly();
+    expect(dbBefore.prepare("SELECT COUNT(*) c FROM nodes WHERE owner_guid = 'script_guid'").get().c).toBe(2);
+    dbBefore.close();
+
+    writer.deleteByOwnerGuid('script_guid');
+
+    const db = openReadOnly();
+    const count = db.prepare("SELECT COUNT(*) c FROM nodes WHERE owner_guid = 'script_guid'").get().c;
+    db.close();
+    expect(count).toBe(0);
+  });
+});
+
+describe('insertMetaAssets', () => {
+  test('writes owner_guid and a sentinel scanned_assets row', () => {
+    writer.insertMetaAssets([
+      { guid: 'tex_guid', name: 'hero', path: 'Assets/hero.png', type: 'Texture' },
+    ]);
+
+    const db = openReadOnly();
+    const node = db.prepare("SELECT guid, owner_guid FROM nodes WHERE guid = 'tex_guid'").get();
+    const scanned = db.prepare("SELECT content_hash FROM scanned_assets WHERE guid = 'tex_guid'").get();
+    db.close();
+
+    expect(node.owner_guid).toBe('tex_guid');
+    expect(scanned.content_hash).toBe('meta');
+  });
+});

@@ -41,7 +41,7 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
                     EndTime = ToMs(traceTime.AddMilliseconds(200)),
                     Status = SpanStatus.Ok
                 };
-                span.Attributes["tool_name"] = "find_prefabs_with_component";
+                span.Attributes[SpanAttributes.ToolName] = "find_prefabs_with_component";
                 span.Attributes["component_type"] = "ObjectPool";
                 spans.Add(span);
             }
@@ -71,7 +71,7 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
                     EndTime = ToMs(traceTime.AddMilliseconds(200)),
                     Status = SpanStatus.Ok
                 };
-                span.Attributes["tool_name"] = "find_prefabs_with_component";
+                span.Attributes[SpanAttributes.ToolName] = "find_prefabs_with_component";
                 span.Attributes["component_type"] = "EnemySpawner";
                 spans.Add(span);
 
@@ -98,7 +98,7 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
                     EndTime = ToMs(retryTime.AddMilliseconds(200)),
                     Status = SpanStatus.Ok
                 };
-                retrySpan.Attributes["tool_name"] = "find_prefabs_with_component";
+                retrySpan.Attributes[SpanAttributes.ToolName] = "find_prefabs_with_component";
                 retrySpan.Attributes["component_type"] = "EnemySpawnerV2";
                 spans.Add(retrySpan);
             }
@@ -131,7 +131,7 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
                     EndTime = ToMs(traceTime.AddMilliseconds(150)),
                     Status = SpanStatus.Ok
                 };
-                span.Attributes["tool_name"] = controlTools[i];
+                span.Attributes[SpanAttributes.ToolName] = controlTools[i];
                 spans.Add(span);
             }
 
@@ -170,7 +170,7 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
                     EndTime = ToMs(traceTime.AddMilliseconds(100)),
                     Status = SpanStatus.Ok
                 };
-                span.Attributes["tool_name"] = toolName;
+                span.Attributes[SpanAttributes.ToolName] = toolName;
                 span.Attributes["query"] = i % 3 == 0 ? "AudioSource" : i % 3 == 1 ? "AudioMixer" : "AudioClip";
                 spans.Add(span);
             }
@@ -200,7 +200,7 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
                     EndTime = ToMs(traceTime.AddMilliseconds(100)),
                     Status = SpanStatus.Ok
                 };
-                span.Attributes["tool_name"] = "search_by_name";
+                span.Attributes[SpanAttributes.ToolName] = "search_by_name";
                 span.Attributes["query"] = i % 2 == 0 ? "NetworkManager" : "NetworkBehaviour";
                 spans.Add(span);
             }
@@ -232,7 +232,7 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
                     EndTime = ToMs(traceTime.AddMilliseconds(100)),
                     Status = SpanStatus.Ok
                 };
-                span.Attributes["tool_name"] = "search_by_name";
+                span.Attributes[SpanAttributes.ToolName] = "search_by_name";
                 span.Attributes["query"] = mixedTerms[i % mixedTerms.Length];
                 spans.Add(span);
             }
@@ -314,7 +314,7 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
                     EndTime = ToMs(traceTime.AddMilliseconds(200)),
                     Status = SpanStatus.Ok
                 };
-                span.Attributes["tool_name"] = "trace_dependencies";
+                span.Attributes[SpanAttributes.ToolName] = "trace_dependencies";
                 span.Attributes["asset_type"] = isPrefabVariant ? "prefab_variant" : "script";
                 spans.Add(span);
             }
@@ -345,7 +345,7 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
                     EndTime = ToMs(traceTime.AddMilliseconds(200)),
                     Status = SpanStatus.Error
                 };
-                span.Attributes["tool_name"] = "trace_dependencies";
+                span.Attributes[SpanAttributes.ToolName] = "trace_dependencies";
                 span.Attributes["asset_type"] = isPrefabVariant ? "prefab_variant" : "script";
                 if (isPrefabVariant)
                     span.Attributes["error.message"] = "Failed to resolve variant override chain";
@@ -386,7 +386,7 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
                 EndTime = ToMs(time.AddMilliseconds(100)),
                 Status = SpanStatus.Ok
             };
-            span.Attributes["tool_name"] = toolName.Replace("mcp.tool.", "");
+            span.Attributes[SpanAttributes.ToolName] = toolName.Replace("mcp.tool.", "");
             spans.Add(span);
         }
     }

@@ -11,7 +11,7 @@ namespace ArcForge.Hades.Editor.Asphodel.Inference
         const float OverRepresentationThreshold = 2.0f; // 2x baseline = significant
         static readonly HashSet<string> IgnoredAttributes = new HashSet<string>
         {
-            "tool_name", "error.message", "error.type"
+            SpanAttributes.ToolName, SpanAttributes.ToolInput, "error.message", "error.type"
         };
 
         public string Name => "failure_correlation";

@@ -380,22 +380,50 @@ describe("MCP Forwarding", () => {
     expect(data.result.content[0].text).toBe("called: hades_ping");
   });
 
-  it("returns error when no instance matches", async () => {
+  it("returns error when no instance matches (2+ instances, so no single-instance fallback)", async () => {
+    // A second instance so the single-instance fallback doesn't fire — a genuine no-match.
+    hub.registry.register({
+      projectName: "OtherGame",
+      projectPath: "/Users/test/Projects/OtherGame",
+      port: 1,
+      pid: process.pid,
+    });
+    try {
+      const rpcRequest = JSON.stringify({
+        jsonrpc: "2.0",
+        id: "test-5",
+        method: "tools/call",
+        params: { name: "hades_ping", arguments: {} },
+      });
+
+      const res = await httpPost(hub.port, "/rpc", rpcRequest, {
+        "X-Hades-Project": "/completely/different/path",
+      });
+
+      const data = JSON.parse(res.body);
+      expect(data.error).toBeDefined();
+      expect(data.error.code).toBe(-32000);
+      expect(data.error.message).toContain("No Unity instance found");
+      expect(data.error.message).toContain("TestGame");
+    } finally {
+      hub.registry.remove("/Users/test/Projects/OtherGame");
+    }
+  });
+
+  it("single-instance fallback: routes a non-matching call to the only registered instance", async () => {
+    // Only TestGame is registered (describe default), so an unidentifiable cwd ("/") routes to it.
     const rpcRequest = JSON.stringify({
       jsonrpc: "2.0",
-      id: "test-5",
+      id: "test-fallback",
       method: "tools/call",
       params: { name: "hades_ping", arguments: {} },
     });
 
     const res = await httpPost(hub.port, "/rpc", rpcRequest, {
-      "X-Hades-Project": "/completely/different/path",
+      "X-Hades-Project": "/",
     });
 
     const data = JSON.parse(res.body);
-    expect(data.error).toBeDefined();
-    expect(data.error.code).toBe(-32000);
-    expect(data.error.message).toContain("No Unity instance found");
-    expect(data.error.message).toContain("TestGame");
+    expect(data.result.content[0].text).toBe("called: hades_ping");
   });
 });

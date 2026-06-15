@@ -75,6 +75,7 @@ function createRequestHandler(registry) {
             return;
         }
         if (url === "/rpc" && method === "POST") {
+            registry.noteLauncherActivity(); // keep an actively-used hub alive (leak-proof liveness)
             const projectPath = req.headers["x-hades-project"];
             const body = await readBody(req);
             const response = await forwardToolCall(registry, projectPath, body);

@@ -103,7 +103,7 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
                     EndTime = t.AddMilliseconds(100).ToUnixTimeMilliseconds(),
                     Status = SpanStatus.Ok
                 };
-                span.Attributes["tool_name"] = "find_orphan_scripts";
+                span.Attributes[SpanAttributes.ToolName] = "find_orphan_scripts";
                 spans.Add(span);
             }
 

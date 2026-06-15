@@ -104,7 +104,7 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
                     EndTime = t.AddMilliseconds(100).ToUnixTimeMilliseconds(),
                     Status = SpanStatus.Ok
                 };
-                span.Attributes["tool_name"] = "search_by_name";
+                span.Attributes[SpanAttributes.ToolName] = "search_by_name";
                 var uniqueTerms = new[] { "Xylophone", "Quasar", "Fibonacci", "Parallax", "Zeppelin",
                     "Origami", "Kaleidoscope", "Nebula", "Labyrinth", "Chrysalis",
                     "Vortex", "Enigma", "Pendulum", "Silhouette", "Talisman",

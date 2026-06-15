@@ -16,7 +16,7 @@ namespace ArcForge.Hades.Editor.Graph
         readonly SQLiteConnection _connection;
         bool _disposed;
 
-        const int CurrentSchemaVersion = 3;
+        const int CurrentSchemaVersion = 4;
 
         public GraphDatabase(string dbPath)
         {
@@ -80,7 +80,8 @@ namespace ArcForge.Hades.Editor.Graph
                     source_range TEXT,
                     properties TEXT,
                     created_at INTEGER NOT NULL,
-                    updated_at INTEGER NOT NULL
+                    updated_at INTEGER NOT NULL,
+                    owner_guid TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
@@ -89,6 +90,7 @@ namespace ArcForge.Hades.Editor.Graph
                 CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_node_id);
                 CREATE INDEX IF NOT EXISTS idx_nodes_name_type ON nodes(name, type);
                 CREATE INDEX IF NOT EXISTS idx_nodes_tier ON nodes(tier);
+                CREATE INDEX IF NOT EXISTS idx_nodes_owner_guid ON nodes(owner_guid);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_guid_fileid ON nodes(guid, file_id) WHERE guid IS NOT NULL;
 
                 CREATE TABLE IF NOT EXISTS edges (
@@ -187,6 +189,26 @@ namespace ArcForge.Hades.Editor.Graph
                 // Existing edges resolved before this migration keep their NULL properties
                 // until the next full rebuild repopulates them through the fixed path.
             }
+
+            if (fromVersion < 4)
+            {
+                // owner_guid: every node records the asset that owns it, so deletion-by-owner
+                // is total (root + all children) and uniform across scenes/prefabs/scripts/meta.
+                // The graph is a rebuildable cache; recreate the node-bearing tables so the
+                // fresh column order matches CreateAllTables, then let the empty-graph check in
+                // CheckStartupSync (GetNodeCount() == 0 -> RebuildParallel) repopulate owner_guid
+                // through the new write path. No in-place backfill — old NULL-guid children have
+                // no recoverable owner without re-scanning anyway.
+                _connection.ExecuteScript(@"
+                    DROP TABLE IF EXISTS edges;
+                    DROP TABLE IF EXISTS nodes;
+                    DROP TABLE IF EXISTS scanned_assets;
+                    DROP TABLE IF EXISTS pending_invalidations;
+                ");
+
+                CreateAllTables();
+                RecordSchemaVersion(4);
+            }
         }
 
         public bool TableExists(string tableName)
@@ -282,8 +304,8 @@ namespace ArcForge.Hades.Editor.Graph
         {
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var rows = _connection.Execute(@"
-                INSERT OR IGNORE INTO nodes (type, tier, guid, file_id, parent_node_id, name, path, source_range, properties, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+                INSERT OR IGNORE INTO nodes (type, tier, guid, file_id, parent_node_id, name, path, source_range, properties, created_at, updated_at, owner_guid)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
                 node.Type,
                 tier,
                 node.Guid,
@@ -294,7 +316,8 @@ namespace ArcForge.Hades.Editor.Graph
                 node.SourceRange,
                 node.PropertiesJson,
                 now,
-                now);
+                now,
+                node.OwnerGuid);
 
             // OR IGNORE: a duplicate (guid, file_id) is skipped rather than throwing. This happens
             // when two assets share a GUID (Unity ignores one copy — the lantern duplicate-GUID
@@ -402,41 +425,27 @@ namespace ArcForge.Hades.Editor.Graph
 
         public NodeRecord FindNodeByGuid(string guid, long? fileId = null)
         {
-            using (var span = CharonEmitter.StartSpan("graph.query.find_by_guid", SpanKind.Internal))
+            if (fileId.HasValue)
             {
-                span.SetAttribute("query.guid", guid ?? "");
-                if (fileId.HasValue) span.SetAttribute("query.file_id", fileId.Value);
-
-                if (fileId.HasValue)
+                using (var stmt = new SQLitePreparedStatement(_connection,
+                    "SELECT * FROM nodes WHERE guid = ? AND file_id = ?;"))
                 {
-                    using (var stmt = new SQLitePreparedStatement(_connection,
-                        "SELECT * FROM nodes WHERE guid = ? AND file_id = ?;"))
-                    {
-                        stmt.Bind(1, guid);
-                        stmt.Bind(2, fileId.Value);
-                        if (stmt.Step() == SQLite3.Result.Row)
-                        {
-                            span.SetAttribute("results.count", 1L);
-                            return ReadNodeFromStatement(stmt);
-                        }
-                        span.SetAttribute("results.count", 0L);
-                        return null;
-                    }
+                    stmt.Bind(1, guid);
+                    stmt.Bind(2, fileId.Value);
+                    if (stmt.Step() == SQLite3.Result.Row)
+                        return ReadNodeFromStatement(stmt);
+                    return null;
                 }
-                else
+            }
+            else
+            {
+                using (var stmt = new SQLitePreparedStatement(_connection,
+                    "SELECT * FROM nodes WHERE guid = ? ORDER BY id LIMIT 1;"))
                 {
-                    using (var stmt = new SQLitePreparedStatement(_connection,
-                        "SELECT * FROM nodes WHERE guid = ? ORDER BY id LIMIT 1;"))
-                    {
-                        stmt.Bind(1, guid);
-                        if (stmt.Step() == SQLite3.Result.Row)
-                        {
-                            span.SetAttribute("results.count", 1L);
-                            return ReadNodeFromStatement(stmt);
-                        }
-                        span.SetAttribute("results.count", 0L);
-                        return null;
-                    }
+                    stmt.Bind(1, guid);
+                    if (stmt.Step() == SQLite3.Result.Row)
+                        return ReadNodeFromStatement(stmt);
+                    return null;
                 }
             }
         }
@@ -455,97 +464,90 @@ namespace ArcForge.Hades.Editor.Graph
 
         public List<NodeRecord> FindNodesByType(string type)
         {
-            using (var span = CharonEmitter.StartSpan("graph.query.find_by_type", SpanKind.Internal))
+            var results = new List<NodeRecord>();
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "SELECT * FROM nodes WHERE type = ?;"))
             {
-                span.SetAttribute("query.type", type);
-
-                var results = new List<NodeRecord>();
-                using (var stmt = new SQLitePreparedStatement(_connection,
-                    "SELECT * FROM nodes WHERE type = ?;"))
-                {
-                    stmt.Bind(1, type);
-                    while (stmt.Step() == SQLite3.Result.Row)
-                        results.Add(ReadNodeFromStatement(stmt));
-                }
-
-                span.SetAttribute("results.count", (long)results.Count);
-                return results;
+                stmt.Bind(1, type);
+                while (stmt.Step() == SQLite3.Result.Row)
+                    results.Add(ReadNodeFromStatement(stmt));
             }
+
+            return results;
         }
 
         public List<EdgeInfo> FindEdgesFrom(long sourceId, string type = null)
         {
-            using (var span = CharonEmitter.StartSpan("graph.query.find_edges_from", SpanKind.Internal))
+            var results = new List<EdgeInfo>();
+            if (type != null)
             {
-                span.SetAttribute("query.source_id", sourceId);
-                if (type != null) span.SetAttribute("query.edge_type", type);
-
-                var results = new List<EdgeInfo>();
-                if (type != null)
+                using (var stmt = new SQLitePreparedStatement(_connection,
+                    "SELECT e.*, n.type as target_type, n.name as target_name, n.path as target_path FROM edges e JOIN nodes n ON e.target_id = n.id WHERE e.source_id = ? AND e.type = ?;"))
                 {
-                    using (var stmt = new SQLitePreparedStatement(_connection,
-                        "SELECT e.*, n.type as target_type, n.name as target_name, n.path as target_path FROM edges e JOIN nodes n ON e.target_id = n.id WHERE e.source_id = ? AND e.type = ?;"))
-                    {
-                        stmt.Bind(1, sourceId);
-                        stmt.Bind(2, type);
-                        while (stmt.Step() == SQLite3.Result.Row)
-                            results.Add(ReadEdgeInfoFromStatement(stmt));
-                    }
+                    stmt.Bind(1, sourceId);
+                    stmt.Bind(2, type);
+                    while (stmt.Step() == SQLite3.Result.Row)
+                        results.Add(ReadEdgeInfoFromStatement(stmt));
                 }
-                else
-                {
-                    using (var stmt = new SQLitePreparedStatement(_connection,
-                        "SELECT e.*, n.type as target_type, n.name as target_name, n.path as target_path FROM edges e JOIN nodes n ON e.target_id = n.id WHERE e.source_id = ?;"))
-                    {
-                        stmt.Bind(1, sourceId);
-                        while (stmt.Step() == SQLite3.Result.Row)
-                            results.Add(ReadEdgeInfoFromStatement(stmt));
-                    }
-                }
-
-                span.SetAttribute("results.count", (long)results.Count);
-                return results;
             }
+            else
+            {
+                using (var stmt = new SQLitePreparedStatement(_connection,
+                    "SELECT e.*, n.type as target_type, n.name as target_name, n.path as target_path FROM edges e JOIN nodes n ON e.target_id = n.id WHERE e.source_id = ?;"))
+                {
+                    stmt.Bind(1, sourceId);
+                    while (stmt.Step() == SQLite3.Result.Row)
+                        results.Add(ReadEdgeInfoFromStatement(stmt));
+                }
+            }
+
+            return results;
         }
 
         public List<EdgeInfo> FindEdgesTo(long targetId, string type = null)
         {
-            using (var span = CharonEmitter.StartSpan("graph.query.find_edges_to", SpanKind.Internal))
+            var results = new List<EdgeInfo>();
+            if (type != null)
             {
-                span.SetAttribute("query.target_id", targetId);
-                if (type != null) span.SetAttribute("query.edge_type", type);
-
-                var results = new List<EdgeInfo>();
-                if (type != null)
+                using (var stmt = new SQLitePreparedStatement(_connection,
+                    "SELECT e.*, n.type as target_type, n.name as target_name, n.path as target_path FROM edges e JOIN nodes n ON e.source_id = n.id WHERE e.target_id = ? AND e.type = ?;"))
                 {
-                    using (var stmt = new SQLitePreparedStatement(_connection,
-                        "SELECT e.*, n.type as target_type, n.name as target_name, n.path as target_path FROM edges e JOIN nodes n ON e.source_id = n.id WHERE e.target_id = ? AND e.type = ?;"))
-                    {
-                        stmt.Bind(1, targetId);
-                        stmt.Bind(2, type);
-                        while (stmt.Step() == SQLite3.Result.Row)
-                            results.Add(ReadEdgeInfoFromStatement(stmt));
-                    }
+                    stmt.Bind(1, targetId);
+                    stmt.Bind(2, type);
+                    while (stmt.Step() == SQLite3.Result.Row)
+                        results.Add(ReadEdgeInfoFromStatement(stmt));
                 }
-                else
-                {
-                    using (var stmt = new SQLitePreparedStatement(_connection,
-                        "SELECT e.*, n.type as target_type, n.name as target_name, n.path as target_path FROM edges e JOIN nodes n ON e.source_id = n.id WHERE e.target_id = ?;"))
-                    {
-                        stmt.Bind(1, targetId);
-                        while (stmt.Step() == SQLite3.Result.Row)
-                            results.Add(ReadEdgeInfoFromStatement(stmt));
-                    }
-                }
-
-                span.SetAttribute("results.count", (long)results.Count);
-                return results;
             }
+            else
+            {
+                using (var stmt = new SQLitePreparedStatement(_connection,
+                    "SELECT e.*, n.type as target_type, n.name as target_name, n.path as target_path FROM edges e JOIN nodes n ON e.source_id = n.id WHERE e.target_id = ?;"))
+                {
+                    stmt.Bind(1, targetId);
+                    while (stmt.Step() == SQLite3.Result.Row)
+                        results.Add(ReadEdgeInfoFromStatement(stmt));
+                }
+            }
+
+            return results;
         }
 
         public void DeleteNodesByGuid(string guid)
         {
             _connection.Execute("DELETE FROM nodes WHERE guid = ?;", guid);
+        }
+
+        /// <summary>
+        /// Deletes an asset's FULL node set: every node whose owner_guid matches, which
+        /// includes the root asset node (it owns itself) and all sub-object children
+        /// (GameObjects/Components/ScriptTypes/ScriptMethods). Edges cascade via
+        /// ON DELETE CASCADE. This is the canonical incremental-delete path; it replaces
+        /// the old DeleteNodesByGuid, which removed only the guid-bearing root and leaked
+        /// NULL-guid children on every re-scan.
+        /// </summary>
+        public void DeleteNodesByOwnerGuid(string ownerGuid)
+        {
+            _connection.Execute("DELETE FROM nodes WHERE owner_guid = ?;", ownerGuid);
         }
 
         /// <summary>
@@ -622,7 +624,8 @@ namespace ArcForge.Hades.Editor.Graph
         NodeRecord ReadNodeFromStatement(SQLitePreparedStatement stmt)
         {
             // col 0: id, 1: type, 2: tier, 3: guid, 4: file_id, 5: parent_node_id,
-            // 6: name, 7: path, 8: source_range, 9: properties
+            // 6: name, 7: path, 8: source_range, 9: properties, 10: created_at,
+            // 11: updated_at, 12: owner_guid
             var node = new NodeRecord(stmt.GetString(1), stmt.GetString(3))
             {
                 Id = stmt.GetLong(0),
@@ -630,7 +633,8 @@ namespace ArcForge.Hades.Editor.Graph
                 ParentNodeId = stmt.GetString(5) != null ? (long?)stmt.GetLong(5) : null,
                 Name = stmt.GetString(6),
                 Path = stmt.GetString(7),
-                SourceRange = stmt.GetString(8)
+                SourceRange = stmt.GetString(8),
+                OwnerGuid = stmt.GetString(12)
             };
             var propsJson = stmt.GetString(9);
             if (propsJson != null) node.PropertiesJson = propsJson;
@@ -670,38 +674,76 @@ namespace ArcForge.Hades.Editor.Graph
 
         public List<NodeRecord> SearchByName(string namePattern, string typeFilter = null)
         {
-            using (var span = CharonEmitter.StartSpan("graph.query.search_by_name", SpanKind.Internal))
+            var results = new List<NodeRecord>();
+            var pattern = namePattern ?? "%";
+            if (typeFilter != null)
             {
-                span.SetAttribute("query.pattern", namePattern ?? "%");
-                if (typeFilter != null) span.SetAttribute("query.type_filter", typeFilter);
-
-                var results = new List<NodeRecord>();
-                var pattern = namePattern ?? "%";
-                if (typeFilter != null)
+                using (var stmt = new SQLitePreparedStatement(_connection,
+                    "SELECT * FROM nodes WHERE name LIKE ? AND type = ? ORDER BY name;"))
                 {
-                    using (var stmt = new SQLitePreparedStatement(_connection,
-                        "SELECT * FROM nodes WHERE name LIKE ? AND type = ? ORDER BY name;"))
-                    {
-                        stmt.Bind(1, pattern);
-                        stmt.Bind(2, typeFilter);
-                        while (stmt.Step() == SQLite3.Result.Row)
-                            results.Add(ReadNodeFromStatement(stmt));
-                    }
+                    stmt.Bind(1, pattern);
+                    stmt.Bind(2, typeFilter);
+                    while (stmt.Step() == SQLite3.Result.Row)
+                        results.Add(ReadNodeFromStatement(stmt));
                 }
-                else
-                {
-                    using (var stmt = new SQLitePreparedStatement(_connection,
-                        "SELECT * FROM nodes WHERE name LIKE ? ORDER BY name;"))
-                    {
-                        stmt.Bind(1, pattern);
-                        while (stmt.Step() == SQLite3.Result.Row)
-                            results.Add(ReadNodeFromStatement(stmt));
-                    }
-                }
-
-                span.SetAttribute("results.count", (long)results.Count);
-                return results;
             }
+            else
+            {
+                using (var stmt = new SQLitePreparedStatement(_connection,
+                    "SELECT * FROM nodes WHERE name LIKE ? ORDER BY name;"))
+                {
+                    stmt.Bind(1, pattern);
+                    while (stmt.Step() == SQLite3.Result.Row)
+                        results.Add(ReadNodeFromStatement(stmt));
+                }
+            }
+
+            return results;
+        }
+
+        /// <summary>
+        /// Exact-path lookup using idx_nodes_path. Replaces the SearchByName(null, null)
+        /// full-table scan + full NodeRecord materialization that the reference/dependency
+        /// tools used to resolve an asset path — O(log n) index probe instead of O(n).
+        /// Returns every node stored at this exact path (root asset node plus any
+        /// co-located ScriptType/ScriptMethod nodes), matching the old filter's result set.
+        ///
+        /// ORDER BY name reproduces SearchByName's ordering exactly: trace_dependencies starts
+        /// its traversal from results[0], and for a .cs file the ScriptType (named after the
+        /// stem, e.g. "Player") must sort before the Script ("Player.cs") so the traversal —
+        /// and the external-pending-edge honesty signal — keys off the type node, not the file
+        /// node whose only outbound edge ('defines') is excluded from dependency traversal.
+        /// </summary>
+        public List<NodeRecord> FindNodesByPath(string path)
+        {
+            var results = new List<NodeRecord>();
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "SELECT * FROM nodes WHERE path = ? ORDER BY name;"))
+            {
+                stmt.Bind(1, path);
+                while (stmt.Step() == SQLite3.Result.Row)
+                    results.Add(ReadNodeFromStatement(stmt));
+            }
+            return results;
+        }
+
+        /// <summary>
+        /// All nodes with an exact (name, type) — uses idx_nodes_name_type instead of loading
+        /// every node of a type and filtering on Name in C#. Case-sensitive, matching the
+        /// previous FindNodesByType(...).Where(n =&gt; n.Name == name) behavior.
+        /// </summary>
+        public List<NodeRecord> FindNodesByNameAndTypeAll(string name, string type)
+        {
+            var results = new List<NodeRecord>();
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "SELECT * FROM nodes WHERE name = ? AND type = ?;"))
+            {
+                stmt.Bind(1, name);
+                stmt.Bind(2, type);
+                while (stmt.Step() == SQLite3.Result.Row)
+                    results.Add(ReadNodeFromStatement(stmt));
+            }
+            return results;
         }
 
         public List<NodeRecord> SearchByNameAdvanced(
@@ -846,76 +888,62 @@ namespace ArcForge.Hades.Editor.Graph
         {
             var excluded = excludedEdgeTypes ?? DefaultExcludedDependencyEdgeTypes;
 
-            using (var span = CharonEmitter.StartSpan("graph.query.traverse_dependencies", SpanKind.Internal))
+            var visited = new HashSet<long>();
+            var result = new List<NodeRecord>();
+            var queue = new Queue<(long nodeId, int depth)>();
+            queue.Enqueue((startNodeId, 0));
+            visited.Add(startNodeId);
+
+            while (queue.Count > 0)
             {
-                span.SetAttribute("query.start_node_id", startNodeId);
-                span.SetAttribute("query.max_depth", (long)maxDepth);
+                var (currentId, depth) = queue.Dequeue();
+                if (depth >= maxDepth) continue;
 
-                var visited = new HashSet<long>();
-                var result = new List<NodeRecord>();
-                var queue = new Queue<(long nodeId, int depth)>();
-                queue.Enqueue((startNodeId, 0));
-                visited.Add(startNodeId);
-
-                while (queue.Count > 0)
+                var edges = FindEdgesFrom(currentId);
+                foreach (var edge in edges)
                 {
-                    var (currentId, depth) = queue.Dequeue();
-                    if (depth >= maxDepth) continue;
+                    if (excluded.Contains(edge.Type)) continue;
+                    if (visited.Contains(edge.TargetNodeId)) continue;
+                    visited.Add(edge.TargetNodeId);
 
-                    var edges = FindEdgesFrom(currentId);
-                    foreach (var edge in edges)
+                    var targetNode = FindNodeById(edge.TargetNodeId);
+                    if (targetNode != null)
                     {
-                        if (excluded.Contains(edge.Type)) continue;
-                        if (visited.Contains(edge.TargetNodeId)) continue;
-                        visited.Add(edge.TargetNodeId);
-
-                        var targetNode = FindNodeById(edge.TargetNodeId);
-                        if (targetNode != null)
-                        {
-                            result.Add(targetNode);
-                            queue.Enqueue((edge.TargetNodeId, depth + 1));
-                        }
+                        result.Add(targetNode);
+                        queue.Enqueue((edge.TargetNodeId, depth + 1));
                     }
                 }
-
-                span.SetAttribute("results.count", (long)result.Count);
-                return result;
             }
+
+            return result;
         }
 
         public List<NodeRecord> FindNodesWithEdgeTo(long targetNodeId, string edgeType = null)
         {
-            using (var span = CharonEmitter.StartSpan("graph.query.find_nodes_with_edge_to", SpanKind.Internal))
+            var results = new List<NodeRecord>();
+            if (edgeType != null)
             {
-                span.SetAttribute("query.target_node_id", targetNodeId);
-                if (edgeType != null) span.SetAttribute("query.edge_type", edgeType);
-
-                var results = new List<NodeRecord>();
-                if (edgeType != null)
+                using (var stmt = new SQLitePreparedStatement(_connection,
+                    "SELECT n.* FROM nodes n JOIN edges e ON n.id = e.source_id WHERE e.target_id = ? AND e.type = ?;"))
                 {
-                    using (var stmt = new SQLitePreparedStatement(_connection,
-                        "SELECT n.* FROM nodes n JOIN edges e ON n.id = e.source_id WHERE e.target_id = ? AND e.type = ?;"))
-                    {
-                        stmt.Bind(1, targetNodeId);
-                        stmt.Bind(2, edgeType);
-                        while (stmt.Step() == SQLite3.Result.Row)
-                            results.Add(ReadNodeFromStatement(stmt));
-                    }
+                    stmt.Bind(1, targetNodeId);
+                    stmt.Bind(2, edgeType);
+                    while (stmt.Step() == SQLite3.Result.Row)
+                        results.Add(ReadNodeFromStatement(stmt));
                 }
-                else
-                {
-                    using (var stmt = new SQLitePreparedStatement(_connection,
-                        "SELECT n.* FROM nodes n JOIN edges e ON n.id = e.source_id WHERE e.target_id = ?;"))
-                    {
-                        stmt.Bind(1, targetNodeId);
-                        while (stmt.Step() == SQLite3.Result.Row)
-                            results.Add(ReadNodeFromStatement(stmt));
-                    }
-                }
-
-                span.SetAttribute("results.count", (long)results.Count);
-                return results;
             }
+            else
+            {
+                using (var stmt = new SQLitePreparedStatement(_connection,
+                    "SELECT n.* FROM nodes n JOIN edges e ON n.id = e.source_id WHERE e.target_id = ?;"))
+                {
+                    stmt.Bind(1, targetNodeId);
+                    while (stmt.Step() == SQLite3.Result.Row)
+                        results.Add(ReadNodeFromStatement(stmt));
+                }
+            }
+
+            return results;
         }
 
         /// <summary>
@@ -927,31 +955,27 @@ namespace ArcForge.Hades.Editor.Graph
         /// </summary>
         public List<NodeRecord> FindNodesWithEdgeTo(long targetNodeId, HashSet<string> excludedEdgeTypes)
         {
-            using (var span = CharonEmitter.StartSpan("graph.query.find_nodes_with_edge_to_filtered", SpanKind.Internal))
+            // Fetch all referrers with edge type so we can post-filter in C#
+            // (SQLite does not support array bind parameters).
+            var results = new List<NodeRecord>();
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "SELECT n.*, e.type as edge_type FROM nodes n JOIN edges e ON n.id = e.source_id WHERE e.target_id = ?;"))
             {
-                span.SetAttribute("query.target_node_id", targetNodeId);
-
-                // Fetch all referrers with edge type so we can post-filter in C#
-                // (SQLite does not support array bind parameters).
-                var results = new List<NodeRecord>();
-                using (var stmt = new SQLitePreparedStatement(_connection,
-                    "SELECT n.*, e.type as edge_type FROM nodes n JOIN edges e ON n.id = e.source_id WHERE e.target_id = ?;"))
+                stmt.Bind(1, targetNodeId);
+                while (stmt.Step() == SQLite3.Result.Row)
                 {
-                    stmt.Bind(1, targetNodeId);
-                    while (stmt.Step() == SQLite3.Result.Row)
-                    {
-                        // nodes.* has 12 columns (0-11: id, type, tier, guid, file_id,
-                        // parent_node_id, name, path, source_range, properties,
-                        // created_at, updated_at). e.type as edge_type is column 12.
-                        var edgeType = stmt.GetString(12);
-                        if (excludedEdgeTypes == null || !excludedEdgeTypes.Contains(edgeType))
-                            results.Add(ReadNodeFromStatement(stmt));
-                    }
+                    // nodes.* has 13 columns (0-12: id, type, tier, guid, file_id,
+                    // parent_node_id, name, path, source_range, properties,
+                    // created_at, updated_at, owner_guid). e.type as edge_type is column 13.
+                    // NOTE: this trailing index must be bumped whenever the nodes schema
+                    // gains a column (it just bit us once — owner_guid shifted it from 12).
+                    var edgeType = stmt.GetString(13);
+                    if (excludedEdgeTypes == null || !excludedEdgeTypes.Contains(edgeType))
+                        results.Add(ReadNodeFromStatement(stmt));
                 }
-
-                span.SetAttribute("results.count", (long)results.Count);
-                return results;
             }
+
+            return results;
         }
 
         public Dictionary<string, long> GetTypeCounts()

@@ -103,7 +103,7 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
                         EndTime = t.AddMilliseconds(200).ToUnixTimeMilliseconds(),
                         Status = SpanStatus.Ok
                     };
-                    span.Attributes["tool_name"] = "find_prefabs_with_component";
+                    span.Attributes[SpanAttributes.ToolName] = "find_prefabs_with_component";
                     span.Attributes["component_type"] = "ObjectPool";
                     charonDb.InsertSpan(span);
                 }

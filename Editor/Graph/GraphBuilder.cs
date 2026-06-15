@@ -41,6 +41,36 @@ namespace ArcForge.Hades.Editor.Graph
         static volatile bool _longOp;
         public static bool IsInLongOperation => _longOp;
 
+        // True while CheckStartupSync runs (firstBoot rebuild OR stale-asset catch-up). The
+        // stale-scan path uses BuildStatus.Updating, which is NOT a long op, so without this
+        // flag a tool call during startup would hit the 30s transport timeout instead of a
+        // clean busy. Set/cleared around CheckStartupSync.
+        static volatile bool _startupInProgress;
+        public static bool IsStartupInProgress => _startupInProgress;
+
+        // True while an incremental .cs scan subprocess runs off the main thread (the async
+        // debouncer path). _status stays Updating for its duration, so the asset-change drops in
+        // GraphAssetPostprocessor still hold — that is what keeps a main-thread DB write from
+        // racing the Node subprocess's own writes during the scan. This flag also adds the scan
+        // window to the MCP busy gate so a tool call lands a structured "busy" rather than waiting
+        // out the transport timeout.
+        static volatile bool _csScanInFlight;
+        public static bool IsCsScanInFlight => _csScanInFlight;
+
+        // In-flight async .cs scan handle + the deferred main-thread continuation (the rest of the
+        // incremental batch). Instance state — only one incremental runs at a time (the debouncer
+        // holds its flush while a scan is in flight; see GraphUpdateHandler.OnEditorUpdate).
+        System.Diagnostics.Process _csScanProc;
+        Action _csScanContinuation;
+
+        /// <summary>The condition the MCP transport uses to answer "busy" instead of queuing
+        /// a request onto a blocked main thread: a genuine long graph op, startup sync, or an
+        /// in-flight async incremental .cs scan.</summary>
+        public static bool IsBusyForRequests => _longOp || _startupInProgress || _csScanInFlight;
+
+        /// <summary>Test seam — drive the startup flag without running a real scan.</summary>
+        internal static void SetStartupInProgressForTests(bool value) => _startupInProgress = value;
+
         BuildStatus _statusBacking = BuildStatus.Idle;
         BuildStatus _status
         {
@@ -460,7 +490,7 @@ namespace ArcForge.Hades.Editor.Graph
                 {
                     foreach (var guid in stale)
                     {
-                        _db.DeleteNodesByGuid(guid);
+                        _db.DeleteNodesByOwnerGuid(guid);
                         _db.DeletePendingEdgesBySourceAsset(guid);
                     }
                 });
@@ -556,50 +586,58 @@ namespace ArcForge.Hades.Editor.Graph
         // Incremental update
         // -------------------------------------------------------------------
 
-        public void UpdateAssets(string[] guids)
+        public void UpdateAssets(string[] guids) => UpdateAssets(guids, deferCsScan: false);
+
+        /// <summary>
+        /// Incremental graph update for a set of changed asset GUIDs.
+        ///
+        /// When <paramref name="deferCsScan"/> is true (the interactive debouncer path) the .cs Node
+        /// scan runs OFF the main thread: the subprocess is spawned non-blocking and the rest of the
+        /// batch (meta nodes + scene/prefab re-scan + pending-edge resolution) is deferred to a
+        /// continuation that <see cref="PumpCsScan"/> runs once the subprocess exits — so a script
+        /// save no longer freezes the editor. When false (startup catch-up) it runs fully
+        /// synchronously, as before.
+        ///
+        /// <c>_status</c> stays <c>Updating</c> across the async scan, so concurrent asset-change
+        /// callbacks are dropped by GraphAssetPostprocessor — that is what keeps a main-thread DB
+        /// write from racing the Node subprocess's writes during the scan. The cost: a second asset
+        /// changed inside the brief scan window is re-indexed on its next change or the next full
+        /// rebuild (the same self-healing staleness a rebuild already has).
+        /// </summary>
+        public void UpdateAssets(string[] guids, bool deferCsScan)
         {
             if (guids == null || guids.Length == 0) return;
 
             _status = BuildStatus.Updating;
             _db.SetCurrentOperation("update", guids);
 
-            using (var span = CharonEmitter.StartSpan("graph.build.incremental", SpanKind.Internal))
-            {
-                span.SetAttribute("assets.count", (long)guids.Length);
+            var span = CharonEmitter.StartSpan("graph.build.incremental", SpanKind.Internal);
+            span.SetAttribute("assets.count", (long)guids.Length);
 
+            var csGuids = new List<string>();
+            var otherGuids = new List<string>();
+            var metaGuids = new List<(string guid, string path)>();
+
+            // Finalize exactly once, whichever path gets there first (doRest's finally, the
+            // classification catch, or the cs-scan dispatch catch). The flag prevents a
+            // double-close of the span/state across the sync and deferred paths.
+            bool finalized = false;
+            Action finish = () => { if (!finalized) { finalized = true; FinishIncremental(span); } };
+
+            // The remainder of the batch after the .cs scan. Runs inline (sync path) or as the
+            // deferred continuation once the off-thread .cs scan subprocess exits (async path); its
+            // finally finalizes the update exactly once on either path.
+            Action doRest = () =>
+            {
                 try
                 {
-                    var csGuids = new List<string>();
-                    var otherGuids = new List<string>();
-
-                    foreach (var guid in guids)
+                    if (metaGuids.Count > 0)
                     {
-                        var assetPath = AssetDatabase.GUIDToAssetPath(guid);
-                        if (string.IsNullOrEmpty(assetPath))
+                        _db.RunInTransaction(() =>
                         {
-                            _db.DeleteNodesByGuid(guid);
-                            _db.DeletePendingEdgesBySourceAsset(guid);
-                            continue;
-                        }
-
-                        if (!File.Exists(assetPath) && !Directory.Exists(assetPath))
-                        {
-                            _db.DeleteNodesByGuid(guid);
-                            _db.DeletePendingEdgesBySourceAsset(guid);
-                            continue;
-                        }
-
-                        if (assetPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-                            csGuids.Add(guid);
-                        else
-                            otherGuids.Add(guid);
-                    }
-
-                    if (csGuids.Count > 0)
-                    {
-                        var assetsDir = Application.dataPath;
-                        var guidList = string.Join(",", csGuids);
-                        RunNodeScanner("incremental", assetsDir, $"--guids \"{guidList}\"");
+                            foreach (var (guid, path) in metaGuids)
+                                WriteMetaNodeIfNeeded(guid, path);
+                        });
                     }
 
                     // Incrementals stay O(changed): no full session-map rebuild
@@ -613,9 +651,10 @@ namespace ArcForge.Hades.Editor.Graph
                         // the re-scan. Without this, modifying asset A erases every reference to A
                         // from OTHER (unchanged) assets — their pending edge was consumed at the last
                         // full build, so nothing recreates them — and reference edges erode with each
-                        // incremental update until a full rebuild heals them. Sources are almost all
-                        // NULL-guid component nodes (never deleted by DeleteNodesByGuid → ids stable);
-                        // a source that was itself re-scanned is dropped by the NodeExists check below.
+                        // incremental update until a full rebuild heals them. Sources in OTHER
+                        // (unchanged) assets are not touched by this asset's owner-scoped delete, so
+                        // their ids stay valid; a source inside the changed set is deleted and dropped
+                        // by the NodeExists check below (its re-scan rebuilds that edge anyway).
                         var inboundToRestore =
                             new List<(long sourceId, string targetGuid, long? targetFileId, string type, string properties)>();
 
@@ -642,7 +681,7 @@ namespace ArcForge.Hades.Editor.Graph
                                 foreach (var ie in _db.GetInboundEdgesToGuid(guid))
                                     inboundToRestore.Add((ie.sourceId, guid, ie.targetFileId, ie.edgeType, ie.properties));
 
-                                _db.DeleteNodesByGuid(guid);
+                                _db.DeleteNodesByOwnerGuid(guid);
                                 _db.DeletePendingEdgesBySourceAsset(guid);
 
                                 var tier = assetPath.StartsWith("Packages/") ? "package" : "project";
@@ -681,14 +720,171 @@ namespace ArcForge.Hades.Editor.Graph
                 }
                 finally
                 {
-                    _sessionNodeMap = null;
-                    _db.ClearCurrentOperation();
-                    _db.SetMetadata("last_incremental_at",
-                        DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
-                    _status = BuildStatus.Idle;
-                    OnRebuildComplete?.Invoke();
+                    finish();
+                }
+            };
+
+            try
+            {
+                foreach (var guid in guids)
+                {
+                    var assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                    if (string.IsNullOrEmpty(assetPath))
+                    {
+                        _db.DeleteNodesByOwnerGuid(guid);
+                        _db.DeletePendingEdgesBySourceAsset(guid);
+                        continue;
+                    }
+
+                    if (!File.Exists(assetPath) && !Directory.Exists(assetPath))
+                    {
+                        _db.DeleteNodesByOwnerGuid(guid);
+                        _db.DeletePendingEdgesBySourceAsset(guid);
+                        continue;
+                    }
+
+                    if (assetPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                        csGuids.Add(guid);
+                    else if (Scanning.MetaAssetTypes.IsMetaAsset(assetPath))
+                        metaGuids.Add((guid, assetPath));
+                    else
+                        otherGuids.Add(guid);
                 }
             }
+            catch (Exception ex)
+            {
+                span.SetStatus(SpanStatus.Error);
+                span.SetAttribute("error.message", ex.Message);
+                finish();
+                throw;
+            }
+
+            // Dispatch the .cs scan, then run the rest. Protected so a throw from the synchronous
+            // RunNodeScanner or the async spawn — before doRest's own finally can fire — still
+            // finalizes; otherwise _status / _csScanInFlight would stick "busy" forever. finish()
+            // is idempotent, so this never double-closes when doRest already finalized (and we skip
+            // touching the span in that case — it has already been disposed).
+            try
+            {
+                if (csGuids.Count > 0)
+                {
+                    var assetsDir = Application.dataPath;
+                    var guidList = string.Join(",", csGuids);
+                    if (deferCsScan)
+                    {
+                        // Off-thread: spawn the scan, defer the rest of the batch to PumpCsScan. The
+                        // editor keeps ticking instead of blocking in WaitForExit.
+                        _csScanInFlight = true;
+                        StartNodeScannerAsync("incremental", assetsDir, $"--guids \"{guidList}\"", doRest);
+                        return;
+                    }
+                    RunNodeScanner("incremental", assetsDir, $"--guids \"{guidList}\"");
+                }
+
+                doRest();
+            }
+            catch (Exception ex)
+            {
+                if (!finalized)
+                {
+                    span.SetStatus(SpanStatus.Error);
+                    span.SetAttribute("error.message", ex.Message);
+                }
+                _csScanInFlight = false;
+                finish();
+                throw;
+            }
+        }
+
+        // Finalizes an incremental update: drop the session map, clear the operation marker, stamp
+        // the timestamp, return to Idle, fire OnRebuildComplete, and close the trace span. Runs once
+        // per UpdateAssets — from doRest's finally (normal path) or the classification catch.
+        void FinishIncremental(System.IDisposable span)
+        {
+            _sessionNodeMap = null;
+            _db.ClearCurrentOperation();
+            _db.SetMetadata("last_incremental_at",
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
+            _status = BuildStatus.Idle;
+            OnRebuildComplete?.Invoke();
+            span.Dispose();
+        }
+
+        /// <summary>
+        /// Drives the async incremental .cs scan from <c>EditorApplication.update</c>: once the scan
+        /// subprocess has exited, runs the deferred main-thread continuation (the rest of the batch)
+        /// and clears the in-flight flag. Cheap no-op when no scan is running.
+        /// </summary>
+        public void PumpCsScan()
+        {
+            if (_csScanProc == null) return;
+            if (!_csScanProc.HasExited) return;
+
+            var proc = _csScanProc;
+            var cont = _csScanContinuation;
+            _csScanProc = null;
+            _csScanContinuation = null;
+            try
+            {
+                cont?.Invoke();
+            }
+            finally
+            {
+                _csScanInFlight = false;
+                proc.Dispose();
+            }
+        }
+
+        // Async sibling of RunNodeScanner for the interactive incremental path: spawns the Node
+        // scanner non-blocking (ProcessResolver.Start) and stores a continuation PumpCsScan runs
+        // after the subprocess exits. The subprocess writes graph.db via its own connection; the
+        // continuation (the rest of the batch) runs only once it has exited, so there is no
+        // concurrent writer. Falls back to the synchronous scanner for the rare node-missing /
+        // node_modules-not-yet-provisioned cases (npm install is a one-time blocking step), then
+        // continues. onComplete is invoked exactly once.
+        void StartNodeScannerAsync(string mode, string dirs, string extraArgs, Action onComplete)
+        {
+            var nodePath = ProcessResolver.FindExecutable("node");
+            if (nodePath == null)
+            {
+                Debug.LogWarning("[Hades] Node.js not found — script scanning disabled. Install Node.js for full graph indexing.");
+                _csScanInFlight = false;
+                onComplete();
+                return;
+            }
+
+            var projectRoot = Path.GetDirectoryName(Application.dataPath);
+            var dbPath = Path.Combine(projectRoot, ".arcforge", "graph.db");
+            var packageInfo = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(GraphBuilder).Assembly);
+            var scannerDir = Path.Combine(packageInfo.resolvedPath, "Scanner~");
+
+            if (!IsNodeModulesValid(scannerDir))
+            {
+                // node_modules provisioning (npm install) is rare + one-time; run that case through
+                // the synchronous scanner (it shows a progress bar) rather than complicate this path.
+                RunNodeScanner(mode, dirs, extraArgs);
+                _csScanInFlight = false;
+                onComplete();
+                return;
+            }
+
+            var args = $"\"{Path.Combine(scannerDir, "index.js")}\" --db \"{dbPath}\" --mode {mode} --dirs \"{dirs}\" --project-root \"{projectRoot}\" {extraArgs}";
+
+            var proc = ProcessResolver.Start(nodePath, args, projectRoot);
+            // Drain both streams immediately so a chatty scanner can't deadlock on a full pipe.
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+            _csScanProc = proc;
+            _csScanContinuation = () =>
+            {
+                if (proc.ExitCode != 0)
+                {
+                    string err = "";
+                    try { err = stderrTask.Result; } catch { }
+                    Debug.LogWarning($"[Hades] Incremental .cs scan exited {proc.ExitCode}: {err}");
+                }
+                onComplete();
+            };
         }
 
         public void HandleDeletedAssets(string[] deletedPaths)
@@ -875,6 +1071,41 @@ namespace ArcForge.Hades.Editor.Graph
             }
         }
 
+        /// <summary>
+        /// Incremental create/refresh for a meta-scanned asset (texture/model/audio/etc.).
+        /// Meta nodes derive nothing from binary content, so we NEVER hash the file and
+        /// NEVER delete-without-recreate (the v0.x bug that destroyed every texture node +
+        /// its inbound edges on each domain reload). If the node is missing, create it and
+        /// resolve any pending edges that targeted it; if present, just refresh its sentinel
+        /// row so the stale check keeps short-circuiting.
+        /// </summary>
+        void WriteMetaNodeIfNeeded(string guid, string assetPath)
+        {
+            if (!Scanning.MetaAssetTypes.TryGetType(assetPath, out var nodeType)) return;
+
+            var tier = assetPath.StartsWith("Packages/") ? "package" : "project";
+            var existing = _db.FindNodeByGuid(guid);
+
+            if (existing == null)
+            {
+                var node = new Models.NodeRecord(nodeType, guid)
+                {
+                    Name = Path.GetFileNameWithoutExtension(assetPath),
+                    Path = assetPath,
+                    OwnerGuid = guid
+                };
+                node.PropertiesJson = "{\"source\":\"meta\"}";
+                _db.InsertNode(node, tier);
+
+                // A material/scene scanned earlier may have deferred its reference to this
+                // not-yet-existing asset as a pending edge — resolve now that it exists.
+                ResolvePendingEdges(new[] { guid });
+            }
+
+            _db.RecordScannedAsset(guid, Scanning.MetaAssetTypes.SentinelHash,
+                Scanning.MetaAssetTypes.ScannerVersion);
+        }
+
         void ScanAsset(string assetPath, string tier)
         {
             var scanner = _scannerRegistry.GetScannerForPath(assetPath);
@@ -932,6 +1163,10 @@ namespace ArcForge.Hades.Editor.Graph
 
             foreach (var node in scanResult.Nodes)
             {
+                // Every node produced by scanning asset `assetGuid` is owned by it — the root
+                // node (owns itself) and all sub-object children alike. Deletion keys on this.
+                node.OwnerGuid = assetGuid;
+
                 var id = _db.InsertNode(node, tier);
                 var key = $"{node.Guid ?? ""}:{node.FileId ?? 0}";
                 localNodeMap[key] = id;
@@ -1376,6 +1611,7 @@ namespace ArcForge.Hades.Editor.Graph
 
             _buildLog = new GraphBuildLog(trigger);
 
+            _startupInProgress = true;
             try
             {
                 if (firstBoot)
@@ -1396,6 +1632,7 @@ namespace ArcForge.Hades.Editor.Graph
             }
             finally
             {
+                _startupInProgress = false;
                 _buildLog?.Flush(_db.GetNodeCount(), _db.GetEdgeCount());
                 _buildLog = null;
                 _cachedAllPaths = null;
@@ -1428,6 +1665,17 @@ namespace ArcForge.Hades.Editor.Graph
 
                 var guid = AssetDatabase.AssetPathToGUID(path);
                 if (string.IsNullOrEmpty(guid)) continue;
+
+                // Meta assets (textures/models/audio/…) have no content-derived node data, so
+                // never MD5 a binary here. Stale only if the node is missing (no sentinel row) or
+                // the meta format version changed. Creation/refresh happens in WriteMetaNodeIfNeeded.
+                if (Scanning.MetaAssetTypes.IsMetaAsset(path))
+                {
+                    var metaVersion = _db.GetScannedAssetScannerVersion(guid);
+                    if (metaVersion == null || metaVersion.Value < Scanning.MetaAssetTypes.ScannerVersion)
+                        staleGuids.Add(guid);
+                    continue;
+                }
 
                 var storedHash = _db.GetScannedAssetHash(guid);
                 if (storedHash == null)

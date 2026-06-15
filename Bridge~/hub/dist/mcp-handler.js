@@ -19,7 +19,22 @@ export async function forwardToolCall(registry, projectPath, body) {
     if (instance.status === "transient") {
         return await waitForTransientAndForward(instance.port, body);
     }
-    return await httpPost(instance.port, body);
+    try {
+        return await httpPost(instance.port, body);
+    }
+    catch {
+        // The instance was healthy in the registry but is now unreachable — typically it
+        // began a domain reload between routing and forwarding. Return a clean JSON-RPC
+        // error the client can retry, instead of letting the rejection surface as HTTP 500.
+        return JSON.stringify({
+            jsonrpc: "2.0",
+            id: extractId(body),
+            error: {
+                code: -32000,
+                message: "Unity instance unreachable (it may be reloading); please retry in a moment.",
+            },
+        });
+    }
 }
 async function waitForTransientAndForward(port, body) {
     const deadline = Date.now() + 10_000;

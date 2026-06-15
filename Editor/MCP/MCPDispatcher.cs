@@ -135,8 +135,8 @@ namespace ArcForge.Hades.Editor.MCP
         {
             using (var span = CharonEmitter.StartSpan($"mcp.tool.{name}", SpanKind.Server, traceId))
             {
-                span.SetAttribute("tool.name", name);
-                span.SetAttribute("tool.input", arguments.ToString(Newtonsoft.Json.Formatting.None));
+                span.SetAttribute(SpanAttributes.ToolName, name);
+                span.SetAttribute(SpanAttributes.ToolInput, arguments.ToString(Newtonsoft.Json.Formatting.None));
 
                 var result = CallTool(name, arguments);
 

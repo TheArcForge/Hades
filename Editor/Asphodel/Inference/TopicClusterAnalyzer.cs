@@ -54,7 +54,9 @@ namespace ArcForge.Hades.Editor.Asphodel.Inference
                     {
                         foreach (var attr in span.Attributes)
                         {
-                            if (attr.Key == "tool_name") continue;
+                            // Skip the tool identifier and the raw input JSON blob — tokenizing
+                            // the input would shred it into meaningless "topics".
+                            if (attr.Key == SpanAttributes.ToolName || attr.Key == SpanAttributes.ToolInput) continue;
                             foreach (var token in Tokenize(attr.Value))
                                 if (!StopWords.Contains(token) && token.Length > 2)
                                     keywords.Add(token.ToLower());

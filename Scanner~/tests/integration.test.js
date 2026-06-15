@@ -112,6 +112,13 @@ describe('integration: full scan', () => {
     const pendingEdges = db.prepare('SELECT * FROM pending_edges').all();
     expect(pendingEdges.length).toBeGreaterThanOrEqual(2); // at least one per file
 
+    // Every script node carries owner_guid = its file's guid: Script roots own
+    // themselves; ScriptType/ScriptMethod children inherit the owning file's guid.
+    for (const s of scriptNodes) expect(s.owner_guid).toBe(s.guid);
+    const fileGuids = new Set(scriptNodes.map(n => n.guid));
+    for (const t of typeNodes) expect(fileGuids.has(t.owner_guid)).toBe(true);
+    for (const m of methodNodes) expect(fileGuids.has(m.owner_guid)).toBe(true);
+
     const pendingTypes = pendingEdges.map(p => p.edge_type);
     expect(pendingTypes).toContain('extends_or_implements');
 

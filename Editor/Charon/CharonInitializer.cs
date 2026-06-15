@@ -6,18 +6,15 @@ using UnityEngine;
 
 namespace ArcForge.Hades.Editor.Charon
 {
-    [InitializeOnLoad]
+    // NOTE: no [InitializeOnLoad] — HadesBootstrap calls Initialize() first in the boot order
+    // so CharonEmitter.Database is set before Asphodel reads it (fixes #6).
     public static class CharonInitializer
     {
         static CharonDatabase _database;
 
-        static CharonInitializer()
+        internal static void Initialize()
         {
-            EditorApplication.delayCall += Initialize;
-        }
-
-        static void Initialize()
-        {
+            if (_database != null) return; // idempotent
             var settings = new HadesSettings();
             if (!settings.CharonEnabled) return;
 
@@ -37,13 +34,17 @@ namespace ArcForge.Hades.Editor.Charon
                 }
                 span.SetAttribute("retention.days", (long)settings.CharonRetentionDays);
 
-                // Backstop: enforce a hard size cap even within the retention window.
-                var capBytes = (long)settings.CharonMaxSizeMb * 1024 * 1024;
-                var trimmed = _database.EnforceSizeLimit(dbPath, capBytes);
+                // Backstop: cap the trace COUNT (not on-disk size) so startup never blocks on a
+                // synchronous VACUUM of a multi-GB traces.db (the felt-performance startup freeze).
+                // ~4 KB/trace estimate against the size budget, floored at 5000 traces. Freed pages
+                // are reused by later inserts, so the file plateaus; the B1 micro-span removal keeps
+                // growth slow enough that a count cap holds size flat in practice.
+                var maxTraces = System.Math.Max(5000, settings.CharonMaxSizeMb * 256);
+                var trimmed = _database.PruneToTraceCap(maxTraces);
                 if (trimmed > 0)
                 {
                     span.SetAttribute("traces.size_trimmed", (long)trimmed);
-                    Debug.Log($"[Hades Charon] Trimmed {trimmed} oldest traces to keep traces.db under {settings.CharonMaxSizeMb} MB");
+                    Debug.Log($"[Hades Charon] Pruned {trimmed} oldest traces to cap traces.db at ~{settings.CharonMaxSizeMb} MB (~{maxTraces} traces)");
                 }
             }
             CharonEmitter.Flush();

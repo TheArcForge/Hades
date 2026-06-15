@@ -212,7 +212,7 @@ function _writeParseResult({ db, filePath, guid, contentHash, scannerVersion, pa
   // orphaned: leaking them, and stranding their inbound edges on the dead old node.
   const oldScriptId = db.getScriptNodeIdByGuid(guid);
   const capturedInbound = oldScriptId != null ? db.captureInboundToFile(oldScriptId) : [];
-  db.deleteFileNodes(guid, oldScriptId);
+  db.deleteByOwnerGuid(guid);
   db.deletePendingEdgesBySourceAsset(guid);
 
   // Local parse id → DB row id mapping
@@ -231,6 +231,7 @@ function _writeParseResult({ db, filePath, guid, contentHash, scannerVersion, pa
     guid,
     properties: scriptNode.properties ? JSON.stringify(scriptNode.properties) : null,
     sourceRange: scriptNode.sourceRange ?? null,
+    ownerGuid: guid,
   });
   idMap.set(scriptNode.id, scriptDbId);
 
@@ -246,6 +247,7 @@ function _writeParseResult({ db, filePath, guid, contentHash, scannerVersion, pa
       fileId: scriptDbId,
       properties: node.properties ? JSON.stringify(node.properties) : null,
       sourceRange: node.sourceRange ?? null,
+      ownerGuid: guid,
     });
     idMap.set(node.id, dbId);
 

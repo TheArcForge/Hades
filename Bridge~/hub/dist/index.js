@@ -7,7 +7,6 @@ const HUB_JSON_PATH = path.join(HUB_DIR, "hub.json");
 const PENDING_DIR = path.join(HUB_DIR, "pending");
 const AUTO_EXIT_MS = 60_000;
 const HEARTBEAT_CHECK_INTERVAL_MS = 15_000;
-let autoExitStart = null;
 function writeHubJson(port) {
     if (!fs.existsSync(HUB_DIR)) {
         fs.mkdirSync(HUB_DIR, { recursive: true });
@@ -53,22 +52,16 @@ async function main() {
     setInterval(async () => {
         await checkStaleInstances(hub.registry, probeUnityInstance);
     }, HEARTBEAT_CHECK_INTERVAL_MS);
-    // Auto-exit check
+    // Auto-exit check. isIdle() already encodes the 60s window (no instances AND no launcher
+    // activity within it) and is robust to leaked launcher counts, so the old two-stage
+    // autoExitStart timer — and the immortal-hub bug it caused — are gone.
     setInterval(() => {
-        if (hub.registry.isEmpty()) {
-            if (autoExitStart === null) {
-                autoExitStart = Date.now();
-            }
-            else if (Date.now() - autoExitStart >= AUTO_EXIT_MS) {
-                process.stderr.write("[hades-hub] No connections for 60s, exiting.\n");
-                hub.close().then(() => {
-                    deleteHubJson();
-                    process.exit(0);
-                });
-            }
-        }
-        else {
-            autoExitStart = null;
+        if (hub.registry.isIdle(AUTO_EXIT_MS)) {
+            process.stderr.write("[hades-hub] No instances or launcher activity for 60s, exiting.\n");
+            hub.close().then(() => {
+                deleteHubJson();
+                process.exit(0);
+            });
         }
     }, HEARTBEAT_CHECK_INTERVAL_MS);
     const shutdown = () => {

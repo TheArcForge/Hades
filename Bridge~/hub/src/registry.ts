@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import {
   InstanceEntry,
   RegisterRequest,
@@ -8,6 +9,11 @@ import {
 export class Registry {
   private instances = new Map<string, InstanceEntry>();
   private _launcherCount = 0;
+  // Wall-clock of the last launcher request (connect or /rpc). Hub liveness is keyed on
+  // THIS, not _launcherCount: an abruptly-killed launcher never POSTs /api/launcher/disconnect,
+  // so the count leaks and previously kept the hub immortal (never auto-exiting, never
+  // picking up new code). Seeded to "now" so a just-started hub isn't instantly idle.
+  private _lastLauncherActivity = Date.now();
 
   get launcherCount(): number {
     return this._launcherCount;
@@ -82,14 +88,27 @@ export class Registry {
 
   launcherConnect(): void {
     this._launcherCount++;
+    this._lastLauncherActivity = Date.now();
   }
 
   launcherDisconnect(): void {
     if (this._launcherCount > 0) this._launcherCount--;
   }
 
+  /** Record any launcher request (connect or /rpc forward), so an actively-used hub stays
+   * alive without relying on a disconnect notification that abrupt exits never send. */
+  noteLauncherActivity(): void {
+    this._lastLauncherActivity = Date.now();
+  }
+
   isEmpty(): boolean {
     return this.instances.size === 0 && this._launcherCount === 0;
+  }
+
+  /** Auto-exit gate: no Unity instances AND no launcher activity within `autoExitMs`. Unlike
+   * isEmpty() this is robust to leaked launcher counts, so the hub stops being immortal. */
+  isIdle(autoExitMs: number, now: number = Date.now()): boolean {
+    return this.instances.size === 0 && now - this._lastLauncherActivity > autoExitMs;
   }
 
   instanceCount(): number {
@@ -131,10 +150,32 @@ export class Registry {
     );
     if (manifestMatch) return manifestMatch;
 
+    // 5. Single-instance fallback: nothing matched, but if exactly ONE instance is
+    // registered (and it's active) it's unambiguous — route to it. Handles a launcher that
+    // can't identify its project (e.g. cwd is "/") when only one Unity is open. Keyed on the
+    // total registered count, NOT active count: with a second (e.g. reloading/stale) instance
+    // present there are two projects in play, so querying one must never route to the other.
+    if (this.instances.size === 1 && active.length === 1) return active[0];
+
     return null;
   }
 }
 
 function normalizePath(p: string): string {
-  return p.replace(/\/+$/, "");
+  let resolved = p;
+  try {
+    // Resolve symlinks so a symlinked cwd matches a real registered project path (and
+    // vice-versa). Unity registers a lexical Path.GetFullPath; the launcher's cwd is
+    // already realpath-resolved by getcwd — canonicalizing both sides closes that gap.
+    resolved = fs.realpathSync(p);
+  } catch {
+    // Path not on disk (moved/deleted project, or a synthetic test path) — use as given.
+  }
+  // Strip trailing slashes, but never collapse the root "/" to "" — an empty cwd makes the
+  // parent-match `startsWith(cwd + "/")` match every absolute path.
+  resolved = resolved.replace(/\/+$/, "") || "/";
+  // macOS (APFS) and Windows default to case-insensitive filesystems; compare case-folded.
+  return process.platform === "win32" || process.platform === "darwin"
+    ? resolved.toLowerCase()
+    : resolved;
 }

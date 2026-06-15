@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { META_SENTINEL_HASH, META_SCANNER_VERSION } from './meta-constants.js';
 
 const PRAGMAS = `
 PRAGMA journal_mode = WAL;
@@ -23,7 +24,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     source_range TEXT,
     properties TEXT,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    owner_guid TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
 CREATE INDEX IF NOT EXISTS idx_nodes_guid ON nodes(guid);
@@ -31,6 +33,7 @@ CREATE INDEX IF NOT EXISTS idx_nodes_path ON nodes(path);
 CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_node_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_name_type ON nodes(name, type);
 CREATE INDEX IF NOT EXISTS idx_nodes_tier ON nodes(tier);
+CREATE INDEX IF NOT EXISTS idx_nodes_owner_guid ON nodes(owner_guid);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_guid_fileid ON nodes(guid, file_id) WHERE guid IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS edges (
@@ -105,8 +108,8 @@ export class DbWriter {
 
   #prepareStatements() {
     this.#stmtInsertNode = this.#db.prepare(`
-      INSERT INTO nodes (type, tier, guid, file_id, parent_node_id, name, path, source_range, properties, created_at, updated_at)
-      VALUES (@type, @tier, @guid, @fileId, @parentNodeId, @name, @path, @sourceRange, @properties, @createdAt, @updatedAt)
+      INSERT INTO nodes (type, tier, guid, file_id, parent_node_id, name, path, source_range, properties, created_at, updated_at, owner_guid)
+      VALUES (@type, @tier, @guid, @fileId, @parentNodeId, @name, @path, @sourceRange, @properties, @createdAt, @updatedAt, @ownerGuid)
     `);
 
     this.#stmtInsertEdge = this.#db.prepare(`
@@ -157,7 +160,7 @@ export class DbWriter {
    *            parentNodeId?: number, tier?: string, sourceRange?: string, properties?: string }} params
    * @returns {number}
    */
-  insertNode({ type, name, path, guid, fileId, parentNodeId, tier, sourceRange, properties } = {}) {
+  insertNode({ type, name, path, guid, fileId, parentNodeId, tier, sourceRange, properties, ownerGuid } = {}) {
     const now = Math.floor(Date.now() / 1000);
     const result = this.#stmtInsertNode.run({
       type,
@@ -171,6 +174,7 @@ export class DbWriter {
       properties: properties ?? null,
       createdAt: now,
       updatedAt: now,
+      ownerGuid: ownerGuid ?? null,
     });
     return result.lastInsertRowid;
   }
@@ -284,7 +288,7 @@ export class DbWriter {
   /**
    * Captures inbound edges targeting a file's Script node (guid-bearing) and its ScriptType
    * nodes (NULL-guid, linked by file_id), BEFORE the file is re-scanned. Those target nodes are
-   * deleted on re-scan (see deleteFileNodes); without capture+restore, references to them from
+   * deleted on re-scan (see deleteByOwnerGuid); without capture+restore, references to them from
    * OTHER, unchanged files (code_references / inherits_from / implements, plus instance_of /
    * references to the Script) are cascade-deleted and never recreated — the C# analogue of the
    * Unity-side edge erosion. Re-point after re-scan: Script targets by guid (stable), ScriptType
@@ -304,18 +308,14 @@ export class DbWriter {
   }
 
   /**
-   * Deletes a file's FULL node set on re-scan: the NULL-guid ScriptType/ScriptMethod nodes
-   * (linked by file_id = the Script node's id) plus the guid-bearing Script node itself.
-   * deleteNodesByGuid alone matched only the Script node, leaking the type/method nodes and
-   * stranding their inbound edges on the now-orphaned old node. Cascades to edges.
-   * @param {string} guid
-   * @param {number|null} scriptNodeId
+   * Deletes an asset's FULL node set by owner_guid — the root node (owns itself) plus all
+   * sub-object children (ScriptType/ScriptMethod), which all carry owner_guid = the file's guid.
+   * Unifies the C# and Node delete paths on a single ownership key (replaces the old
+   * file_id-based deleteFileNodes). Cascades to edges.
+   * @param {string} ownerGuid
    */
-  deleteFileNodes(guid, scriptNodeId) {
-    if (scriptNodeId != null) {
-      this.#db.prepare('DELETE FROM nodes WHERE file_id = ?').run(scriptNodeId);
-    }
-    this.#stmtDeleteNodesByGuid.run(guid);
+  deleteByOwnerGuid(ownerGuid) {
+    this.#db.prepare('DELETE FROM nodes WHERE owner_guid = ?').run(ownerGuid);
   }
 
   /**
@@ -337,6 +337,7 @@ export class DbWriter {
   insertMetaAssets(assets) {
     const stmtCheck = this.#db.prepare('SELECT 1 FROM nodes WHERE guid = ? LIMIT 1');
     const insert = this.#stmtInsertNode;
+    const record = this.#stmtRecordScannedAsset;
     const tier = this.#defaultTier;
     const now = Math.floor(Date.now() / 1000);
 
@@ -356,6 +357,17 @@ export class DbWriter {
           properties: JSON.stringify({ source: 'meta' }),
           createdAt: now,
           updatedAt: now,
+          ownerGuid: asset.guid,
+        });
+
+        // Track in scanned_assets with a cheap sentinel (never an MD5 of the binary)
+        // so the C# stale check short-circuits these instead of re-hashing + destroying
+        // them on every domain reload.
+        record.run({
+          guid: asset.guid,
+          contentHash: META_SENTINEL_HASH,
+          scannedAt: now,
+          scannerVersion: META_SCANNER_VERSION,
         });
       }
     });

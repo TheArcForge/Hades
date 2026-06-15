@@ -36,7 +36,7 @@ namespace ArcForge.Hades.Editor.Asphodel.Inference
                 if (!spansByTrace.TryGetValue(trace.TraceId, out var traceSpans)) continue;
                 foreach (var span in traceSpans)
                 {
-                    if (!span.Attributes.ContainsKey("tool_name")) continue;
+                    if (!span.Attributes.ContainsKey(SpanAttributes.ToolName)) continue;
                     var fp = BuildFingerprint(span);
                     if (!fingerprints.ContainsKey(fp))
                         fingerprints[fp] = new List<int>();
@@ -63,10 +63,10 @@ namespace ArcForge.Hades.Editor.Asphodel.Inference
                 if (confidence < 0.5f) continue;
 
                 var sampleSpan = spansByTrace[filtered[kvp.Value[0]].TraceId][0];
-                var toolName = sampleSpan.Attributes.ContainsKey("tool_name")
-                    ? sampleSpan.Attributes["tool_name"] : "unknown";
+                var toolName = sampleSpan.Attributes.ContainsKey(SpanAttributes.ToolName)
+                    ? sampleSpan.Attributes[SpanAttributes.ToolName] : "unknown";
                 var primaryAttr = sampleSpan.Attributes
-                    .Where(a => a.Key != "tool_name")
+                    .Where(a => a.Key != SpanAttributes.ToolName)
                     .Select(a => $"{a.Key}={a.Value}")
                     .FirstOrDefault() ?? "";
 
@@ -97,10 +97,10 @@ namespace ArcForge.Hades.Editor.Asphodel.Inference
 
         string BuildFingerprint(SpanRecord span)
         {
-            var toolName = span.Attributes.ContainsKey("tool_name")
-                ? span.Attributes["tool_name"] : span.Name;
+            var toolName = span.Attributes.ContainsKey(SpanAttributes.ToolName)
+                ? span.Attributes[SpanAttributes.ToolName] : span.Name;
             var attrKeys = span.Attributes.Keys
-                .Where(k => k != "tool_name")
+                .Where(k => k != SpanAttributes.ToolName)
                 .OrderBy(k => k);
             return toolName + ":" + string.Join(",", attrKeys);
         }
@@ -128,13 +128,13 @@ namespace ArcForge.Hades.Editor.Asphodel.Inference
                 if (!spansByTrace.TryGetValue(nextTrace.TraceId, out var nextSpans)) continue;
                 foreach (var nextSpan in nextSpans)
                 {
-                    if (!nextSpan.Attributes.ContainsKey("tool_name")) continue;
+                    if (!nextSpan.Attributes.ContainsKey(SpanAttributes.ToolName)) continue;
                     var nextFp = BuildFingerprint(nextSpan);
                     if (nextFp == fingerprint)
                     {
                         // Same fingerprint keys but check if values differ
                         if (!spansByTrace.TryGetValue(currentTrace.TraceId, out var curSpans)) continue;
-                        var curSpan = curSpans.FirstOrDefault(s => s.Attributes.ContainsKey("tool_name"));
+                        var curSpan = curSpans.FirstOrDefault(s => s.Attributes.ContainsKey(SpanAttributes.ToolName));
                         if (curSpan != null && HaveDifferentValues(curSpan, nextSpan))
                             return false;
                     }
@@ -146,7 +146,7 @@ namespace ArcForge.Hades.Editor.Asphodel.Inference
 
         bool HaveDifferentValues(SpanRecord a, SpanRecord b)
         {
-            foreach (var key in a.Attributes.Keys.Where(k => k != "tool_name"))
+            foreach (var key in a.Attributes.Keys.Where(k => k != SpanAttributes.ToolName))
             {
                 if (b.Attributes.ContainsKey(key) && a.Attributes[key] != b.Attributes[key])
                     return true;
