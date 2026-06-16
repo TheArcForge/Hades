@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [1.1.0] — Graph Ownership Model, Incremental Integrity & Startup Reliability
+## [1.1.0] — Graph Ownership Model, Incremental Integrity, Startup Reliability & Felt Performance
 
 A correctness round on the incremental-update path. Every graph node now records the asset that owns it (`owner_guid`), so an asset's full node set is created, deleted, and rebuilt as a single unit. This closes a class of silent graph corruption where domain reloads and re-scans destroyed or leaked nodes, and promotes meta-scanned assets (textures, models, audio, animation, fonts, etc.) to first-class citizens of the incremental lifecycle.
 

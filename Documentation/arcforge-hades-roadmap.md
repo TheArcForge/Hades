@@ -2416,9 +2416,10 @@ Hades version progresses with each phase:
 - Phase 9 complete (graph coverage): v0.9.5 ✅
 - Phase 10 in progress (public release): v0.9.9
 - Phase 10 complete (public release): **v1.0.0**
+- Post-1.0 maintenance round "Update 1" — graph ownership model + incremental integrity, startup & connection reliability, and a felt-performance pass: **v1.1.0**
 - Phase 11: v1.x and v2.x as evolution dictates
 
-Versions 0.1.0–0.6.0 are internal milestones. v0.9.0–0.9.9 are beta releases incorporating field feedback. v1.0.0 is the first publicly announced release. Both `package.json` (UPM) and `plugin.json` (Claude Code) track these tags in lockstep.
+Versions 0.1.0–0.6.0 are internal milestones. v0.9.0–0.9.9 are beta releases incorporating field feedback. v1.0.0 is the first publicly announced release; v1.1.0 is the first post-release correctness-and-performance round (see `CHANGELOG.md` for the full entry). Both `package.json` (UPM) and `plugin.json` (Claude Code) track these tags in lockstep.
 
 ### 14.5 Anthropic plugin marketplace submission
 
@@ -2433,13 +2434,15 @@ After Phase 10, Hades is:
 - A Unity Package at `TheArcForge/Hades` distributable via UPM git URL
 - A Claude Code plugin at `TheArcForge/hades-plugin` installable via `/plugin install` (marketplace) or `claude --plugin-dir <path>` (local), discoverable through the Anthropic plugin marketplace
 - A coherent product with three integrated layers (Graph, Charon, Asphodel) plus 22 Skills and 6 slash commands
-- 89+ MCP tools (21 native + 68 migrated editor-action tools), with comprehensive graph coverage across all Unity asset types and C# code-level references
+- 90 MCP tools (22 native + 68 migrated editor-action tools), with comprehensive graph coverage across all Unity asset types and C# code-level references
 - Documented for users with setup guide, troubleshooting guide, and architecture docs
 - Battle-tested on real Unity projects through dogfooding and large-scale field validation
 - Open source under MIT license
 - Free of dependencies on Anthropic auth that could be revoked
 
 It is ready to be used by developers who are not the original developer.
+
+**Update 1 (v1.1.0)** hardened this foundation: the graph's incremental-update path got an ownership model (`owner_guid`) that ends a class of silent node/edge corruption; Editor startup became a single ordered bootstrap (`HadesBootstrap`) that keeps the MCP server reachable across domain reloads; the hub/launcher connectivity was made resilient (forgiving path-matching, time-based hub liveness, spawn-lock); the dead Charon→Asphodel inference loop was repaired; and a felt-performance pass took the per-save editor freeze and the full-table query scans off the hot path. See `CHANGELOG.md` §[1.1.0]. (One residual is tracked: a backgrounded, App-Napped editor can still delay the post-reload bootstrap — `wake-unity.sh` is the recovery.)
 
 ---
 

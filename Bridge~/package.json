@@ -1,6 +1,6 @@
 {
   "name": "hades-bridge",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP Hub and Launcher for Hades Unity integration",
   "type": "module",
   "scripts": {

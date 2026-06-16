@@ -42,7 +42,7 @@ const HUB_STARTUP_TIMEOUT_MS = 15000;
 
 const PROTOCOL_VERSION = "2024-11-05";
 const SERVER_NAME = "hades";
-const SERVER_VERSION = "0.9.1";
+const SERVER_VERSION = "1.1.0";
 
 interface HubInfo {
   port: number;

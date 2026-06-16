@@ -12,7 +12,7 @@
 
 ![Hades in action — the agent answers project-structure questions from the knowledge graph instead of grepping and guessing](Documentation/demo.gif)
 
-Hades is Unity-aware AI infrastructure for Claude Code. It builds a queryable knowledge graph of your entire Unity project — every scene, prefab, script, asset, and dependency — so your AI agent *knows* your project's structure instead of guessing at it. Out of the box you get 88 MCP tools, 22 skills, and 6 commands. Everything runs locally, and everything is version-controllable.
+Hades is Unity-aware AI infrastructure for Claude Code. It builds a queryable knowledge graph of your entire Unity project — every scene, prefab, script, asset, and dependency — so your AI agent *knows* your project's structure instead of guessing at it. Out of the box you get 90 MCP tools, 22 skills, and 6 commands. Everything runs locally, and everything is version-controllable.
 
 <!-- ===================== HERO DEMO GIF (placeholder) =====================
      TODO: replace Documentation/media/demo-hero.gif with the final side-by-side render.
@@ -55,7 +55,7 @@ Hades lets your agent **know and analyze**. When it asks "what references `Playe
 | **Charon** | Full observability — every tool call, graph query, and memory operation is traced. Inspect via the local dashboard (**Hades > Open Charon Dashboard** in Unity). |
 | **Asphodel** | Persistent project memory in version-controlled markdown (`.arcforge/memory/`). Capture decisions, patterns, and conventions once; the agent reads them for context-aware advice every session. |
 | **22 Skills** | Architecture decisions, workflow guidance, and domain expertise — networking, audio, UI, shaders, ECS, testing, and more. |
-| **88 MCP Tools** | 21 graph/charon/memory tools + 67 editor-action tools (scenes, components, prefabs, materials, animation, assets). |
+| **90 MCP Tools** | 22 graph/charon/memory tools + 68 editor-action tools (scenes, components, prefabs, materials, animation, assets). |
 | **6 Commands** | `/hades:status`, `/hades:rebuild-graph`, `/hades:show-traces`, `/hades:validate-memory`, `/hades:show-proposals`, `/hades:export-traces` |
 
 ### How the pieces fit together
@@ -63,7 +63,7 @@ Hades lets your agent **know and analyze**. When it asks "what references `Playe
 ```mermaid
 flowchart TD
     Agent["AI Agent<br/>(Claude Code)"]
-    Agent <-->|"88 MCP tools (via Bridge)"| Hades
+    Agent <-->|"90 MCP tools (via Bridge)"| Hades
 
     subgraph Hades["Hades — inside the Unity Editor"]
         Graph["Graph<br/>project knowledge graph"]
@@ -77,7 +77,7 @@ flowchart TD
     Asphodel -.->|"traced by"| Charon
 ```
 
-Your agent talks to Hades through the **88 MCP tools** (carried over the Bridge launcher and hub). Inside the Unity Editor, **Graph** indexes your project's structure, **Asphodel** persists project memory as version-controlled markdown, and **Charon** traces every operation so nothing is hidden.
+Your agent talks to Hades through the **90 MCP tools** (carried over the Bridge launcher and hub). Inside the Unity Editor, **Graph** indexes your project's structure, **Asphodel** persists project memory as version-controlled markdown, and **Charon** traces every operation so nothing is hidden.
 
 ## How Hades compares
 

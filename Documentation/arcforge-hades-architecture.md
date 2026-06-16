@@ -102,7 +102,7 @@ Within the Unity Package and its supporting infrastructure, there are four logic
 
 **Hades Graph** — the project knowledge graph. Built and maintained by C# scanners running inside the editor; persisted to a SQLite database at `.arcforge/graph.db`; queried by MCP tools that translate agent intent into SQL.
 
-**Hades Charon** — observability. Trace events emitted from every MCP tool call, every graph query, every memory operation. Persisted to a SQLite database at `.arcforge/traces.db`. Visualizable via the Charon dashboard.
+**Hades Charon** — observability. Trace events emitted from every MCP tool call, every graph build, every memory operation. Persisted to a SQLite database at `.arcforge/traces.db`. Visualizable via the Charon dashboard.
 
 **Hades Asphodel** — memory. Markdown files at `.arcforge/memory/` providing both Tier 1 (explicit, human-curated, git-tracked) and Tier 2 (inferred, auto-generated, also git-tracked alongside Tier 1). Read by MCP tools that inject relevant memory into agent context.
 
@@ -114,7 +114,7 @@ These four components share infrastructure (the MCP server, the editor lifecycle
 
 A substantial portion of Hades's runtime infrastructure is reused from UniClaude. Specifically:
 
-- **`MCPServer.cs`** — the in-process HTTP server inside the Unity Editor, started via `[InitializeOnLoad]`. Battle-tested in UniClaude and survives Unity's lifecycle quirks (domain reload, assembly reload, play mode transitions).
+- **`MCPServer.cs`** — the in-process HTTP server inside the Unity Editor, now started from the ordered `HadesBootstrap` composition root (§1.7) rather than its own independent `[InitializeOnLoad]`. Battle-tested in UniClaude and survives Unity's lifecycle quirks (domain reload, assembly reload, play mode transitions).
 - **`HttpTransport`** — the HTTP/SSE transport layer on localhost.
 - **`MCPDispatcher`** — reflection-based discovery of methods decorated with `[MCPTool]`, parameter mapping via `[MCPToolParam]`, response wrapping via `MCPToolResult`.
 - **Main Thread Bridge** — `ConcurrentQueue<WorkItem>` that funnels HTTP requests onto Unity's main thread, drained by `EditorApplication.update`. Required because Unity APIs are not thread-safe.
@@ -143,8 +143,8 @@ Claude Code ←(stdio)→ Launcher ←(HTTP)→ Hub ←(HTTP)→ Unity Instance(
 ```
 
 - The Unity Package's MCP server listens on `http://127.0.0.1:<port>` and registers with the Hub.
-- The Hub maintains a registry of connected Unity instances, routes tool calls by matching the Claude Code session's working directory to the correct instance.
-- The Launcher is a thin stdio process declared in the plugin's `.mcp.json`. Claude Code spawns it automatically. It ensures the Hub is running and bridges stdio to HTTP.
+- The Hub maintains a registry of connected Unity instances and routes tool calls by matching the Claude Code session's working directory to the correct instance. Path matching is forgiving — it canonicalizes both sides (`realpath` + case-fold) and, when exactly one Unity is open, falls back to routing an otherwise-unidentifiable call (e.g. a launcher whose cwd resolved to `/`) to that single instance.
+- The Launcher is a thin stdio process declared in the plugin's `.mcp.json`. Claude Code spawns it automatically. It resolves the real Unity project root by walking up from its cwd, ensures the Hub is running (acquiring an exclusive `O_EXCL` spawn lock so racing launchers cannot start duplicate/zombie hubs), and bridges stdio to HTTP.
 - Standard MCP protocol messages flow over the connection: `initialize`, `tools/list`, `tools/call`, etc. The `initialize` response includes an `instructions` field containing agent guidance text (which tools to prefer, how to interpret results, behavioral notes). Both Claude Code and Claude Desktop read this field and use it to guide tool selection behavior for the session.
 
 **Why HTTP on localhost:**
@@ -156,7 +156,7 @@ Claude Code ←(stdio)→ Launcher ←(HTTP)→ Hub ←(HTTP)→ Unity Instance(
 
 Performance is sufficient. The overhead of HTTP on localhost is 1-2ms per request, negligible compared to agent reasoning time (hundreds of milliseconds to seconds).
 
-The Hub architecture resolves three known MCP connectivity issues from earlier phases (server entry lost during compilation failures, `.mcp.json` scoped to wrong directory, `.mcp.json` not found from repo root) by making connectivity directory-independent and resilient to Unity lifecycle disruptions.
+The Hub architecture resolves three known MCP connectivity issues from earlier phases (server entry lost during compilation failures, `.mcp.json` scoped to wrong directory, `.mcp.json` not found from repo root) by making connectivity directory-independent and resilient to Unity lifecycle disruptions. Later hardening made the Hub's own lifecycle robust: it auto-exits when genuinely idle based on the **time since last launcher activity** (replacing a launcher *count* that leaked whenever a launcher was killed abruptly — an "immortal hub" that ran for days serving stale code), and forwarding a tool call to a Unity instance that has just begun a domain reload returns a clean, retryable JSON-RPC error instead of a raw `HTTP 500`.
 
 ### 1.6 The threading model
 
@@ -176,7 +176,9 @@ This design has these properties:
 - HTTP threads can serve multiple concurrent requests (up to the .NET HTTP listener's pool size).
 - Each request has a 30-second timeout. If a request takes longer (e.g., a graph rebuild on a large project), the HTTP thread returns a timeout error while the main thread continues processing. The result is discarded when it eventually arrives.
 - Domain reloads are blocked for the duration of a **turn** (not just a single request) via `EditorApplication.LockReloadAssemblies()`. The lock is acquired on the first tool call of a turn and released when `OnTurnComplete()` fires or a 120-second safety timeout elapses (`AutoReloadStrategy.cs`). This prevents Unity from reloading assemblies mid-turn, which would corrupt state.
-- **Busy fast-path**: if the graph is currently in a long-running rebuild operation (`GraphBuilder.IsInLongOperation`), incoming requests are answered immediately from the background thread with a `"busy"` / `rebuild_in_progress` response — bypassing the main-thread queue entirely. This only gates genuine long operations; fast incremental updates do not trigger it.
+- **Busy fast-path**: when the graph is busy in a way that would block the main-thread queue, incoming requests are answered immediately from the background thread with a structured `"busy"` / `rebuild_in_progress` response — bypassing the main-thread queue entirely, so the client gets a clean `busy` rather than a 30-second timeout. The gate (`GraphBuilder.IsBusyForRequests`) covers a genuine long operation (full rebuild / package scan), the deferred startup sync, **and** the window of an off-thread incremental `.cs` scan (`_csScanInFlight`). The fast non-`.cs` incremental work is intentionally NOT gated — it finishes within a frame, and gating it would risk a spurious retry on an already-applied non-idempotent write.
+
+**Off-thread incremental script scan.** One main-thread operation used to violate the "fast queue" assumption: an interactive `.cs` save ran the Node scanner synchronously (`Process.WaitForExit`), freezing the editor for the scan's duration. The interactive path now spawns that subprocess **non-blocking** (`ProcessResolver.Start`) and polls `HasExited` on `EditorApplication.update` (`GraphBuilder.PumpCsScan`); the rest of the incremental batch runs in a continuation once the subprocess exits. The main-thread queue keeps draining throughout, and `_csScanInFlight` busy-gates tool calls for the scan window. The startup catch-up scan stays synchronous (it already runs behind a progress bar and the busy gate).
 
 The threading model is robust but adds latency. A request waits until the next `EditorApplication.update` tick before its `WorkItem` is processed. The wait is typically sub-millisecond at normal frame rates. *(Note: no specific worst-case tick guarantee applies — Unity's frame rate varies and the backgrounded editor case is described below.)*
 
@@ -186,8 +188,8 @@ The threading model is robust but adds latency. A request waits until the next `
 
 A typical day in the life of Hades:
 
-1. User opens the Unity Editor. `[InitializeOnLoad]` triggers Hades startup. The MCP server begins listening on a chosen port. The graph is loaded from disk (or rebuilt if the disk version is missing or outdated). Server startup also writes a `CLAUDE.md` to the Unity project root for Claude Code agent guidance (non-destructive: if `CLAUDE.md` already exists, Hades content is appended inside clearly marked fenced markers rather than overwriting the file).
-2. The graph is brought up to date with any project changes that happened while Unity was closed. This can take seconds to a minute on a large project.
+1. User opens the Unity Editor. A single `[InitializeOnLoad]` composition root, **`HadesBootstrap`**, runs Hades startup in one explicit order — Charon → GraphDb → Asphodel → MCP server → graph event hooks → package watcher — replacing eight independent `[InitializeOnLoad]` entry points whose undefined relative order caused real bugs (e.g. Asphodel reading Charon's not-yet-set database and leaving the inference engine null; see §4). Crucially the MCP server begins listening, registers with the Hub, and arms its background heartbeat **before** the (potentially blocking) graph startup sync, which is deferred to a later tick — so the server stays reachable even while a rebuild pins the main thread. Server startup also writes a `CLAUDE.md` to the Unity project root for Claude Code agent guidance (non-destructive: if `CLAUDE.md` already exists, Hades content is appended inside clearly marked fenced markers rather than overwriting the file).
+2. On a later tick, the graph is brought up to date with any project changes that happened while Unity was closed. This can take seconds to a minute on a large project; while it runs, tool calls return a structured `busy` (the startup sync is covered by the busy gate) rather than timing out.
 3. The Charon emitter starts logging events.
 4. The user opens their agent client (Claude Code or Claude Desktop). For Claude Code, the plugin's `.mcp.json` declares the launcher; for Claude Desktop, Unity configured `claude_desktop_config.json` to point at the stable launcher copy.
 5. The launcher starts the Hub (if not already running), registers as a connected session, and bridges stdio to HTTP. The Hub routes tool calls to the correct Unity instance by matching the session's working directory. If the agent client starts before Unity, the tools list is empty until Unity registers. See **Plugin document** §3 for the full connectivity architecture.
@@ -208,7 +210,7 @@ What this looks like concretely:
 
 - **Per-project storage.** Each project has its own `.arcforge/graph.db`, `.arcforge/traces.db`, `.arcforge/memory/`. Project A's data lives in Project A's directory; Project B's lives in Project B's. No cross-contamination.
 - **Independent MCP servers.** Each Unity instance starts its own MCP server on an OS-assigned ephemeral port (default `Port=0`). Each instance registers independently with the MCP Hub, keyed by project path.
-- **Hub-based routing.** The MCP Hub maintains a registry of all connected Unity instances. When Claude Code makes a tool call, the Hub routes it to the correct instance by matching the session's working directory to registered project paths. See **Plugin document** §3.5 for the matching algorithm.
+- **Hub-based routing.** The MCP Hub maintains a registry of all connected Unity instances. When Claude Code makes a tool call, the Hub routes it to the correct instance by matching the session's working directory to registered project paths — canonicalized (`realpath` + case-fold) so equivalent paths match, with a single-instance fallback when only one Unity is open. See **Plugin document** §3.5 for the matching algorithm.
 - **Independent dashboards.** When the user launches the Charon dashboard from Unity instance A, the dashboard process is scoped to Project A's traces database and binds to an OS-assigned ephemeral port. If the user launches a dashboard from Unity instance B, it gets its own OS-assigned port and reads Project B's traces. The two dashboards run simultaneously without interference. The user can have multiple browser tabs open, one per project.
 - **Independent skills config.** Skills are installed globally in the Claude Code config (per Vision §7.5), not per project. Both instances of the agent client read from the same global skill library. This is the correct shape — skills are meant to be shared across projects.
 
@@ -256,7 +258,8 @@ CREATE TABLE nodes (
   source_range TEXT,                    -- for script nodes, file:line range as JSON
   properties TEXT,                      -- additional type-specific properties as JSON
   created_at INTEGER NOT NULL,          -- unix timestamp
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  owner_guid TEXT                       -- schema v4: GUID of the asset that OWNS this node
 );
 
 CREATE INDEX idx_nodes_type ON nodes(type);
@@ -265,6 +268,7 @@ CREATE INDEX idx_nodes_path ON nodes(path);
 CREATE INDEX idx_nodes_parent ON nodes(parent_node_id);
 CREATE INDEX idx_nodes_name_type ON nodes(name, type);
 CREATE INDEX idx_nodes_tier ON nodes(tier);
+CREATE INDEX idx_nodes_owner_guid ON nodes(owner_guid);
 CREATE UNIQUE INDEX idx_nodes_guid_fileid ON nodes(guid, file_id) WHERE guid IS NOT NULL;
 ```
 
@@ -274,9 +278,11 @@ The `guid` and `file_id` together uniquely identify any asset or sub-object with
 
 The `parent_node_id` provides the runtime hierarchy: a Component's parent is its GameObject, a GameObject's parent is its parent GameObject (or the scene/prefab root). This is duplicative with the `contains` edge type (described below) but is denormalized into the node table for fast hierarchy traversal queries.
 
-The `properties` column is a JSON blob holding type-specific data. This is where flexibility lives: a Material node might have `{"shader": "URP/Lit", "color": "0xFF0000"}`, while a Component node might have `{"is_enabled": true, "execution_order": 100}`. Application code knows what schema to expect for each type.
+The `properties` column is a JSON blob holding type-specific data. This is where flexibility lives: a Material node might have `{"shader": "URP/Lit", "color": "0xFF0000"}`, while a Component node might have `{"is_enabled": true, "execution_order": 100}`. Application code knows what schema to expect for each type. On read, `NodeRecord` keeps this JSON in its raw string form and parses it **lazily** — only on first access to `Properties` — so the flagship queries (§2.5) that scan thousands of nodes without ever touching their properties pay zero deserialization cost.
 
 The `source_range` column applies only to script-related nodes. When a node represents a class, method, or field within a C# file, this column captures the `file:start_line:end_line` location for navigation purposes.
+
+The `owner_guid` column (schema v4) records the GUID of the asset that **owns** this node. A root asset node owns itself (`owner_guid == guid`); its sub-object children — the GameObjects and Components of a scene or prefab, the ScriptTypes and ScriptMethods of a script — carry their owning asset's GUID even though their own `guid` is NULL. Deletion keys on this column (`DeleteNodesByOwnerGuid`), so re-scanning or deleting an asset removes its entire node set — root plus all children — as a single unit. This replaced the old guid-only delete, which removed only the guid-bearing root and leaked every NULL-guid child on each re-scan (see §2.4). `owner_guid` is NULL by design on seeded builtin types and the synthetic Project node.
 
 Timestamps `created_at` and `updated_at` enable temporal queries: "what changed in the last hour?" These are written by the scanners on every update.
 
@@ -308,17 +314,23 @@ The `properties` column on edges holds relationship-specific data. For an `inher
 #### 2.2.3 Supporting tables
 
 ```sql
--- Tracks the version of the graph schema, for migrations
+-- Tracks the version of the graph schema, for migrations. Current version: 4
+-- (v4 added owner_guid). The graph is a rebuildable cache, so a migration that
+-- changes node/edge column order recreates the tables and lets the next startup
+-- repopulate rather than ALTER in place (positional SELECT * reads — see §2.10).
 CREATE TABLE schema_version (
   version INTEGER PRIMARY KEY,
   applied_at INTEGER NOT NULL
 );
 
--- Tracks which assets have been scanned, with their content hash
--- Used to detect what needs re-scanning after Unity reopens
+-- Tracks which assets have been scanned, with their content hash.
+-- Used to detect what needs re-scanning after Unity reopens. Meta-scanned
+-- assets (textures/models/audio/animation/fonts/etc.) store a fixed SENTINEL
+-- value here instead of a real content hash — their node data derives from the
+-- .meta file, not the (often huge) binary, so the stale check must never MD5 them.
 CREATE TABLE scanned_assets (
   guid TEXT PRIMARY KEY,
-  content_hash TEXT NOT NULL,           -- hash of the asset file at last scan
+  content_hash TEXT NOT NULL,           -- real MD5 for code/scene/prefab; sentinel for meta assets
   scanned_at INTEGER NOT NULL,
   scanner_version INTEGER NOT NULL      -- so we can re-scan if scanner changed
 );
@@ -471,14 +483,15 @@ public class GraphBuilder
     public void RebuildParallel();               // the single canonical full-rebuild path
                                                  // (Node.js C# scan + Unity-API scanners +
                                                  //  ScanProjectSettings/ScanAddressables + checkpoint)
-    public void UpdateAssets(string[] guids);    // incremental update for specific assets
+    public void UpdateAssets(string[] guids);    // incremental update (synchronous .cs scan)
+    public void UpdateAssets(string[] guids, bool deferCsScan); // deferCsScan=true: off-thread .cs scan
     public BuildStatus GetStatus();              // current build state
 }
 ```
 
 A full rebuild has two phases. First, `GraphBuilder` spawns a Node.js process (`Scanner~/index.js`) that scans all `.cs` files in the project and packages, writing nodes and edges directly to `graph.db` via `better-sqlite3`. This replaced the original C#/Mono regex-based `ScriptScanner` because Mono's regex engine is 15-30x slower than V8's — what took 3-5 minutes on a medium project now completes in 10-30 seconds. Second, `GraphBuilder` runs the remaining C# scanners (scenes, prefabs, ScriptableObjects, materials, etc.) on the main thread for assets that require Unity APIs like `SerializedObject` and `AssetDatabase`.
 
-An incremental update receives a list of GUIDs whose assets have changed. For `.cs` files, it spawns the Node.js scanner with `--mode incremental --guids <list>`. For other asset types, it removes the existing node-and-subgraph from the database, re-scans via the appropriate C# scanner, and inserts the new nodes and edges. Both paths are typically sub-second for individual asset updates.
+An incremental update receives a list of GUIDs whose assets have changed. For `.cs` files it spawns the Node.js scanner with `--mode incremental --guids <list>`; on the interactive (debouncer) path that spawn is **non-blocking** — the rest of the batch is deferred until the subprocess exits, so a script save never freezes the editor (see §2.4.3). For other asset types, it deletes the asset's entire owner-scoped node set, re-scans via the appropriate C# scanner, and inserts the new nodes and edges. Both paths are typically sub-second for individual asset updates.
 
 #### 2.3.2 Scanner interface
 
@@ -527,11 +540,11 @@ The tree-sitter parser replaced the original regex-based parser (`parser.js`). T
 
 GUIDs are resolved by reading `.meta` files directly (no `AssetDatabase.AssetPathToGUID()` call needed). Content-hash caching via the `scanned_assets` table ensures only changed files are re-parsed on subsequent boots.
 
-**MetaScanner** — alongside script scanning, the Node.js scanner also runs a MetaScanner pass that creates Asset nodes for non-script types (textures, models, audio, animation, fonts, sprite atlases, render textures, audio mixers, and more) by reading `.meta` files. This brings the graph's pending edge count to near-zero by providing target nodes for cross-asset references. The MetaScanner reads GUID, file path, and infers the Unity node type from file extension (36 extensions mapped to 16 node types).
+**MetaScanner** — alongside script scanning, the Node.js scanner also runs a MetaScanner pass that creates Asset nodes for non-script types (textures, models, audio, animation, fonts, sprite atlases, render textures, audio mixers, and more) by reading `.meta` files. This brings the graph's pending edge count to near-zero by providing target nodes for cross-asset references. The MetaScanner reads GUID and file path and infers the Unity node type from file extension. That extension→node-type map is defined **once** in `MetaAssetTypes` and shared, parity-tested, between the C# side and the Node scanner, so the two can never disagree on which files are meta assets or what node type they become. The same map drives the incremental meta lifecycle (§2.4.3): a meta asset's node is created on import and tracked in `scanned_assets` with a sentinel hash — never deleted-and-recreated on a reload, never MD5-hashed — because its node carries no content-derived data to lose.
 
 For full scans with 1000+ files, the scanner parallelizes parsing across CPU cores using Node.js `worker_threads`. Workers handle file reading, GUID resolution, and tree-sitter parsing; the main thread handles all SQLite writes in a single transaction via `better-sqlite3`.
 
-`GraphBuilder` spawns the Node.js process synchronously via `ProcessResolver.Run()` with a 5-minute timeout. If Node.js is not installed, script scanning is skipped with a warning — all other scanners continue normally. Exit code 2 (database locked) triggers a single retry after 1 second.
+For full rebuilds and the startup catch-up scan, `GraphBuilder` spawns the Node.js process **synchronously** via `ProcessResolver.Run()` with a 5-minute timeout (a progress bar is shown). For an interactive incremental `.cs` update it instead spawns **asynchronously** via `ProcessResolver.Start()` and polls `HasExited` on `EditorApplication.update` (`PumpCsScan`), so the main thread keeps ticking and a single script save no longer hitches the editor (§2.4.3). If Node.js is not installed, script scanning is skipped with a warning — all other scanners continue normally. Exit code 2 (database locked) triggers a single retry after 1 second on the synchronous path.
 
 The scanner uses version 3 (version 1 was the original C# scanner, version 2 was the Node.js regex scanner). When projects upgrade, the version mismatch in `scanned_assets` triggers a full re-scan automatically.
 
@@ -597,12 +610,11 @@ When the debouncer flushes:
 1. Group pending changes by type: imported, modified, deleted, moved.
 2. For deletions: remove the corresponding nodes from the database. CASCADE removes edges automatically.
 3. For moves: update the `path` column on existing nodes. No re-scan needed if content didn't change.
-4. For imports and modifications: `.cs` files are routed to the Node.js scanner (`--mode incremental`); all other asset types are re-scanned via their C# scanner.
-5. For each changed asset, the existing nodes and edges are deleted (`DeleteNodesByGuid`) and fresh nodes and edges from the new scan are inserted. AUTOINCREMENT IDs are not preserved — this is a delete-and-rescan approach per asset, not a diff.
-6. Cross-asset edges that referenced the deleted nodes survive via the pending-edge re-resolution mechanism: after nodes are re-inserted with new IDs, `ResolvePendingEdges()` reconnects them by matching type names and GUIDs.
-7. Update `scanned_assets` table with new content hash.
-
-Note: incremental updates are not gated by the "busy" fast-path — they are O(changed assets) and complete well within a frame, so returning a busy response would produce spurious errors on non-idempotent writes that already applied.
+4. For imports and modifications, the changed GUIDs are classified three ways: `.cs` files go to the Node.js scanner (`--mode incremental`, spawned off-thread on the interactive path); meta assets (texture/model/audio/etc.) go to the lightweight in-place meta path (`WriteMetaNodeIfNeeded` — create if missing, touch the sentinel row otherwise; never deleted); everything else is re-scanned via its C# scanner.
+5. For each changed non-meta asset, its **entire owner-scoped node set** is deleted (`DeleteNodesByOwnerGuid` — the root plus every NULL-guid child) and fresh nodes and edges from the new scan are inserted. AUTOINCREMENT IDs are not preserved — this is a delete-and-rescan approach per asset, not a diff. (This replaced `DeleteNodesByGuid`, which removed only the guid-bearing root and leaked the children on every save — see §2.2.1.)
+6. Inbound reference edges from OTHER (unchanged) assets are captured before the delete and re-pointed at the recreated node afterward; cross-asset edges whose own source was re-scanned reconnect via the pending-edge mechanism — after nodes are re-inserted with new IDs, `ResolvePendingEdges()` reconnects them by matching type names and GUIDs. Together these stop an incremental update from eroding references *into* the changed asset.
+7. Update `scanned_assets` with the new content hash (or the sentinel, for meta assets).
+Note: the non-`.cs` incremental work is O(changed assets) and completes well within a frame, so it is deliberately NOT gated by the "busy" fast-path (a busy response there would risk a spurious retry on a non-idempotent write that already applied). The interactive `.cs` scan IS gated for its duration: while its off-thread subprocess runs, `_csScanInFlight` is set and `IsBusyForRequests` returns true, so a concurrent tool call gets a structured `busy` instead of waiting out the transport timeout. `_status` also stays `Updating` across that window, which keeps the asset-postprocessor's drop in place so a main-thread write cannot race the subprocess's writes.
 
 #### 2.4.4 Failure modes and recovery
 
@@ -652,6 +664,8 @@ Hades exposes 90 MCP tools total: 22 graph/observability/memory tools built nati
 - `get_recently_changed(hours: int)` — assets changed in the last N hours.
 
 Each tool has a clear input schema, a clear output schema, and clear documentation in the MCP `tools/list` response.
+
+The path- and name-based lookups behind these tools are index-backed. `find_references_to` and `trace_dependencies` resolve their target node via `FindNodesByPath` (the `idx_nodes_path` index); `find_prefabs_with_component` resolves the component via `FindNodesByNameAndTypeAll` (the `idx_nodes_name_type` index) — both `O(log n)` index probes. They replaced an earlier pattern that loaded and materialized the *entire* `nodes` table per call and filtered in C# (an `O(n)` scan that, combined with eager `Properties` parsing, allocated hundreds of thousands of objects to find one node on large graphs). `FindNodesByPath` orders results by name, so a `.cs` target resolves to its `ScriptType` (named after the file stem) ahead of the `Script` node — the node `trace_dependencies` must traverse from.
 
 #### 2.5.3 The general-purpose query tool
 
@@ -704,7 +718,7 @@ Illustrative latency targets for the schema and indexes described. Name search u
 | Name search (`contains` mode) | 5-20ms (LIKE on B-tree; no FTS index) |
 | Project-wide aggregations | 10-100ms |
 
-These are generally well below the latency of agent reasoning, so the graph is unlikely to be the bottleneck in agent interactions.
+These are generally well below the latency of agent reasoning, so the graph is unlikely to be the bottleneck in agent interactions. The path/name lookups behind `find_references_to`, `trace_dependencies`, and `find_prefabs_with_component` hold these targets because they use `idx_nodes_path` / `idx_nodes_name_type` rather than a full-table scan, and because `NodeRecord.Properties` parses lazily (§2.2.1) — a query that returns thousands of nodes without reading their properties does no JSON work.
 
 #### 2.6.3 Storage size
 
@@ -748,13 +762,13 @@ PRAGMA journal_size_limit = 67108864;   -- cap WAL file at 64MB to bound disk us
 With this configuration:
 
 - Multiple readers can read concurrently from any thread.
-- One writer at a time (the GraphBuilder, on the main thread). Writers never wait on readers.
+- One writer at a time. The C# `GraphBuilder` writes on the main thread; the Node scanner subprocess writes through its own `better-sqlite3` connection (a cross-process, WAL-coordinated writer). The two never write concurrently: during a synchronous scan the main thread is blocked in `WaitForExit`, and during an *asynchronous* incremental `.cs` scan the main thread stays in the `Updating`/`_csScanInFlight` (busy-gated) state, so its deferred continuation runs only after the subprocess has exited (§2.4.3). Writers never wait on readers.
 - Readers see a consistent snapshot, not affected by in-flight writes.
 - Write throughput is limited by disk fsync at WAL checkpoint boundaries, not by individual writes. For the volume of writes Hades does (handfuls of nodes/edges per asset update), this is not a bottleneck.
 
 #### 2.7.3 Consistency guarantees
 
-- After `GraphBuilder.UpdateAssets()` returns, all subsequent queries see the new state.
+- After a *synchronous* `GraphBuilder.UpdateAssets()` returns, all subsequent queries see the new state. On the *asynchronous* incremental `.cs` path, `UpdateAssets()` returns as soon as the scan is spawned; the new state lands when the subprocess exits and `PumpCsScan` runs the continuation — until then `IsBusyForRequests` is true, so a tool call gets a `busy` response rather than a stale read.
 - During an in-flight update, queries see the previous state.
 - There is no staleness window where queries can see partial updates within a single transaction.
 - Across multiple transactions (e.g., a large rebuild that splits writes into batches), readers may see intermediate states. The build coordinator wraps related batches in a single logical operation tagged in `graph_metadata` so the agent can detect "rebuild in progress" and respond accordingly.
@@ -857,7 +871,7 @@ The core scanning logic — opening scenes, walking hierarchies, parsing C# — 
 
 ## 3. Hades Charon
 
-Charon is the observability layer. Every meaningful event in Hades — every MCP tool call, every graph query, every memory read, every action against Unity — is captured as a structured trace. The traces serve two distinct purposes: internal debugging for ArcForge developers building Hades, and external visibility for users debugging their own AI workflows.
+Charon is the observability layer. Every meaningful event in Hades — every MCP tool call, every graph build, every memory read, every action against Unity — is captured as a structured trace (graph *queries* are captured within the enclosing tool span rather than per-query; see §3.4.2). The traces serve two distinct purposes: internal debugging for ArcForge developers building Hades, and external visibility for users debugging their own AI workflows.
 
 ### 3.1 Why this layer matters
 
@@ -883,7 +897,7 @@ Each span captures:
 - `span_id` — unique within a trace
 - `trace_id` — shared across all spans in the same trace
 - `parent_span_id` — the immediate parent, or null for root spans
-- `name` — descriptive name like `mcp.tool.find_prefabs_with_component` or `graph.query.execute`
+- `name` — descriptive name like `mcp.tool.find_prefabs_with_component` or `graph.build.incremental`
 - `kind` — semantic category: `server` (top-level handler), `client` (outbound call), `internal` (in-process work)
 - `start_time` and `end_time` — wall-clock timestamps
 - `status` — `OK`, `ERROR`, `TIMEOUT`
@@ -934,17 +948,13 @@ The `CharonEmitter` is the C# class inside the Unity Package responsible for pro
 ```csharp
 using (var span = Charon.StartSpan("mcp.tool.find_prefabs_with_component", SpanKind.Server))
 {
+    span.SetAttribute(SpanAttributes.ToolName, "find_prefabs_with_component");
     span.SetAttribute("component_type", componentType);
-    
-    // ... do work ...
-    
-    using (var childSpan = Charon.StartSpan("graph.query.execute", SpanKind.Internal))
-    {
-        childSpan.SetAttribute("query.kind", "find_prefabs_with_component");
-        // ... query the graph ...
-        childSpan.SetAttribute("results.count", results.Count);
-    }
-    
+
+    // ... do work. The graph queries underneath are deliberately NOT sub-spanned —
+    //     per-query graph.query.* spans were removed to avoid trace write-amplification
+    //     (see §3.4.2). The API still supports child spans (graph BUILD ops use them).
+
     span.SetAttribute("results.count", results.Count);
     span.SetStatus(SpanStatus.Ok);
 }
@@ -973,16 +983,12 @@ Every incoming MCP tool call creates a root span with:
 
 - `name`: `mcp.tool.<tool_name>`
 - `kind`: `Server`
-- attributes: tool name, parameter values (written verbatim — no redaction currently applied), client identifier (which agent client called us)
+- attributes: tool name and parameter values (written verbatim — no redaction currently applied) and client identifier. Attribute **keys** come from a single shared `SpanAttributes` constant (`tool_name`, `tool_input`, …) used by both the emitter and the Asphodel inference analyzers, so the two cannot drift — an earlier mismatch (emitter wrote `tool.name`, analyzers read `tool_name`) silently produced zero inferred patterns until the keys were unified (§4.6).
 - child spans for any sub-operations the tool performs
 
 #### 3.4.2 Graph queries
 
-Every database query that the graph layer issues — whether from a tool or from internal scanning — emits a span:
-
-- `name`: `graph.query.<operation>` (e.g., `graph.query.find_references`)
-- `kind`: `Internal`
-- attributes: query kind, parameter values, result count, latency
+Earlier versions emitted a `graph.query.<operation>` span for **every** database query the graph layer issued. This was removed. A single traversal tool (`trace_dependencies`, `find_references_to`) issues one-to-two SQL statements **per node/edge visited**, so per-query spans amplified one tool call into thousands of trace rows — bloating `traces.db` and slowing the trace writer. The graph layer no longer emits per-query spans; the operation stays observable at the **tool** granularity (the enclosing `mcp.tool.*` span records the call, its parameters, its result count, and its latency), which is the level a user actually debugs at.
 
 #### 3.4.3 Graph build operations
 
@@ -1161,7 +1167,7 @@ Retention defaults:
 
 - 30 days of traces by default. Older are auto-pruned at Unity startup via `PruneOlderThan`.
 - Eval-dataset traces are exempt from auto-pruning regardless of age.
-- **Hard size cap** (default 500MB, configurable via `CharonMaxSizeMb` in EditorPrefs): if `traces.db` exceeds the cap at startup, `EnforceSizeLimit` drops the oldest traces down to ~90% of the cap in a single pass, then runs `PRAGMA wal_checkpoint(TRUNCATE)` and `VACUUM` to reclaim disk space.
+- **Trace-count cap at startup** (a row budget derived from `CharonMaxSizeMb` in EditorPrefs — default 500MB ≈ 128k traces at ~4 KB each, floored at 5000): `PruneToTraceCap` deletes the oldest traces beyond the budget and runs a cheap `PRAGMA wal_checkpoint(PASSIVE)`. It deliberately does **not** `VACUUM` — freed pages are reused by subsequent inserts so the file plateaus, and a synchronous `VACUUM` of a multi-GB `traces.db` could freeze editor startup. (This replaced the earlier size-based `EnforceSizeLimit`, which trimmed to ~90% of the byte cap and then ran `wal_checkpoint(TRUNCATE)` + `VACUUM`.)
 - *(Planned — not yet implemented as of v1.0.0.)* A `hades-charon prune` CLI for manual pruning outside of Unity startup.
 
 ### 3.10 Edge cases
@@ -1276,6 +1282,12 @@ The full architecture is documented in the **Plugin document** (`Documentation/a
 - Resilient to compilation failures (Hub probes Unity's HTTP endpoint before marking stale)
 - Zero npm runtime dependencies (both Hub and Launcher use only Node.js built-ins)
 - Claude Desktop support via stable launcher copy at `~/.arcforge/hades-hub/launcher.js` with `hub-path.json` pointer to hub entry point
+
+**v1.1 reliability hardening:**
+- **Forgiving path matching** — the Hub canonicalizes registered and requested project paths (`realpath` + case-fold) before comparing; the Launcher resolves the real Unity project root by walking up from its cwd; and a **single-instance fallback** routes an otherwise-unidentifiable call (e.g. a launcher whose cwd resolved to `/`) when exactly one Unity is registered. This eliminated a class of post-reload "No Unity instance found for …" errors where the registered and requested paths were equivalent but not byte-identical.
+- **Leak-proof auto-exit** — the Hub exits when idle based on the **time since last launcher activity**, not a launcher *count*. The count it previously used decremented only on an explicit disconnect — which an abruptly-killed launcher (editor restart, crash, sub-agent teardown) never sends — so it leaked and the Hub became "immortal": running for days, serving stale code, never picking up a new build. Time-based liveness lets a fresh build deploy on the next call once the old Hub idles out.
+- **Exclusive spawn lock** — racing launchers acquire an `O_EXCL` lock (with stale-lock recovery) before starting the Hub, so only one wins; the losers wait for `hub.json` instead of spawning duplicate/zombie hubs.
+- **Clean error forwarding** — forwarding a tool call to a Unity instance that has just begun a domain reload returns a retryable JSON-RPC error, not a raw `HTTP 500`.
 
 **Runtime dependency:** Node.js is required for MCP connectivity (both Claude Code and Claude Desktop route through the Hub).
 
@@ -1486,6 +1498,8 @@ The Tier 2 inferred memory is produced by a background task that runs periodical
 - **Failure correlations**: when suggestions fail (rejected or edited), what features are correlated?
 
 These patterns are written to `inferred/observed_patterns.md`, `inferred/preferences.md`, etc. The task runs on every graph rebuild (triggered by `GraphBuilder.OnRebuildComplete`) — there is no daily timer or rate limiter in the current implementation.
+
+> **Two bugs kept this loop dead until v1.1, both now fixed.** (1) The inference engine is constructed from `CharonEmitter.Database`, which Asphodel read *once* at init — and under the old undefined `[InitializeOnLoad]` order it usually ran before Charon had set that database, leaving the engine permanently null. The ordered bootstrap (§1.7) now initializes Charon before Asphodel. (2) The analyzers keyed on the `tool_name` span attribute, but the emitter wrote `tool.name`, so every analyzer's `ContainsKey("tool_name")` guard was always false and produced zero patterns. Emitter and analyzers now share the `SpanAttributes` constant (§3.4.1). With both fixed, the Charon→Asphodel inference loop produces patterns for the first time — the synthetic test fixtures (which had used the underscore key) were re-pointed at the production constant so the contract can't silently regress.
 
 #### 4.6.1 Inference labeling discipline
 
@@ -1988,11 +2002,9 @@ Use these pipelines as the source of truth for "how should Hades actually behave
 4. HttpTransport receives the request on a background thread, enqueues a WorkItem.
 5. Main thread processes the WorkItem on next `EditorApplication.update`.
 6. Charon starts root span: `mcp.tool.get_scene_summary`, attributes: `{scene_path: "Assets/Scenes/MainMenu.unity"}`.
-7. Tool implementation queries the graph:
-   - Charon child span: `graph.query.scene_summary`.
+7. Tool implementation queries the graph (within the root tool span — graph queries are not separately sub-spanned; see §3.4.2):
    - SQL query: find Scene node by path, find all GameObject nodes contained in it (via `contains` edges), grouped by hierarchy depth.
    - Returns ~12 top-level GameObjects with their components.
-   - Child span ends.
 8. Tool formats the result as a structured response: scene name, GameObject count, top-level hierarchy, notable components (Camera, Canvas, AudioSource, etc.), referenced assets (materials, audio).
 9. Charon root span ends with status OK, attributes: `{nodes_returned: 12, total_components: 47}`.
 10. Response returns through the chain to the agent.
@@ -2407,14 +2419,13 @@ A working inventory system, integrated with project patterns, plus a memory prop
 2. Charon dashboard opens in browser.
 3. User filters traces by date (yesterday) and trace name (e.g. `mcp.tool.prefab_edit_property` or `mcp.tool.prefab_apply_overrides`).
 4. User finds the trace where the prefab modification happened.
-5. User clicks into the trace. Sees the full span tree:
-   - Root span: `mcp.tool.prefab_edit_property(path: "Assets/Prefabs/Player.prefab", ...)`
-   - Child span: `graph.query.find_references(asset: "Assets/Prefabs/Player.prefab")` — this returned empty.
+5. User clicks into the trace. Sees the span tree (graph queries are recorded on the enclosing tool span, not as per-query child spans — §3.4.2):
+   - Root span: `mcp.tool.prefab_edit_property(path: "Assets/Prefabs/Player.prefab", ...)`, whose attributes show the agent first checked references and got an **empty** result.
    - Child span: `unity.action.prefab_edit_property` — successful.
-6. User notices the empty result on the references query. This is suspicious because Player.prefab is referenced from many scenes.
-7. User clicks the empty-result span. Attributes show: `query.executed_at: 2026-05-08T14:30:21Z`, `graph.last_rebuild: 2026-05-08T14:30:18Z` (3 seconds before the query).
+6. User notices the empty references result on the tool span. This is suspicious because Player.prefab is referenced from many scenes.
+7. The span attributes show: `query.executed_at: 2026-05-08T14:30:21Z`, `graph.last_rebuild: 2026-05-08T14:30:18Z` (3 seconds before the query).
 8. Diagnosis: a graph rebuild was in progress at the moment the agent queried. The rebuild had not yet processed Player.prefab's references when the query ran. The query returned empty, and the agent assumed no references existed.
-9. Diagnosis pinpoints the bug: the graph layer should have indicated to the query that the rebuild was in progress for the relevant assets, but it didn't. The fix is to add a "rebuild status" check before queries that would be misleading if returning partial data.
+9. Diagnosis pinpoints the bug: the graph layer should signal a query that a rebuild is in progress. **This fix has since shipped** — every query tool checks `IsRebuildInProgress()` and downgrades its response `ConfidenceBlock` to `graph_freshness: "rebuilding"` (§2.7.5), so the agent sees a low-confidence/stale signal instead of a confident empty result.
 10. User reports this finding. The Hades team adds a regression test based on this trace and fixes the underlying issue.
 
 **Expected output:** Root cause identified with full context, in minutes rather than hours.
@@ -2476,7 +2487,19 @@ Charon continues operating during play mode — observability of agent actions d
 - Default 30-second timeout on all tool calls. After 30 seconds, the HTTP thread returns a timeout error to the client.
 - The main thread continues processing the tool call — it may eventually succeed or fail naturally. Result is discarded if the client has timed out.
 - For known long-running operations (full graph rebuild), the tool surfaces progress via `EditorApplication.DisplayProgressBar` so the user knows Unity is working, not frozen.
+- The interactive incremental `.cs` scan — historically the most common per-save freeze — no longer runs on the main thread: it spawns the Node scanner off-thread and resolves the rest of the batch when the subprocess exits (§1.6, §2.4.3), so a script save keeps the editor responsive and a tool call during the scan gets a structured `busy` rather than a 30s timeout.
 - *(Planned — not yet implemented as of v1.0.0.)* A `Hades: Cancel In-Flight Operations` menu command and scanner `CancellationToken` checks at work boundaries are design targets; they do not exist in the current build.
+
+#### 8.1.5 Backgrounded editor starves the post-reload bootstrap (App Nap)
+
+**What happens:** the editor is backgrounded and deeply App-Napped when a domain reload fires. `HadesBootstrap.Boot` runs on an `EditorApplication.delayCall`; under App Nap the editor-update tick that would *run* `Boot` is throttled, so `Boot` — and with it the MCP server's re-registration — is delayed indefinitely. The nap opt-out (`AppNapGuard`) is acquired *inside* `Boot`, so it can't engage while nap is starving the very tick that would acquire it.
+
+**Risk to Hades:** after the reload the server never re-registers; tool calls return "No Unity instance found" until the editor is foregrounded. With the hub/routing issues (§8.5) resolved, this is the dominant remaining interaction friction.
+
+**Mitigation:**
+
+- **Recovery (current):** `wake-unity.sh` (or simply clicking the editor) foregrounds Unity, un-naps it, and lets the bootstrap tick fire — the server re-registers within a moment.
+- **Fix direction (tracked, not yet shipped):** acquire the nap opt-out in the `[InitializeOnLoad]` static constructor — which runs synchronously during the reload, before any `delayCall` — held until `Boot` completes, closing the starve-the-tick window. The token-based `NSProcessInfo` activity assertion needs no update ticks to sustain, so it holds through the napped window.
 
 ### 8.2 Graph-level failures
 
@@ -2556,7 +2579,7 @@ Charon continues operating during play mode — observability of agent actions d
 **Mitigation:**
 
 - Default retention: 30 days. Auto-prune on startup.
-- **Hard size cap** (default 500MB): at startup, `EnforceSizeLimit` trims the oldest traces down to ~90% of the cap and runs VACUUM. This is the main guard against unbounded growth.
+- **Trace-count cap** (a row budget derived from the default 500MB): at startup, `PruneToTraceCap` deletes the oldest traces beyond the budget and runs a PASSIVE checkpoint — no `VACUUM`, which on a multi-GB `traces.db` could freeze startup. This is the main guard against unbounded growth.
 
 *(Planned — not yet implemented as of v1.0.0.)* A soft warning at 1GB and a hard guard at 80%-disk-fill emitter drop-mode are design targets; they do not exist in the current build.
 
@@ -2718,6 +2741,7 @@ Charon continues operating during play mode — observability of agent actions d
 **Mitigation:**
 
 - Configuration to enable "selective scanning": user designates which directories are scanned. The rest is treated as opaque.
+- Flagship queries are index-backed (`idx_nodes_path` / `idx_nodes_name_type`) with lazy `NodeRecord.Properties` parsing, so they stay sub-10ms at 100k+ nodes instead of degrading into a full-table scan (§2.5–2.6); incremental `.cs` updates run off the main thread so a save on a large project doesn't freeze the editor (§1.6); and dropping the per-query Charon spans (§3.4.2) keeps a single traversal from writing thousands of trace rows.
 - Aggregation views in the dashboard surface query latency distributions, helping identify hot paths.
 - Optional pre-aggregated rollup tables for common queries (planned for v2).
 

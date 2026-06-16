@@ -60,15 +60,22 @@ Three files track the product version and must stay in lockstep on every release
 
 The release workflow automatically updates `marketplace.json` in the plugin repo to match the tag. The other two must be bumped manually in the main repo before tagging.
 
-**Internal component versions (do NOT bump on product releases):**
+**Internal component versions (bump only if the component changed this release):**
 
 | File | Repo | Current | Purpose |
 |---|---|---|---|
-| `Bridge~/package.json` → `version` | Main | 1.0.0 | Bridge workspace version |
-| `Bridge~/hub/package.json` → `version` | Main | 1.0.0 | Hub component version |
-| `Scanner~/package.json` → `version` | Main | 1.0.0 | Scanner component version |
+| `Bridge~/package.json` → `version` | Main | 1.1.0 | Bridge workspace version |
+| `Bridge~/hub/package.json` → `version` | Main | 1.1.0 | Hub component version |
+| `Scanner~/package.json` → `version` | Main | 1.1.0 | Scanner component version |
 
-These track internal API changes independently of product releases.
+These track internal API changes independently of the product version. **Policy:** leave them untouched on a release that didn't change them, but if a component changed substantially this release, bump it to the product version so the two don't silently diverge. (v1.1.0 bumped all three — the hub/launcher reliability overhaul and the scanner's meta-constants.)
+
+**Version constants in source (check each release):**
+
+| Location | Reports as | Notes |
+|---|---|---|
+| `Bridge~/launcher/src/index.ts` → `SERVER_VERSION` | launcher MCP `serverInfo.version` | a plain constant — **bump manually**, then rebuild Bridge so `launcher/dist` reflects it |
+| `Editor/MCP/MCPDispatcher.cs` → `serverInfo.version` | Unity MCP server `initialize` | **resolves dynamically** from the package manifest (`PackageInfo.FindForAssembly`) as of v1.1.0 — no manual bump needed |
 
 ---
 

@@ -161,7 +161,7 @@ The graph is persisted to `.arcforge/graph.db` (SQLite-based) in the project roo
 
 Observability infrastructure for everything the agent does. Charon — the ferryman who transports souls between worlds — is the metaphor. Each agent action is a soul; Charon transports it and keeps a record.
 
-Implemented as a bespoke OpenTelemetry-inspired span system on every MCP tool call, every graph query, every memory read, every action performed against the Unity Editor. The design borrows OpenTelemetry concepts (spans, traces, attributes, nesting) but uses no OTel SDK and emits no OTLP — spans are persisted directly to a local SQLite database. Each operation becomes a span. Spans nest into traces. Traces map to user-visible interactions ("user asked X", "agent did Y, Z, W in response").
+Implemented as a bespoke OpenTelemetry-inspired span system on every MCP tool call, every graph build, every memory read, every action performed against the Unity Editor. (Graph *queries* are captured within the enclosing tool-call span rather than per-query — individual per-query spans were found to amplify a single traversal into thousands of trace rows.) The design borrows OpenTelemetry concepts (spans, traces, attributes, nesting) but uses no OTel SDK and emits no OTLP — spans are persisted directly to a local SQLite database. Each operation becomes a span. Spans nest into traces. Traces map to user-visible interactions ("user asked X", "agent did Y, Z, W in response").
 
 The trace structure captures:
 
@@ -240,7 +240,7 @@ The integration with Hades Graph is what makes Skills meaningfully better here t
 The four pillars are not four products. They are connected:
 
 - **Graph emits change events** that Asphodel uses to track project evolution over time.
-- **Charon logs every Graph query** with performance and result data, identifying hot paths and slow queries for optimization.
+- **Charon traces every Graph operation** with performance and result data, surfacing hot paths and slow tool calls for optimization.
 - **Charon traces feed Asphodel's pattern detection.** Repeated user behaviors become inferred preferences.
 - **Asphodel injects relevant context into the agent's system prompt.** What the agent knows about the project starts populated, not blank.
 - **Asphodel cross-references the Graph for self-validation.** Memory claims that contradict the current graph state are flagged.
