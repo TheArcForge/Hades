@@ -15,7 +15,7 @@
 | Severity | Count | Done |
 |---|---|---|
 | 🔴 Critical | 1 | 1 |
-| 🟠 High | 9 | 3 |
+| 🟠 High | 9 | 4 |
 | 🟡 Medium | 22 | 0 |
 | 🟢 Low | 17 | 0 |
 | Missing features (vision drift) | 4 | 0 |
@@ -48,7 +48,13 @@
 - [x] **Arm the heartbeat timer as early as possible** — armed in `Start()` at boot step 4, before the deferred startup sync; `AppNapGuard` held across boot + the deferred tick.
 - [ ] **Stop graph startup blocking the main thread** (AUDIT #3): run full rebuild / Node scan off-thread or chunked. *(Deliberately out of scope — the chosen design keeps the rebuild on the main thread and returns `busy`; this is the deeper residual.)*
 - [x] Add a test/repro: `HadesBootstrapTests` (server-before-sync ordering + #6 guard) and `StartupBusyGateTests` (busy, not timeout, during startup).
-- ⚠️ **Residual:** a deeply App-Napped, backgrounded editor can still starve the single `Boot` `delayCall` tick itself (before it runs) — `wake-unity` remains the recovery for that narrower case.
+- [ ] **🟠 App Nap starves the bootstrap tick → editor unreachable after a backgrounded reload** *(promoted from a residual footnote — now the dominant interaction friction, the hub/routing friction having been resolved; see the Hub/Node cluster).*
+
+**Problem:** the nap opt-out is acquired *inside* `Boot()` (`AppNapGuard.Acquire()`), but `Boot` runs on an `EditorApplication.delayCall` scheduled from the `[InitializeOnLoad]` static ctor. A deeply App-Napped, backgrounded editor throttles the editor-update tick that would *run* `Boot`, so `Boot` — and with it the guard, the `MCPServer` (re)start, and hub re-registration — is delayed indefinitely. The guard that would prevent nap can't engage because nap is starving the very tick that acquires it.
+
+**Evidence (2026-06-14 session):** after a test-run reload with the editor backgrounded, `MCPServer` never re-registered (`No Unity instance found for …`, instances: none) and `HadesBootstrapTests` failed because `Boot` had not populated `BootTrace` / `InferenceEngine` before the tests read them. `wake-unity.sh` (foreground the editor) was the only recovery.
+
+**Fix direction:** call `AppNapGuard.Acquire()` in the `[InitializeOnLoad]` **static constructor** (runs synchronously during the reload, before any `delayCall`), and release once `Boot` / `RunStartupSyncOnce` completes. `AppNapGuard` is a token-based `NSProcessInfo beginActivityWithOptions:` assertion that holds until `endActivity` — it needs **no** update ticks to sustain — so an assertion set at reload time keeps the editor un-napped through the `delayCall` window, closing the starve. Pair the ctor-`Acquire` with exactly **one** `Release` (e.g. in `RunStartupSyncOnce`'s `finally`) so the assertion isn't held forever (permanent nap-block = battery drain). Alternative/complement: an external watchdog (launcher-side) that notices "instance was healthy, reloaded, and never re-registered within N s" and nudges the editor. Add a backgrounded-reload repro.
 
 ---
 
@@ -92,7 +98,7 @@ The inbound-edge restore then finds no target, so **`material→texture` and `sc
 > What an end user actually *feels*: editor freezes and agent timeouts on the core "agent edits C#" workflow.
 
 ### 🟠 3. Incremental `.cs` updates block the main thread synchronously; busy-gate doesn't cover them → agent-visible timeouts
-- [ ] **Fixed & verified**
+- [~] **Implemented; compile + unit tests green; manual freeze-acceptance pending** — the interactive debouncer path now runs the `.cs` Node scan OFF the main thread: `ProcessResolver.Start` spawns it non-blocking and `GraphBuilder.PumpCsScan` (driven from `EditorApplication.update`) runs the deferred rest-of-batch continuation when the subprocess exits. A new `_csScanInFlight` flag keeps `IsBusyForRequests` true for the scan window, so a concurrent tool call gets a structured `busy` (not a 30s timeout); `_status` stays `Updating` so `GraphAssetPostprocessor`'s drop keeps a main-thread DB write from racing the subprocess. Startup catch-up keeps the synchronous path (`deferCsScan: false`). Full EditMode suite green except 2 unrelated, App-Nap-flaky `HadesBootstrapTests` (Boot's `delayCall` starved before the tests read its output — not a code fault). Remaining check: the human "save a .cs → no freeze" observation. *(working tree, uncommitted)*
 
 **Where:** [GraphBuilder.cs:598](Editor/Graph/GraphBuilder.cs) — `UpdateAssets`
 
@@ -114,7 +120,7 @@ The inbound-edge restore then finds no target, so **`material→texture` and `sc
 ---
 
 ### 🟠 2. The flagship query tools load the entire `nodes` table into memory on every call
-- [ ] **Fixed & verified**
+- [x] **Fixed & verified** — added indexed `FindNodesByPath` (`idx_nodes_path`) + `FindNodesByNameAndTypeAll` (`idx_nodes_name_type`); `find_references_to` / `trace_dependencies` / `find_prefabs_with_component` route through them instead of the `SearchByName(null,null)` full-table scan, and `NodeRecord.Properties` parses lazily (raw JSON kept, parsed on first access). `FindNodesByPath` preserves `SearchByName`'s `ORDER BY name` so `trace_dependencies` still starts from the ScriptType, not the Script. Full EditMode suite green (404 passed / 0 failed); new `IndexedQueryTests`. *(working tree, uncommitted)*
 
 **Where:** [GraphQueryTools.cs:428](Editor/MCP/Tools/GraphQueryTools.cs) (also `:689`, `:255`)
 
@@ -287,7 +293,7 @@ The inbound-edge restore then finds no target, so **`material→texture` and `sc
 ---
 
 ### 🟡 Performance cluster
-- [ ] **N+1 query patterns in traversal tools** — one-to-two SQL statements per node/edge, each wrapped in a Charon span → every traversal emits thousands of trace rows. [GraphQueryTools.cs](Editor/MCP/Tools/GraphQueryTools.cs)
+- [~] **N+1 query patterns in traversal tools** — the per-micro-query `graph.query.*` Charon spans are **removed** (8 of them in `GraphDatabase`), so a single traversal no longer emits thousands of trace rows (the tool-level `mcp.tool.*` span still records each call); the underlying one-to-two SQL statements per node/edge remain. [GraphDatabase.cs](Editor/Graph/GraphDatabase.cs) · [GraphQueryTools.cs](Editor/MCP/Tools/GraphQueryTools.cs)
 - [ ] **`query_graph` loads the full type set, filters in C#, one edge query per candidate**, `limit` applied only at the end.
 - [ ] **`GetRecentlyChanged` full-scans + sorts `nodes`** — add an index on `updated_at`.
 - [ ] **Unbounded result sets** in `find_references_to` / `trace_dependencies` / `find_prefabs_with_component` — add a row cap to JSON responses.
@@ -322,7 +328,7 @@ The inbound-edge restore then finds no target, so **`material→texture` and `sc
 - [ ] **`ProcessMainThreadQueue` drains the whole queue in one tick** — one slow tool freezes the frame for the whole batch. [MCPServer.cs:258](Editor/MCP/MCPServer.cs)
 - [ ] **Copy-pasted helpers across tool files** — `GameObjectNotFoundError` ×5, `GetPath` ×4, `FindComponentType` ×2. Consolidate into `Editor/MCP/Utilities`.
 - [ ] **Fully-silent `catch` blocks** hide scanner-registration + HTTP-handler faults. Log at minimum.
-- [ ] **`EnforceSizeLimit` runs synchronous `VACUUM`** on a multi-GB `traces.db` at editor startup. Make it incremental/off-thread or bounded.
+- [x] **`EnforceSizeLimit`'s synchronous startup `VACUUM` removed** — startup now caps the trace table by row count (`PruneToTraceCap`: delete-oldest + PASSIVE checkpoint, no VACUUM), so freed pages are reused and the file plateaus instead of blocking startup on a multi-GB rewrite. New `SizeEnforcementTests`. *(working tree, uncommitted)*
 - [ ] **Session port restore writes through to machine-global `EditorPrefs`**, permanently pinning the "auto" port. Use `SessionState` (per-session) instead.
 - [ ] **Scanner GUID regex requires lowercase 32-hex anchored to line start** — uppercase/indented `.meta` GUIDs silently skipped. Relax the pattern.
 - [ ] **`FrontmatterParser` drops a frontmatter block with zero parseable lines** (reclassifies as body). [Editor/Asphodel](Editor/Asphodel)
