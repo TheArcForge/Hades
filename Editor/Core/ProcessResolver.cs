@@ -104,6 +104,43 @@ namespace ArcForge.Hades.Editor.Core
             }
         }
 
+        /// <summary>
+        /// Spawns a process WITHOUT waiting for it. Returns the <see cref="Process"/> so the
+        /// caller can poll <c>HasExited</c> (e.g. on <c>EditorApplication.update</c>) instead of
+        /// blocking the main thread in <c>WaitForExit</c>. stdout/stderr are redirected — the
+        /// caller MUST drain them (start <c>ReadToEndAsync</c> right away) to avoid a full-pipe
+        /// deadlock, and Dispose the Process after it exits. Mirrors <see cref="Run"/>'s child
+        /// PATH injection so a Finder-launched Unity can still resolve node/npm.
+        /// </summary>
+        public static Process Start(
+            string executable, string arguments, string workingDirectory,
+            IReadOnlyDictionary<string, string> environment = null)
+        {
+            var execPath = FindExecutable(executable) ?? executable;
+            var psi = new ProcessStartInfo
+            {
+                FileName = execPath,
+                Arguments = arguments,
+                WorkingDirectory = workingDirectory,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+
+            ApplyChildPath(psi, execPath);
+
+            if (environment != null)
+            {
+                foreach (var kv in environment)
+                    psi.EnvironmentVariables[kv.Key] = kv.Value;
+            }
+
+            var proc = new Process { StartInfo = psi };
+            proc.Start();
+            return proc;
+        }
+
         static string Resolve(string name)
         {
             bool isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);

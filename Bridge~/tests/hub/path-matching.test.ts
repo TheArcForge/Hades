@@ -88,4 +88,57 @@ describe("Registry.findByProjectPath", () => {
     expect(result?.projectName).toBe("FooGame");
     expect(result?.status).toBe("transient");
   });
+
+  // The two beforeEach instances mean the single-instance fallback never fires here, so
+  // "no match returns null" above still holds with 2+ instances.
+  it("does NOT single-instance-fallback when 2+ instances and no match", () => {
+    expect(registry.findByProjectPath("/")).toBeNull();
+  });
+});
+
+describe("Registry single-instance fallback", () => {
+  it("routes to the only instance when nothing matches (e.g. launcher cwd is '/')", () => {
+    const registry = new Registry();
+    registry.register({
+      projectName: "Only",
+      projectPath: "/Users/mike/Projects/Only",
+      port: 1,
+      pid: 1,
+    });
+    expect(registry.findByProjectPath("/").projectName).toBe("Only");
+    expect(registry.findByProjectPath("/some/unrelated/dir").projectName).toBe("Only");
+  });
+
+  it("does not fall back to a stale-only instance", () => {
+    const registry = new Registry();
+    registry.register({
+      projectName: "Stale",
+      projectPath: "/Users/mike/Projects/Stale",
+      port: 1,
+      pid: 1,
+    });
+    registry.markStale("/Users/mike/Projects/Stale");
+    expect(registry.findByProjectPath("/")).toBeNull();
+  });
+});
+
+describe("Registry path canonicalization", () => {
+  it("resolves symlinks so a symlinked query matches the real registered path", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+
+    const real = fs.mkdtempSync(path.join(os.tmpdir(), "hades-real-"));
+    const link = path.join(os.tmpdir(), `hades-link-${Date.now()}`);
+    fs.symlinkSync(real, link);
+    try {
+      const registry = new Registry();
+      registry.register({ projectName: "Sym", projectPath: real, port: 1, pid: 1 });
+      // Query via the symlink — should canonicalize to `real` and match.
+      expect(registry.findByProjectPath(link)?.projectName).toBe("Sym");
+    } finally {
+      fs.unlinkSync(link);
+      fs.rmSync(real, { recursive: true, force: true });
+    }
+  });
 });

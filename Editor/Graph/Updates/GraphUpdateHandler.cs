@@ -4,7 +4,6 @@ using UnityEngine;
 
 namespace ArcForge.Hades.Editor.Graph.Updates
 {
-    [InitializeOnLoad]
     public class GraphUpdateHandler
     {
         static GraphUpdateHandler _instance;
@@ -13,12 +12,9 @@ namespace ArcForge.Hades.Editor.Graph.Updates
         GraphBuilder _builder;
         UpdateDebouncer _debouncer;
 
-        static GraphUpdateHandler()
-        {
-            EditorApplication.delayCall += Initialize;
-        }
-
-        static void Initialize()
+        // NOTE: no [InitializeOnLoad] — HadesBootstrap calls InitializeFromBootstrap() (fast,
+        // registers event hooks) early, then RunStartupSync() on a deferred tick.
+        internal static void InitializeFromBootstrap()
         {
             if (_instance != null) return;
 
@@ -27,13 +23,16 @@ namespace ArcForge.Hades.Editor.Graph.Updates
             if (GraphDatabase.Instance == null) return;
 
             _instance = new GraphUpdateHandler();
-            _instance.Setup();
+            _instance.SetupEvents();
         }
 
-        void Setup()
+        void SetupEvents()
         {
             _builder = new GraphBuilder(GraphDatabase.Instance);
-            _debouncer = new UpdateDebouncer(guids => _builder.UpdateAssets(guids));
+            // Interactive incrementals run the .cs scan off the main thread (deferCsScan: true) so a
+            // script save doesn't freeze the editor. The startup catch-up path keeps the synchronous
+            // default. PumpCsScan (below) drives the off-thread scan's continuation.
+            _debouncer = new UpdateDebouncer(guids => _builder.UpdateAssets(guids, deferCsScan: true));
 
             EditorApplication.update += OnEditorUpdate;
             EditorApplication.projectChanged += OnProjectChanged;
@@ -42,16 +41,27 @@ namespace ArcForge.Hades.Editor.Graph.Updates
             #if UNITY_2021_1_OR_NEWER
             PrefabStage.prefabSaved += OnPrefabSaved;
             #endif
+        }
 
-            // Run startup sync (package scan + stale asset check) with progress bar
-            _builder.CheckStartupSync();
-
+        /// <summary>The blocking startup work (package scan + stale-asset catch-up / firstBoot
+        /// rebuild). Deferred by HadesBootstrap to a later tick so the MCP server is fully live
+        /// first. GraphBuilder.IsStartupInProgress is set for its duration (busy-gate).</summary>
+        internal static void RunStartupSync()
+        {
+            var h = _instance;
+            if (h?._builder == null) return;
+            h._builder.CheckStartupSync();
             var db = GraphDatabase.Instance;
             Debug.Log($"[Hades] Graph initialized: {db.GetNodeCount()} nodes, {db.GetEdgeCount()} edges");
         }
 
         void OnEditorUpdate()
         {
+            // Advance any in-flight off-thread .cs scan first. While one is running, hold the
+            // debouncer flush so a second save queues (in the debouncer) instead of spawning an
+            // overlapping scan; it flushes on the tick the scan completes.
+            _builder?.PumpCsScan();
+            if (GraphBuilder.IsCsScanInFlight) return;
             _debouncer?.Tick();
         }
 

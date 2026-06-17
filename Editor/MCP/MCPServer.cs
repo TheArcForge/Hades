@@ -11,7 +11,6 @@ using Debug = UnityEngine.Debug;
 
 namespace ArcForge.Hades.Editor.MCP
 {
-    [InitializeOnLoad]
     public class MCPServer : IDisposable
     {
         static MCPServer _instance;
@@ -41,22 +40,25 @@ namespace ArcForge.Hades.Editor.MCP
         int _pid;
         int _heartbeatPort;
 
-        static MCPServer()
+        // NOTE: no [InitializeOnLoad] — HadesBootstrap owns the single startup delayCall and
+        // calls StartFromBootstrap() in order, AFTER Charon/Graph/Asphodel init and BEFORE the
+        // blocking graph startup sync, so the server registers + arms its heartbeat first.
+        internal static void StartFromBootstrap()
         {
+            if (_instance != null && _instance.IsRunning) return;
+
+            // Idempotent registration of the pre-reload teardown hook (moved here from the old
+            // static ctor). -= then += guards against a double-add if called more than once.
+            AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeReload;
             AssemblyReloadEvents.beforeAssemblyReload += OnBeforeReload;
 
-            EditorApplication.delayCall += () =>
-            {
-                if (_instance != null && _instance.IsRunning) return;
+            var settings = new HadesSettings();
+            if (!settings.Enabled || !settings.AutoStart) return;
 
-                var settings = new HadesSettings();
-                if (!settings.Enabled || !settings.AutoStart) return;
-
-                var server = new MCPServer();
-                var savedPort = SessionState.GetInt("Hades_MCP_Port", 0);
-                if (savedPort > 0) settings.Port = savedPort;
-                server.Start(settings);
-            };
+            var server = new MCPServer();
+            var savedPort = SessionState.GetInt("Hades_MCP_Port", 0);
+            if (savedPort > 0) settings.Port = savedPort;
+            server.Start(settings);
         }
 
         static void OnBeforeReload()
@@ -204,11 +206,12 @@ namespace ArcForge.Hades.Editor.MCP
             // this background thread with an honest "busy" status. The volatile flag is the
             // only state we touch — no SQLite, which the blocked main thread may be mid-write.
             //
-            // Gate only on a genuine long op — NOT the fast transient incremental Updating
-            // state (Phase 9.6 Workstream A made incrementals O(changed), so they finish in
-            // well under a frame). Gating Updating would return a spurious "busy" and open an
-            // at-least-once retry window on non-idempotent writes that already applied.
-            if (Graph.GraphBuilder.IsInLongOperation)
+            // Gate on a genuine long op OR an in-progress startup sync — NOT the fast transient
+            // incremental Updating state (Phase 9.6 Workstream A made incrementals O(changed), so
+            // they finish in well under a frame). Gating Updating would return a spurious "busy"
+            // and open an at-least-once retry window on non-idempotent writes that already applied.
+            // Startup sync (firstBoot rebuild / stale catch-up) DOES block the queue, so it's gated.
+            if (Graph.GraphBuilder.IsBusyForRequests)
                 return Task.FromResult(CreateBusyResponse(json));
 
             var tcs = new TaskCompletionSource<string>();

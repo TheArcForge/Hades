@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.1.0] — Graph Ownership Model, Incremental Integrity, Startup Reliability & Felt Performance
+
+A correctness round on the incremental-update path. Every graph node now records the asset that owns it (`owner_guid`), so an asset's full node set is created, deleted, and rebuilt as a single unit. This closes a class of silent graph corruption where domain reloads and re-scans destroyed or leaked nodes, and promotes meta-scanned assets (textures, models, audio, animation, fonts, etc.) to first-class citizens of the incremental lifecycle.
+
+It also makes Editor startup deterministic: a single ordered bootstrap replaces the per-subsystem `[InitializeOnLoad]` race so the MCP server registers *before* the (blocking) graph startup work runs, keeping it reachable across domain reloads.
+
+A felt-performance pass takes work off the interactive hot path: the flagship graph-query tools are now index-backed instead of loading the entire node table, node properties parse lazily, and the Charon trace layer stops amplifying writes (per-query micro-spans removed) and no longer runs a synchronous `VACUUM` of the trace DB at startup.
+
+### Added
+
+- **`owner_guid` on every graph node** — records the GUID of the asset that owns it: root asset nodes own themselves, while sub-object children (GameObject/Component of a scene or prefab; ScriptType/ScriptMethod of a script) carry their parent asset's GUID. Enables total, asset-scoped deletion.
+- **Incremental creation of meta-scanned assets** — newly added textures/models/audio/etc. now appear in the graph on import instead of only after a full rebuild.
+- **`MetaAssetTypes`** — a single, parity-tested C#↔Node source of truth for the non-code asset extension→node-type map.
+- **`HadesBootstrap`** — a single ordered startup composition root (Charon → Graph → Asphodel → MCP server → graph hooks → deferred startup sync) replacing eight independent `[InitializeOnLoad]` entry points.
+
+### Changed
+
+- **Unified node deletion onto `owner_guid`** — `DeleteNodesByOwnerGuid` (C#) / `deleteByOwnerGuid` (Node) replace the previously divergent guid-only (C#) and `file_id`-based (Node) delete paths, so scenes, prefabs, scripts, and meta assets all clean up the same way.
+- **Meta assets are tracked in `scanned_assets`** with a cheap sentinel identity instead of a content hash, so the stale check never reads or MD5-hashes a binary asset.
+- **Graph schema v3 → v4** (adds the `owner_guid` column). The graph rebuilds once automatically on upgrade.
+- **Editor startup is one ordered bootstrap** — the MCP server's listener, hub registration, and heartbeat now start *before* the blocking graph startup sync, which is deferred to a later tick.
+- **Tool calls during startup return a structured `busy`** instead of a 30-second timeout (the startup stale-scan is now covered by the busy gate, not only full rebuilds).
+- **Hub routing is more forgiving** — project-path matching canonicalizes (`realpath` + case-fold), the launcher resolves the real Unity project root by walking up from its cwd, and a single-instance fallback routes an unidentifiable call (e.g. a launcher whose cwd is `/`) when exactly one Unity is open.
+- **Flagship query tools are index-backed** — `find_references_to`, `trace_dependencies`, and `find_prefabs_with_component` resolve their target through the `idx_nodes_path` / `idx_nodes_name_type` indexes instead of loading and materializing the entire `nodes` table on every call (the O(N)-per-query pattern the rebuild path had already shed). `NodeRecord` properties now parse lazily — bulk reads that never touch `Properties` pay no JSON-deserialization cost.
+- **Charon trace write-amplification cut** — the eight per-query `graph.query.*` micro-spans are removed, so a single graph traversal no longer emits thousands of trace rows (the tool-level `mcp.tool.*` span still records each call).
+- **Editor startup no longer `VACUUM`s the trace DB** — the trace-size backstop caps by row count (delete oldest + passive checkpoint) instead of a synchronous `VACUUM` of a multi-GB `traces.db`, which could freeze startup.
+
+### Fixed
+
+- **Critical: domain reloads destroyed meta-scanned nodes and their reference edges.** Because textures/models/audio were never recorded in `scanned_assets`, every domain reload (i.e. every script compile) flagged them stale, deleted their nodes, and — having no scanner to recreate them — left them gone, silently dropping `material→texture` / `scene→model` edges and re-MD5-hashing the entire `Assets/` folder each time. Meta assets are now tracked and refreshed incrementally, and the stale check no longer hashes binaries.
+- **Incremental scene/prefab re-scans leaked `GameObject`/`Component` nodes.** `NULL`-guid child nodes were never deleted on re-scan (only the guid-bearing root was), so each save permanently accumulated a stale copy of the asset's node set until the next full rebuild. Children are now deleted as a unit via `owner_guid`.
+- **"Server hades unavailable" after domain reloads.** The MCP server's post-reload registration raced an undefined-order, main-thread-blocking graph startup; if the graph work won, the server never registered and the hub evicted it. It now registers and arms its heartbeat *before* any blocking startup work. *(A deeply App-Napped, backgrounded editor can still starve the one bootstrap tick — `wake-unity.sh` remains the recovery for that narrower case.)*
+- **`PatternInferenceEngine` was silently null in every session.** `AsphodeInitializer` read `CharonEmitter.Database` once, before Charon's undefined-order init had set it, so inferred-memory analysis never ran. The ordered bootstrap now initializes Charon before Asphodel.
+- **Inferred-memory analyzers were dead on arrival.** The trace emitter wrote span attributes under `tool.name`/`tool.input`, but every inference analyzer read `tool_name` — so the Charon→Asphodel loop produced no patterns even once the engine existed. Emitter, analyzers, and test fixtures now share a single `SpanAttributes` constant (so the keys can't drift apart again), and the topic analyzer no longer tokenizes the raw input-JSON blob into "topics".
+- **Hub returned a raw `HTTP 500`** when forwarding a tool call to a Unity instance that had just begun a domain reload; it now returns a clean, retryable JSON-RPC error.
+- **Racing launchers could spawn duplicate (zombie) hub processes** (no lock around the spawn); an exclusive spawn lock with stale-lock recovery now guarantees a single hub.
+- **The hub became immortal and never picked up new builds.** Auto-exit was gated on a launcher *count* that decremented only on an explicit `disconnect` — which an abruptly-killed launcher (editor restart, crash, sub-agent teardown) never sends — so the count leaked and the hub stayed alive for days, routing stale code and accumulating stale registry state. Hub liveness is now time-based (last launcher activity), so the hub auto-exits when genuinely idle and a fresh build deploys on the next call.
+- **Saving a C# script froze the editor.** The incremental graph update ran the Node `.cs` scanner synchronously on the main thread (blocking in `WaitForExit`, no progress bar), so every script save hitched the editor and tool calls during the scan timed out. The interactive path now spawns the scan off the main thread and resolves the rest of the batch when it finishes; a tool call during the scan returns a structured `busy` instead of a 30-second timeout. (Editor-startup catch-up keeps the synchronous path.)
+
 ## [1.0.0] - 2026-06-09 — Phase 10: Public Release
 
 The first public release: Phase 10 release/distribution infrastructure plus a graph relationship & coverage correctness round driven by field reports from a large Addressables-heavy project. The correctness work treats the scanner/graph as ground truth and adds honest signals where a gap is inherent (precompiled DLL types, runtime dispatch).

@@ -270,6 +270,29 @@ namespace ArcForge.Hades.Editor.Charon
             return deleted;
         }
 
+        /// <summary>
+        /// Caps the trace table at the newest <paramref name="maxTraces"/> rows by deleting the
+        /// oldest. Unlike <see cref="EnforceSizeLimit"/> there is NO VACUUM: freed pages are
+        /// reused by subsequent inserts, so the file plateaus instead of growing unbounded, and
+        /// startup never blocks on a multi-GB rewrite (the felt-performance startup freeze). A
+        /// PASSIVE checkpoint folds the delete into the main file cheaply. Returns rows deleted.
+        /// Runs at startup, never mid-rebuild.
+        /// </summary>
+        public int PruneToTraceCap(int maxTraces)
+        {
+            if (maxTraces <= 0) return 0;
+
+            var total = _connection.ExecuteScalar<long>("SELECT COUNT(*) FROM traces;");
+            var toDelete = total - maxTraces;
+            if (toDelete <= 0) return 0;
+
+            var deleted = _connection.Execute(@"
+                DELETE FROM traces WHERE trace_id IN (
+                    SELECT trace_id FROM traces ORDER BY start_time ASC LIMIT ?);", toDelete);
+            _connection.Execute("PRAGMA wal_checkpoint(PASSIVE);"); // cheap; no TRUNCATE/VACUUM
+            return deleted;
+        }
+
         public void InsertEvalDataset(EvalDataset dataset)
         {
             _connection.Execute(@"

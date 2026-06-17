@@ -9,19 +9,15 @@ namespace ArcForge.Hades.Editor.Graph.Updates
     /// Watches for changes to Packages/manifest.json and packages-lock.json.
     /// Triggers a package rescan when dependencies change.
     /// </summary>
-    [InitializeOnLoad]
+    // NOTE: no [InitializeOnLoad] — HadesBootstrap calls Initialize() in the boot order.
     public static class PackageChangeDetector
     {
         static FileSystemWatcher _watcher;
         static bool _packageChangeDetected;
 
-        static PackageChangeDetector()
+        internal static void Initialize()
         {
-            EditorApplication.delayCall += Initialize;
-        }
-
-        static void Initialize()
-        {
+            if (_watcher != null) return; // idempotent
             var projectRoot = Path.GetDirectoryName(Application.dataPath);
             var packagesDir = Path.Combine(projectRoot, "Packages");
 

@@ -252,8 +252,9 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             var db = GraphDatabase.Instance;
             if (db == null) return MCPToolResult.Error("Graph database not initialized");
 
-            var components = db.FindNodesByType("Component")
-                .Where(c => c.Name == component_type).ToList();
+            // Indexed (name, type) lookup via idx_nodes_name_type — was a full Component-type
+            // load + in-C# Name filter.
+            var components = db.FindNodesByNameAndTypeAll(component_type, "Component");
 
             // Raw hits: (prefabNodeId → JObject). One entry per component instance found.
             // We use prefabNodeId as the dedup key so each prefab appears at most once.
@@ -425,8 +426,14 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             var db = GraphDatabase.Instance;
             if (db == null) return MCPToolResult.Error("Graph database not initialized");
 
-            var targets = db.SearchByName(null, null)
-                .Where(n => PathMatches(n.Path, target_path)).ToList();
+            // Resolve the target path via the idx_nodes_path index instead of loading and
+            // materializing the entire node table (the #2 full-table scan). Exact path first;
+            // fall back to the tolerant normalized path for callers that pass an absolute path.
+            // Both lookups are indexed. Returns the root asset node plus any co-located
+            // ScriptType nodes at that path — the same set the old PathMatches filter produced.
+            var targets = db.FindNodesByPath(target_path);
+            if (targets.Count == 0)
+                targets = db.FindNodesByPath(NormalizeAssetPath(target_path));
 
             if (targets.Count == 0)
                 targets = db.FindNodesByType("ScriptType")
@@ -686,7 +693,11 @@ namespace ArcForge.Hades.Editor.MCP.Tools
             var db = GraphDatabase.Instance;
             if (db == null) return MCPToolResult.Error("Graph database not initialized");
 
-            var startNodes = db.SearchByName(null, null).Where(n => PathMatches(n.Path, asset_path)).ToList();
+            // Indexed path resolution (idx_nodes_path) — see find_references_to. Exact path,
+            // then a normalized fallback; avoids the old whole-table scan + materialization.
+            var startNodes = db.FindNodesByPath(asset_path);
+            if (startNodes.Count == 0)
+                startNodes = db.FindNodesByPath(NormalizeAssetPath(asset_path));
             if (startNodes.Count == 0)
                 startNodes = db.FindNodesByType("Scene").Where(n => PathMatches(n.Path, asset_path)).ToList();
             if (startNodes.Count == 0)

@@ -86,7 +86,7 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
                     EndTime = t.AddMilliseconds(100).ToUnixTimeMilliseconds(),
                     Status = SpanStatus.Ok
                 };
-                span.Attributes["tool_name"] = "test";
+                span.Attributes[SpanAttributes.ToolName] = "test";
                 span.Attributes["asset_type"] = "script";
                 spans.Add(span);
             }
@@ -130,7 +130,7 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
                     EndTime = t.AddMilliseconds(100).ToUnixTimeMilliseconds(),
                     Status = isError ? SpanStatus.Error : SpanStatus.Ok
                 };
-                span.Attributes["tool_name"] = "test";
+                span.Attributes[SpanAttributes.ToolName] = "test";
                 span.Attributes["asset_type"] = types[i % 4]; // evenly distributed
                 spans.Add(span);
             }

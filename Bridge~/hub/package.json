@@ -1,6 +1,6 @@
 {
   "name": "@arcforge/hades-hub",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP Hub server for Hades Unity integration",
   "type": "module",
   "main": "dist/index.js",

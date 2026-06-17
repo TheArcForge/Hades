@@ -12,7 +12,7 @@ This is the Claude Code plugin half of [**Hades**](https://github.com/TheArcForg
 |---|---|---|
 | **Skills** | 22 | Architecture decisions, workflow guidance, domain expertise (networking, audio, UI, shaders, ECS, testing, and more) |
 | **Commands** | 6 | `/hades:status`, `/hades:rebuild-graph`, `/hades:show-traces`, `/hades:validate-memory`, `/hades:show-proposals`, `/hades:export-traces` |
-| **MCP Server** | 89 tools | Connects Claude Code to the Hades MCP server running inside Unity Editor |
+| **MCP Server** | 90 tools | Connects Claude Code to the Hades MCP server running inside Unity Editor |
 
 ## Prerequisites
 
@@ -53,7 +53,7 @@ Run `claude plugin validate /path/to/hades-plugin` — you should see "Validatio
 3. Start Claude Code: `claude`
 4. Check the connection: `/hades:status`
 
-Skills activate automatically based on context. All 89 MCP tools are available when Unity is running.
+Skills activate automatically based on context. All 90 MCP tools are available when Unity is running.
 
 ## How it connects
 

@@ -277,7 +277,7 @@ The hub proxies `tools/list` and `tools/call` to the matched Unity instance via 
 
 ### 3.6a Initialize response and agent instructions
 
-The launcher answers `initialize` locally without a hub round-trip. The response includes standard MCP fields (`protocolVersion`, `capabilities`, `serverInfo`) but does **not** include an `instructions` field — the launcher has no access to the Unity-side Hades instructions at this point. The `serverInfo.version` in this response is currently `0.9.1` (a stale constant in the launcher source).
+The launcher answers `initialize` locally without a hub round-trip. The response includes standard MCP fields (`protocolVersion`, `capabilities`, `serverInfo`) but does **not** include an `instructions` field — the launcher has no access to the Unity-side Hades instructions at this point. The `serverInfo.version` is a `SERVER_VERSION` constant in the launcher source, bumped each release (see ReleasePipeline.md, "Version constants in source"); it is `1.1.0` as of v1.1.0. (The Unity-side MCP server, by contrast, resolves its version dynamically from the package manifest.)
 
 The Hades agent guidance lives Unity-side and is only reachable after a Unity instance registers. It is not surfaced at `initialize` time via the launcher path.
 
@@ -403,7 +403,7 @@ Claude Desktop does not use the plugin system. For Claude Desktop users, Unity's
 }
 ```
 
-The config points to a **stable launcher copy** at `~/.arcforge/hades-hub/launcher.js`, not the UPM cache path (which changes on package updates). Unity copies the launcher there on every server start.
+The config points to a **stable launcher copy** at `~/.arcforge/hades-hub/launcher.js`, not the UPM cache path (which changes on package updates). Unity copies the launcher there on every server start. This single-file copy is correct **because the launcher is built as a self-contained esbuild bundle** — it has no sibling modules to resolve from the stable location. (Splitting it into multiple `tsc`-emitted files without updating the copy routine was the v1.1.0 install regression: the copied `launcher.js` died at startup with `ERR_MODULE_NOT_FOUND`. The bundle invariant is now guarded by `Bridge~/tests/launcher/bundle.test.ts`.)
 
 The stable launcher needs to locate the hub, but the hub is a multi-file Node.js app that can't be deployed as a single copy. Instead, Unity writes a **pointer file** (`hub-path.json`) containing the absolute path to the hub entry point at its original package location:
 

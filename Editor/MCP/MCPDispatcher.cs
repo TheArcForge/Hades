@@ -135,8 +135,8 @@ namespace ArcForge.Hades.Editor.MCP
         {
             using (var span = CharonEmitter.StartSpan($"mcp.tool.{name}", SpanKind.Server, traceId))
             {
-                span.SetAttribute("tool.name", name);
-                span.SetAttribute("tool.input", arguments.ToString(Newtonsoft.Json.Formatting.None));
+                span.SetAttribute(SpanAttributes.ToolName, name);
+                span.SetAttribute(SpanAttributes.ToolInput, arguments.ToString(Newtonsoft.Json.Formatting.None));
 
                 var result = CallTool(name, arguments);
 
@@ -159,7 +159,9 @@ namespace ArcForge.Hades.Editor.MCP
                 ["serverInfo"] = new JObject
                 {
                     ["name"] = "hades",
-                    ["version"] = "0.9.1"
+                    // Resolve from the package manifest so it never goes stale (mirrors HadesStatus).
+                    ["version"] = UnityEditor.PackageManager.PackageInfo
+                        .FindForAssembly(typeof(MCPDispatcher).Assembly)?.version ?? "1.1.0"
                 },
                 ["instructions"] = McpInstructions
             };
