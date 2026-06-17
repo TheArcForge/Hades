@@ -41,6 +41,12 @@ namespace ArcForge.Hades.Editor.Core
             if (!Directory.Exists(hubDir))
                 Directory.CreateDirectory(hubDir);
 
+            // Single-file copy is sufficient ONLY because the launcher is built as a self-contained
+            // esbuild bundle (Bridge~/package.json `build:launcher`) — it has no relative sibling
+            // imports to resolve from this stable location. If the launcher build ever reverts to a
+            // multi-file `tsc` emit, copying just index.js here would crash the launcher at startup
+            // with ERR_MODULE_NOT_FOUND. The bundle invariant is regression-guarded by
+            // Bridge~/tests/launcher/bundle.test.ts.
             try
             {
                 File.Copy(sourcePath, stablePath, true);
