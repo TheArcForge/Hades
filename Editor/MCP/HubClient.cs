@@ -19,9 +19,9 @@ namespace ArcForge.Hades.Editor.MCP
 
     public static class HubClient
     {
-        static readonly string HubDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".arcforge", "hades-hub");
+        // Resolved per call rather than cached in a static readonly: the hub scope is a
+        // user-facing setting, so the directory can change within an editor session.
+        static string HubDir => Core.HadesPaths.HubDir;
 
         static string HubJsonPath => Path.Combine(HubDir, "hub.json");
         static string PendingDir => Path.Combine(HubDir, "pending");
