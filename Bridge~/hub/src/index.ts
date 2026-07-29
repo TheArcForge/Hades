@@ -7,11 +7,16 @@ import {
 } from "./heartbeat.js";
 import type { HubInfo } from "./types.js";
 
-const HUB_DIR = path.join(
-  process.env.HOME ?? process.env.USERPROFILE ?? "",
-  ".arcforge",
-  "hades-hub"
-);
+// Handed down by the launcher that spawned this hub (see startHub). The $HOME fallback covers a
+// hub started by hand or by an older launcher. The hub deliberately does NOT re-derive this from
+// a project root: only the launcher knows which project it was invoked for.
+const HUB_DIR =
+  process.env.HADES_HUB_DIR?.trim() ||
+  path.join(
+    process.env.HOME ?? process.env.USERPROFILE ?? "",
+    ".arcforge",
+    "hades-hub"
+  );
 const HUB_JSON_PATH = path.join(HUB_DIR, "hub.json");
 const PENDING_DIR = path.join(HUB_DIR, "pending");
 const AUTO_EXIT_MS = 60_000;
