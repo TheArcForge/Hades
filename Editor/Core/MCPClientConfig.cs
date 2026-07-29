@@ -65,7 +65,14 @@ namespace ArcForge.Hades.Editor.Core
         }
 
         /// <summary>
-        /// Writes/updates claude_desktop_config.json so Claude Desktop (Chat/Cowork) can reach the hub.
+        /// Writes/updates claude_desktop_config.json so Claude Desktop (Chat/Cowork) can reach
+        /// the hub.
+        ///
+        /// This is the one Hades write that CANNOT be project-local: Claude Desktop is a single
+        /// global application with exactly one config file. Gated by the `desktop_integration`
+        /// setting (default on) so a user who never opens Desktop can have Hades write nothing
+        /// outside the workspace. Turning the setting off does not remove an existing entry —
+        /// Hades does not exclusively own this file, and a stale entry is harmless.
         /// </summary>
         static void UpdateClaudeDesktopConfig(string launcherPath)
         {
