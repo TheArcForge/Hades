@@ -64,7 +64,7 @@ namespace ArcForge.Hades.Editor.Core
         /// <summary>Live resolution for production callers. Reads env + this project's settings.</summary>
         public static string HubDir => ResolveHubDir(
             Environment.GetEnvironmentVariable(EnvHubDir),
-            HadesScope.Local,   // replaced with settings lookup in Task 4
+            new HadesSettings().HubScope,
             PathSandbox.ProjectRoot,
             HomeDir);
     }
