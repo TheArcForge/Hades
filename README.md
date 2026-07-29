@@ -172,13 +172,13 @@ That's it. Open Claude Code from your Unity project directory and the tools are 
 
 ## How it works
 
-Claude Code connects over stdio to a lightweight launcher, which routes HTTP requests to the Hades Hub, which in turn forwards tool calls to the correct Unity Editor instance. The Hub runs once per machine and handles multi-project routing automatically. All data stays local — no cloud services, no telemetry, no vendor lock-in. See [`Documentation/arcforge-hades-architecture.md`](Documentation/arcforge-hades-architecture.md) for full architectural details.
+Claude Code connects over stdio to a lightweight launcher, which routes HTTP requests to the Hades Hub, which in turn forwards tool calls to the correct Unity Editor instance. By default each project gets its own Hub, kept inside the project at `.arcforge/hades-hub/`; you can switch to a single Hub shared across every project at **Project Settings → Hades**. Either way the Hub handles multi-project routing automatically. All data stays local — no cloud services, no telemetry, no vendor lock-in. See [`Documentation/arcforge-hades-architecture.md`](Documentation/arcforge-hades-architecture.md) for full architectural details.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| No tools appear in Claude Code | Is Unity running? Check `~/.arcforge/hades-hub/hub.json` for a registered instance. |
+| No tools appear in Claude Code | Is Unity running? Check `.arcforge/hades-hub/hub.json` in your project for a registered instance (or `~/.arcforge/hades-hub/hub.json` if you've set Hub scope to Global). |
 | Tools disappear after recompile | Wait ~10 seconds — the Hub buffers tool calls during Unity's domain reload. |
 | Wrong project receives tool calls | Launch Claude Code from the correct project directory. |
 | Project info seems stale | Run `/hades:rebuild-graph` to regenerate the knowledge graph. |
