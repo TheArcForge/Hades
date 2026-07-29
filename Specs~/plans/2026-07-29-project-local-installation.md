@@ -2106,7 +2106,7 @@ describe("resolveHubDir", () => {
     const dir = resolveHubDir({
       env: { HOME },
       projectRoot: PROJECT,
-      readFile: files({ [CONFIG_PATH]: "  not: [valid\n" }),
+      readFile: files({ [CONFIG_PATH]: "  not: [valid\n" }),
     });
     expect(dir).toBe(LOCAL);
   });
@@ -2216,7 +2216,7 @@ export function resolveHubDir(opts: ResolveHubDirOptions): string {
 cd Bridge~ && npx vitest run tests/launcher/hub-dir.test.ts
 ```
 
-Expected: PASS — 18 tests.
+Expected: PASS — 17 tests (9 readHubScope + 8 resolveHubDir).
 
 - [ ] **Step 5: Commit**
 
