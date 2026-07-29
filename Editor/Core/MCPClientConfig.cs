@@ -300,20 +300,37 @@ namespace ArcForge.Hades.Editor.Core
             }
         }
 
+        /// <summary>
+        /// The installed package root, whatever the install channel — embedded (Packages/),
+        /// registry, git URL, or local disk all resolve through PackageInfo. Falls back to the
+        /// project root, which is correct when running Hades from a source checkout.
+        ///
+        /// Do NOT reintroduce a hardcoded "Packages/com.arcforge.hades" guess: a git-URL install
+        /// lands in Library/PackageCache/com.arcforge.hades@&lt;hash&gt; and the guess silently
+        /// misses, leaving the launcher uncopied and no .mcp.json written.
+        /// </summary>
+        static string PackageRoot()
+        {
+            try
+            {
+                var info = UnityEditor.PackageManager.PackageInfo
+                    .FindForAssembly(typeof(MCPClientConfig).Assembly);
+                if (info != null && !string.IsNullOrEmpty(info.resolvedPath)
+                    && Directory.Exists(info.resolvedPath))
+                    return info.resolvedPath;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Hades] Package path resolution failed: {ex.Message}");
+            }
+
+            return PathSandbox.ProjectRoot;
+        }
+
         static string FindPackageSkillsDir()
         {
-            // Try the package location first (when installed via UPM)
-            var packageRoot = Path.GetFullPath(
-                Path.Combine(Application.dataPath, "..", "Packages", "com.arcforge.hades"));
-            var skillsDir = Path.Combine(packageRoot, "skills");
-            if (Directory.Exists(skillsDir)) return skillsDir;
-
-            // Fallback: dev repo root (when running from source)
-            var devRoot = PathSandbox.ProjectRoot;
-            skillsDir = Path.Combine(devRoot, "skills");
-            if (Directory.Exists(skillsDir)) return skillsDir;
-
-            return null;
+            var skillsDir = Path.Combine(PackageRoot(), "skills");
+            return Directory.Exists(skillsDir) ? skillsDir : null;
         }
 
         static void WriteHubPath(string packageLauncherDir, string hubDir)
@@ -337,16 +354,8 @@ namespace ArcForge.Hades.Editor.Core
 
         static string FindPackageLauncherDir()
         {
-            var packageRoot = Path.GetFullPath(
-                Path.Combine(Application.dataPath, "..", "Packages", "com.arcforge.hades"));
-            var launcherDir = Path.Combine(packageRoot, "Bridge~", "launcher");
-            if (Directory.Exists(launcherDir)) return launcherDir;
-
-            var devRoot = PathSandbox.ProjectRoot;
-            launcherDir = Path.Combine(devRoot, "Bridge~", "launcher");
-            if (Directory.Exists(launcherDir)) return launcherDir;
-
-            return null;
+            var launcherDir = Path.Combine(PackageRoot(), "Bridge~", "launcher");
+            return Directory.Exists(launcherDir) ? launcherDir : null;
         }
 
         static string GetDesktopConfigPath()
