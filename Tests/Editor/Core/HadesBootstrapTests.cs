@@ -19,6 +19,14 @@ namespace ArcForge.Hades.Editor.Tests.Core
         }
 
         [Test]
+        public void Settings_BootsBeforeCharon()
+        {
+            var trace = HadesBootstrap.BootTrace;
+            Assert.Less(trace.IndexOf("Settings"), trace.IndexOf("Charon"),
+                "Charon constructs HadesSettings, so settings migration must run first.");
+        }
+
+        [Test]
         public void Boot_InitializesCharonBeforeAsphodel_SoInferenceEngineIsNotNull()
         {
             // #6 regression guard: Charon runs before Asphodel, so CharonEmitter.Database
