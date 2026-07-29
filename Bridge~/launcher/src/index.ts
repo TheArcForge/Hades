@@ -3,14 +3,16 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
-import { resolveProjectPath } from "./project-path.js";
+import { findProjectRoot } from "./project-path.js";
 import { acquireSpawnLock, releaseSpawnLock } from "./spawn-lock.js";
+import { resolveHubDir, defaultReadFile, ENV_HUB_DIR } from "./hub-dir.js";
 
-const HUB_DIR = path.join(
-  process.env.HOME ?? process.env.USERPROFILE ?? "",
-  ".arcforge",
-  "hades-hub"
-);
+const PROJECT_ROOT = findProjectRoot(process.cwd());
+const HUB_DIR = resolveHubDir({
+  env: process.env,
+  projectRoot: PROJECT_ROOT,
+  readFile: defaultReadFile,
+});
 const HUB_JSON_PATH = path.join(HUB_DIR, "hub.json");
 const HUB_ENTRY = findHubEntry();
 
@@ -37,7 +39,7 @@ function findHubEntry(): string {
 
   return relative;
 }
-const PROJECT_PATH = resolveProjectPath(process.cwd());
+const PROJECT_PATH = PROJECT_ROOT ?? process.cwd();
 const HUB_STARTUP_TIMEOUT_MS = 15000;
 
 const PROTOCOL_VERSION = "2024-11-05";
@@ -91,7 +93,9 @@ function startHub(): void {
   const child = spawn("node", [HUB_ENTRY], {
     detached: true,
     stdio: "ignore",
-    env: { ...process.env },
+    // Hand the resolved dir down explicitly. If the hub re-derived it from $HOME it could
+    // disagree with this launcher and publish hub.json where nobody is looking.
+    env: { ...process.env, [ENV_HUB_DIR]: HUB_DIR },
   });
   child.unref();
 }
