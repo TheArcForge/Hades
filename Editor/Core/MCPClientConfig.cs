@@ -21,14 +21,13 @@ namespace ArcForge.Hades.Editor.Core
         }
 
         /// <summary>
-        /// Copies the launcher to ~/.arcforge/hades-hub/launcher.js and writes hub-path.json.
+        /// Copies the launcher to &lt;hubDir&gt;/launcher.js and writes hub-path.json beside it.
+        /// hubDir is resolved by HadesPaths — the project's .arcforge/hades-hub by default.
         /// Returns the stable launcher path, or null if it can't be resolved.
         /// </summary>
         static string EnsureStableLauncher()
         {
-            var hubDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".arcforge", "hades-hub");
+            var hubDir = HadesPaths.HubDir;
 
             var stablePath = Path.Combine(hubDir, "launcher.js");
 
