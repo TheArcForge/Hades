@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Project-Local Installation
+
+A Unity project can now hold its entire Hades installation inside its own workspace, and does so by default. Previously the data plane was project-scoped but the control plane was not: the hub rendezvous directory was hardcoded under `$HOME`, skills were copied to `~/.claude/skills/`, and settings lived in Unity `EditorPrefs`, which is global per Unity install. Two projects on one machine therefore shared a hub process and a single set of preferences.
+
+### Changed
+
+- **Hades installs project-local by default.** The hub rendezvous directory moved from `~/.arcforge/hades-hub/` to `<projectRoot>/.arcforge/hades-hub/`, and skills install to `<projectRoot>/.claude/skills/`. Both are switchable per project at **Project Settings → Hades** (also reachable via the new **Hades → Settings…** menu item), and `HADES_HUB_DIR` overrides the hub directory outright for a single launcher process. Global hub scope remains fully supported and is the right choice when one Claude Code session spans a Unity project and a separate `file:`-referenced package repo — a project-local hub is not discoverable from outside the project directory, so that case falls back to the shared hub automatically. Changing hub scope takes effect on the next Claude Code session, because the launcher reads the setting at process start.
+- **Settings moved out of Unity `EditorPrefs`** into `<projectRoot>/.arcforge/config.local.yaml` — a flat, gitignored, per-developer file. Port, log level, domain-reload strategy, and Charon retention are now per project instead of shared by every project on the Unity install. Existing values can be imported on first load via a one-time prompt; the EditorPrefs keys are left in place, since another project on the machine may not have been migrated yet.
+- **The Claude Desktop config write is gated** by a new `desktop_integration` setting (default on, preserving current behaviour). It remains the one Hades write that cannot be project-local: Claude Desktop is a single application with exactly one config file. Turning it off, together with `hub_scope: local` and `skills_scope: local`, is the fully isolated configuration — Hades then writes nothing outside the project directory. Turning it off does not remove an existing `mcpServers.hades` entry.
+
+### Fixed
+
+- **Package path resolution never worked on the documented install path.** `FindPackageLauncherDir` and `FindPackageSkillsDir` guessed `<project>/Packages/com.arcforge.hades`, which only exists for an *embedded* package. A git-URL UPM install resolves to `Library/PackageCache/com.arcforge.hades@<hash>`, so both returned `null` and the stable launcher copy plus the skills install silently no-opped. Both now resolve through `PackageInfo.FindForAssembly`, matching the rest of the codebase.
+
+### Notes
+
+- **`~/.arcforge/hades-hub/` is no longer used in the default configuration.** Nothing in it needs migrating — `launcher.js` and `hub-path.json` are regenerated on every server start, and `hub.json`, `hub.lock`, and `pending/` are live runtime state of a possibly-running hub. Hades neither moves nor deletes the folder, because it cannot know whether another project on the machine still depends on it; a one-time notice points it out instead. Delete it by hand once every project has been updated and no hub process is running.
+
 ## [1.1.0] — Graph Ownership Model, Incremental Integrity, Startup Reliability & Felt Performance
 
 A correctness round on the incremental-update path. Every graph node now records the asset that owns it (`owner_guid`), so an asset's full node set is created, deleted, and rebuilt as a single unit. This closes a class of silent graph corruption where domain reloads and re-scans destroyed or leaked nodes, and promotes meta-scanned assets (textures, models, audio, animation, fonts, etc.) to first-class citizens of the incremental lifecycle.

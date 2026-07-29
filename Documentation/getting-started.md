@@ -58,6 +58,46 @@ If you can't reach GitHub from your machine, you can install from a local copy i
 
 7. Unity imports the package. Continue from step 6 of the main path above.
 
+## Installation scope
+
+By default, Hades keeps everything for a project *inside* that project. After Step 1 you'll find the whole installation under your Unity project root:
+
+| Path | What it holds |
+|---|---|
+| `.arcforge/` | The knowledge graph, the trace database, memory files, the hub's runtime state, and your Hades settings |
+| `.mcp.json` | How Claude Code reaches Hades when you launch it from this directory |
+| `.claude/skills/` | The 22 Hades skills |
+| `CLAUDE.md` | Project guidance for the agent (appended, never overwritten) |
+
+Deleting the project directory removes the installation with it. Of the above, `.arcforge/memory/` is the part worth committing — it's shared team knowledge. The rest is machine-specific: the databases, `.arcforge/hades-hub/`, `.arcforge/config.local.yaml`, and `.mcp.json` are all regenerated locally and should stay out of version control.
+
+### Switching to global
+
+Two settings change where things land. Both live at **Project Settings → Hades**, which you can also reach from the **Hades → Settings…** menu.
+
+**Hub scope** — `Local` (the default) or `Global`. Local gives this project its own hub process, with the hub's rendezvous files (`hub.json`, `hub.lock`, `pending/`, the stable `launcher.js` copy) under `<projectRoot>/.arcforge/hades-hub/`. Global gives you one hub shared by every Unity project on the machine, with those files in `~/.arcforge/hades-hub/`.
+
+Choose Global if you work across a Unity project and a separate `file:`-referenced package repository in the same Claude Code session. A project-local hub isn't discoverable from outside the project directory, so a session started in the package repo can't find it.
+
+Changing hub scope takes effect on your **next** Claude Code session — the launcher reads the setting when its process starts, not while it's running.
+
+**Skills scope** — `Local` (the default) or `Global`. Local installs the skills to `<projectRoot>/.claude/skills/`; Global installs them to `~/.claude/skills/`. Claude Code reads both, so Local is all it needs. Claude Desktop does *not* read project-scoped skills, so choose Global if you use Claude Desktop.
+
+To override the hub directory for a single Claude Code session — ignoring both the setting and the default — set `HADES_HUB_DIR`:
+
+```bash
+HADES_HUB_DIR=/path/to/hub claude
+```
+
+### The two things that stay outside your project
+
+Hades can't quite contain everything, and it's worth knowing exactly what:
+
+1. **Claude Desktop's config file** — `~/Library/Application Support/Claude/claude_desktop_config.json` (on Windows, `%APPDATA%\Claude\claude_desktop_config.json`). Claude Desktop is a single application with exactly one config file, so there is no project-local equivalent. Turn off **Claude Desktop Integration** at Project Settings → Hades to stop Hades writing it.
+2. **`~/.claude/skills/`** — written only when Skills scope is `Global`.
+
+So the fully isolated configuration is: Hub scope `Local`, Skills scope `Local`, Claude Desktop Integration **off**. With those three set, Hades writes nothing outside your project directory.
+
 ## Step 2: Install the Claude Code Plugin
 
 The plugin installs in Step 3 below via the marketplace command — no separate download needed. If you need to validate the plugin manually, you can clone the repo and run:
@@ -139,9 +179,11 @@ Hades skills activate automatically based on context. The agent uses Unity-speci
 2. Did you `cd` into your Unity project directory before starting Claude Code? The Hub routes tool calls by matching your working directory to registered Unity projects.
 3. Check if the Hub is running:
    ```bash
-   cat ~/.arcforge/hades-hub/hub.json
+   cat .arcforge/hades-hub/hub.json
    ```
-   You should see a JSON file with a port and PID. If the file doesn't exist, restart your Claude Code session — the launcher starts the Hub automatically.
+   Run that from your Unity project directory. If you set Hub scope to Global, look in `~/.arcforge/hades-hub/` instead; Project Settings → Hades shows the resolved path either way. You should see a JSON file with a port and PID. If the file doesn't exist, restart your Claude Code session — the launcher starts the Hub automatically.
+
+4. If Claude Code is running from *outside* the Unity project directory, a project-local hub is invisible to it. Either `cd` into the project, switch Hub scope to Global, or point the session at the hub explicitly with `HADES_HUB_DIR`. See "Installation scope" above.
 
 ### "Tools were working, then stopped"
 
