@@ -212,14 +212,22 @@ Claude Code ←(stdio)→ Launcher ←(HTTP)→ Hub ←(HTTP)→ Unity Instance(
                                           ↑
                                     long-running
                                     dynamic port
-                                    one per machine
+                                    one per hub directory
 ```
 
 The full MCP Hub design specification is in `docs/superpowers/specs/2026-05-13-mcp-hub-design.md`. This section summarizes the architecture; the spec is authoritative for implementation detail.
 
+**The hub directory (`<hubDir>`).** All three components rendezvous through one directory, resolved identically by each of them in this order:
+
+1. The `HADES_HUB_DIR` environment variable, if set and non-empty.
+2. `<projectRoot>/.arcforge/hades-hub/` — the default, used when a project's Hub scope is `Local`.
+3. `~/.arcforge/hades-hub/` — used when Hub scope is `Global`, and as the automatic fallback when the project root cannot be determined (notably a launcher whose working directory is a `file:`-referenced package repo outside the Unity project, which cannot see a project-local hub).
+
+Hub scope is a per-project setting at **Project Settings → Hades**, which also displays the resolved path. The rest of this section writes `<hubDir>` for that directory. Note that the launcher passes its resolved directory to the hub explicitly via `HADES_HUB_DIR` in the spawn environment, so the hub never re-derives it and the two cannot disagree.
+
 ### 3.2 Hub
 
-A long-running Node.js HTTP server. One per machine, shared across all Claude Code sessions and Unity instances. Source lives in `Bridge~/hub/`.
+A long-running Node.js HTTP server. One per hub directory — so one per project under the default local scope, or one per machine when Hub scope is `Global` and shared across all Claude Code sessions and Unity instances. Source lives in `Bridge~/hub/`.
 
 **Responsibilities:**
 - Implements the MCP protocol (plain JSON-RPC over HTTP POST to `/rpc`) facing Claude Code
@@ -229,14 +237,14 @@ A long-running Node.js HTTP server. One per machine, shared across all Claude Co
 - Buffers requests briefly during Unity domain reloads (up to 10 seconds)
 - Auto-exits after 60 seconds of no connected launchers and no registered Unity instances
 
-**Port:** Dynamically assigned. The hub writes `{ port, pid, startedAt }` to `~/.arcforge/hades-hub/hub.json` for the launcher to find.
+**Port:** Dynamically assigned. The hub writes `{ port, pid, startedAt }` to `<hubDir>/hub.json` for the launcher to find.
 
 ### 3.3 Launcher
 
 A thin stdio process spawned by Claude Code as declared in `.mcp.json`. Source lives in `Bridge~/launcher/`. Zero external dependencies — uses only Node.js built-ins.
 
 **Behavior:**
-1. Reads `~/.arcforge/hades-hub/hub.json` for hub port and PID
+1. Resolves `<hubDir>` (per §3.1), then reads `<hubDir>/hub.json` for hub port and PID
 2. If hub is not running: spawns it as a detached background process, waits up to 15s (`HUB_STARTUP_TIMEOUT_MS=15000`)
 3. Registers with hub as a connected launcher session via `POST /api/launcher/connect`
 4. Bridges stdio ↔ HTTP: reads JSON-RPC from stdin, POSTs to hub's `/rpc` endpoint, writes response to stdout
@@ -255,7 +263,7 @@ The existing `MCPServer.cs` HTTP server inside Unity. Modified to register with 
 - On domain reload (before): deregisters with `transient: true` (hub buffers requests); the background heartbeat timer is torn down
 - On domain reload (after): re-registers (hub resumes request forwarding). Re-creation is gated on a single `EditorApplication.delayCall` tick — a napped, backgrounded editor can starve this, so a fresh server may fail to bootstrap until the main thread ticks once (see the `wake-unity.sh` recovery in the Troubleshooting guide).
 - On quit: deregisters with `transient: false`
-- If hub is not running: writes breadcrumb to `~/.arcforge/hades-hub/pending/` for next hub start
+- If hub is not running: writes breadcrumb to `<hubDir>/pending/` for next hub start
 
 **Backgrounded-editor note:** While a request is in flight, the server holds a refcounted macOS App Nap opt-out (`NSProcessInfo beginActivityWithOptions`) so the main-thread work queue keeps draining even if the OS tries to throttle a hidden editor. This is cheap insurance layered on top of the HTTP listener (which already runs on background threadpool threads and so accepts requests regardless of editor focus); the steady-state registration guarantee comes from the background-timer heartbeat above.
 
@@ -317,7 +325,7 @@ The Hub architecture replaces the previous per-project discovery model:
 - ~~`~/.arcforge/servers/{name}-{hash}.json`~~ — server registry files (replaced by hub registry)
 - ~~`{project}/.mcp.json`~~ — per-project Claude Code config (replaced by plugin `.mcp.json`)
 - ~~`~/.arcforge/mcp-bridge.js`~~ — standalone bridge script (replaced by launcher)
-- ~~`MCPClientConfig.WriteClaudeCodeConfig()`~~ — replaced by `WriteProjectMcpJson()`, which writes `.mcp.json` to the Unity project root pointing to `~/.arcforge/hades-hub/launcher.js`; Claude Code auto-discovers MCP when launched from the project directory. The old behavior was removed; a targeted replacement was added.
+- ~~`MCPClientConfig.WriteClaudeCodeConfig()`~~ — replaced by `WriteProjectMcpJson()`, which writes `.mcp.json` to the Unity project root pointing to the stable launcher copy at `<hubDir>/launcher.js`; Claude Code auto-discovers MCP when launched from the project directory. The old behavior was removed; a targeted replacement was added.
 - ~~`MCPClientConfig.OnServerStop()` file deletion~~ — server entry cleanup (replaced by hub deregistration)
 
 The previous model had three known issues documented in the Roadmap (§10): server entry lost during compilation failures, `.mcp.json` not found from wrong directory, and `.mcp.json` scoped to Unity project only. The Hub architecture resolves all three.
@@ -382,9 +390,9 @@ Both steps are needed for the full experience. Skills alone (Step 2 only) provid
 **Auto-generated files on MCP server start:** `MCPClientConfig.OnServerStart` now performs two additional distribution steps automatically:
 
 - **CLAUDE.md** — written to the Unity project root on every server start. This file provides Claude Code with project-specific context (Hades version, available tools, and project conventions) without requiring the plugin to be installed.
-- **Skills copy** — 22 skills are copied to `~/.claude/skills/hades-*/` on every server start. This makes skills available to Claude Desktop users who cannot use the plugin system. Skills are refreshed automatically on each Unity MCP server start.
+- **Skills copy** — 22 skills are copied to `hades-*/` directories on every server start, refreshed automatically each time. The destination follows the `skills_scope` setting (Project Settings → Hades): `<projectRoot>/.claude/skills/` by default, or `~/.claude/skills/` when the scope is `Global`. Claude Code reads both, so the default suffices for it; Claude Desktop does **not** read project-scoped skills, so `Global` is required for Claude Desktop users, who cannot use the plugin system either.
 
-These mechanisms allow partial capability even without `/plugin install` or `--plugin-dir`: a Claude Code session launched from the Unity project directory gets CLAUDE.md context, and Claude Desktop users get skills via the copy path.
+These mechanisms allow partial capability even without `/plugin install` or `--plugin-dir`: a Claude Code session launched from the Unity project directory gets CLAUDE.md context and the project's skills, and Claude Desktop users get skills via the copy path once `skills_scope` is `Global`.
 
 For a step-by-step guide covering both install paths, see [`Documentation/getting-started.md`](getting-started.md).
 
@@ -397,13 +405,17 @@ Claude Desktop does not use the plugin system. For Claude Desktop users, Unity's
   "mcpServers": {
     "hades": {
       "command": "node",
-      "args": ["~/.arcforge/hades-hub/launcher.js"]
+      "args": ["/Users/you/Projects/YourUnityProject/.arcforge/hades-hub/launcher.js"]
     }
   }
 }
 ```
 
-The config points to a **stable launcher copy** at `~/.arcforge/hades-hub/launcher.js`, not the UPM cache path (which changes on package updates). Unity copies the launcher there on every server start. This single-file copy is correct **because the launcher is built as a self-contained esbuild bundle** — it has no sibling modules to resolve from the stable location. (Splitting it into multiple `tsc`-emitted files without updating the copy routine was the v1.1.0 install regression: the copied `launcher.js` died at startup with `ERR_MODULE_NOT_FOUND`. The bundle invariant is now guarded by `Bridge~/tests/launcher/bundle.test.ts`.)
+The config points to a **stable launcher copy** at `<hubDir>/launcher.js`, not the UPM cache path (which changes on package updates). Unity copies the launcher there on every server start and writes the absolute resolved path into the config. Under the default local hub scope that is `<projectRoot>/.arcforge/hades-hub/launcher.js`, as in the example above; with Hub scope set to `Global` it is `~/.arcforge/hades-hub/launcher.js`. The requirement is a *stable* path rather than a *global* one — the UPM cache path is what must be avoided, and the resolved hub directory satisfies that in either scope.
+
+This single-file copy is correct **because the launcher is built as a self-contained esbuild bundle** — it has no sibling modules to resolve from the stable location. (Splitting it into multiple `tsc`-emitted files without updating the copy routine was the v1.1.0 install regression: the copied `launcher.js` died at startup with `ERR_MODULE_NOT_FOUND`. The bundle invariant is now guarded by `Bridge~/tests/launcher/bundle.test.ts`.)
+
+Note that `claude_desktop_config.json` itself has no project-local equivalent — Claude Desktop is a single application with exactly one config file — so it is the one Hades write that cannot be contained in a workspace. The `desktop_integration` setting (default on, at Project Settings → Hades) turns the write off for developers who never open Claude Desktop; an existing `mcpServers.hades` entry is left in place rather than removed.
 
 The stable launcher needs to locate the hub, but the hub is a multi-file Node.js app that can't be deployed as a single copy. Instead, Unity writes a **pointer file** (`hub-path.json`) containing the absolute path to the hub entry point at its original package location:
 
@@ -507,7 +519,7 @@ Future consideration: `plugin.json` could declare a `"minMcpVersion"` field. The
 **If Claude Code was launched from the Unity project directory:**
 1. Does `.mcp.json` exist at the Unity project root? If not, reopen Unity — `MCPClientConfig.WriteProjectMcpJson()` writes it on MCP server start.
 2. Is Unity running with Hades? Check Unity console for "Hades MCP server started" log.
-3. Is the MCP server connected? Run `/mcp` — look for `hades` server status. If "failed", check `~/.arcforge/hades-hub/hub.json` — does it exist? Is the PID alive?
+3. Is the MCP server connected? Run `/mcp` — look for `hades` server status. If "failed", check `<hubDir>/hub.json` — does it exist? Is the PID alive? (Default `<hubDir>` is `<projectRoot>/.arcforge/hades-hub/`; see §3.1.)
 
 **If Claude Code was launched from a different directory (e.g., another repo, home directory):**
 1. Is the plugin installed? Run `/plugin list` — look for `hades`. Without the plugin, Claude Code has no way to discover or connect to the Hub from an unrelated directory. Run `/plugin marketplace add TheArcForge/hades-plugin` then `/plugin install hades` to fix.
@@ -537,9 +549,10 @@ Future consideration: `plugin.json` could declare a `"minMcpVersion"` field. The
 
 **Check:**
 1. Is Node.js available? Run `node --version` in terminal.
-2. Is another process blocking the port? Check `~/.arcforge/hades-hub/hub.json` for a stale PID. If the PID is dead, delete `hub.json` and retry.
-3. Can the launcher find the hub? Check `~/.arcforge/hades-hub/hub-path.json` — does it exist and point to a valid file? If not, reopen Unity to trigger `MCPClientConfig` which writes this file.
-4. Are the hub files compiled? Check `Bridge~/hub/dist/index.js` exists. If not, run `npm run build` in `Bridge~/`.
+2. Is another process blocking the port? Check `<hubDir>/hub.json` for a stale PID. If the PID is dead, delete `hub.json` and retry.
+3. Can the launcher find the hub? Check `<hubDir>/hub-path.json` — does it exist and point to a valid file? If not, reopen Unity to trigger `MCPClientConfig` which writes this file.
+4. Are the launcher and Unity looking in the same place? If Claude Code was started from outside the Unity project, it resolved `<hubDir>` to `~/.arcforge/hades-hub/` while Unity is using its project-local one. Either `cd` into the project, switch Hub scope to `Global`, or set `HADES_HUB_DIR` for the session (see §3.1).
+5. Are the hub files compiled? Check `Bridge~/hub/dist/index.js` exists. If not, run `npm run build` in `Bridge~/`.
 
 ---
 
