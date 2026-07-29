@@ -377,16 +377,6 @@ namespace ArcForge.Hades.Editor.Core
         }
 
         static void AtomicWrite(string filePath, string content)
-        {
-            var dir = Path.GetDirectoryName(filePath);
-            if (!Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
-
-            var tmpPath = filePath + ".tmp";
-            File.WriteAllText(tmpPath, content);
-            if (File.Exists(filePath))
-                File.Delete(filePath);
-            File.Move(tmpPath, filePath);
-        }
+            => AtomicFile.Write(filePath, content);
     }
 }
