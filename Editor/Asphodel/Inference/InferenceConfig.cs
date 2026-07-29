@@ -19,14 +19,15 @@ namespace ArcForge.Hades.Editor.Asphodel.Inference
             var configPath = System.IO.Path.Combine(arcforgeDir, "config.yaml");
             if (!System.IO.File.Exists(configPath)) return config;
 
-            foreach (var line in System.IO.File.ReadAllLines(configPath))
-            {
-                var trimmed = line.Trim();
-                var colonIdx = trimmed.IndexOf(':');
-                if (colonIdx <= 0) continue;
+            // Same flat `key: value` dialect HadesConfig reads — shared so the two config files
+            // can never drift in how they parse. Note this reads config.yaml (team-shared,
+            // git-tracked), NOT config.local.yaml (per-developer).
+            var values = Core.HadesConfig.Parse(System.IO.File.ReadAllLines(configPath));
 
-                var key = trimmed.Substring(0, colonIdx).Trim();
-                var value = trimmed.Substring(colonIdx + 1).Trim();
+            foreach (var pair in values)
+            {
+                var key = pair.Key;
+                var value = pair.Value;
 
                 switch (key)
                 {
