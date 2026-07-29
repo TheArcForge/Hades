@@ -14,10 +14,14 @@ namespace ArcForge.Hades.Editor.Core
             var launcherPath = EnsureStableLauncher();
             if (launcherPath == null) return;
 
-            UpdateClaudeDesktopConfig(launcherPath);
+            var settings = new HadesSettings();
+
+            if (settings.DesktopIntegration)
+                UpdateClaudeDesktopConfig(launcherPath);
+
             WriteProjectMcpJson(launcherPath);
             WriteProjectClaudeMd();
-            InstallSkillsForDesktop();
+            InstallSkills(settings.SkillsScope);
         }
 
         /// <summary>
@@ -265,19 +269,23 @@ namespace ArcForge.Hades.Editor.Core
         }
 
         /// <summary>
-        /// Copies Hades skills to ~/.claude/skills/ so Claude Desktop can discover them.
-        /// Runs on every startup to keep skills in sync with the installed package version.
+        /// Installs Hades skills so a Claude client can discover them. Runs on every startup to
+        /// keep them in sync with the installed package version.
+        ///
+        /// Local scope targets &lt;projectRoot&gt;/.claude/skills/, which Claude Code reads —
+        /// nothing leaves the workspace. Global scope targets ~/.claude/skills/, which is the only
+        /// location Claude Desktop reads.
         /// </summary>
-        static void InstallSkillsForDesktop()
+        static void InstallSkills(HadesScope scope)
         {
             try
             {
-                var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                var skillsRoot = Path.Combine(userHome, ".claude", "skills");
-                var packageSkillsDir = FindPackageSkillsDir();
+                var skillsRoot = scope == HadesScope.Global
+                    ? Path.Combine(HadesPaths.HomeDir, ".claude", "skills")
+                    : Path.Combine(PathSandbox.ProjectRoot, ".claude", "skills");
 
-                if (packageSkillsDir == null || !Directory.Exists(packageSkillsDir))
-                    return;
+                var packageSkillsDir = FindPackageSkillsDir();
+                if (packageSkillsDir == null) return;
 
                 foreach (var skillDir in Directory.GetDirectories(packageSkillsDir))
                 {
@@ -289,13 +297,12 @@ namespace ArcForge.Hades.Editor.Core
                     if (!Directory.Exists(targetDir))
                         Directory.CreateDirectory(targetDir);
 
-                    var targetFile = Path.Combine(targetDir, "SKILL.md");
-                    File.Copy(skillFile, targetFile, true);
+                    File.Copy(skillFile, Path.Combine(targetDir, "SKILL.md"), true);
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[Hades] Failed to install skills for Desktop: {ex.Message}");
+                Debug.LogWarning($"[Hades] Failed to install skills: {ex.Message}");
             }
         }
 
