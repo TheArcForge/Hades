@@ -73,4 +73,40 @@ namespace ArcForge.Hades.Editor.Tests
             Assert.AreEqual(Expected(Home, ".arcforge", "hades-hub"), HadesPaths.GlobalHubDir(Home));
         }
     }
+
+    public class LegacyHubNoticeTests
+    {
+        const string GlobalDir = "/Users/tester/.arcforge/hades-hub";
+        const string LocalDir = "/Work/MyGame/.arcforge/hades-hub";
+
+        [Test]
+        public void ShouldShow_IsTrue_WhenLocalAndGlobalDirExists()
+        {
+            Assert.IsTrue(LegacyHubNotice.ShouldShow(LocalDir, GlobalDir, false, true));
+        }
+
+        [Test]
+        public void ShouldShow_IsFalse_WhenAlreadyShown()
+        {
+            Assert.IsFalse(LegacyHubNotice.ShouldShow(LocalDir, GlobalDir, true, true));
+        }
+
+        [Test]
+        public void ShouldShow_IsFalse_WhenGlobalDirAbsent()
+        {
+            Assert.IsFalse(LegacyHubNotice.ShouldShow(LocalDir, GlobalDir, false, false));
+        }
+
+        [Test]
+        public void ShouldShow_IsFalse_WhenStillUsingTheGlobalDir()
+        {
+            Assert.IsFalse(LegacyHubNotice.ShouldShow(GlobalDir, GlobalDir, false, true));
+        }
+
+        [Test]
+        public void ShouldShow_IsFalse_WhenGlobalDirDiffersOnlyByTrailingSlash()
+        {
+            Assert.IsFalse(LegacyHubNotice.ShouldShow(GlobalDir + "/", GlobalDir, false, true));
+        }
+    }
 }
