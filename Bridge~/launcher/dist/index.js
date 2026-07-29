@@ -1,14 +1,14 @@
 // src/index.ts
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
-import fs3 from "node:fs";
-import path2 from "node:path";
+import fs4 from "node:fs";
+import path3 from "node:path";
 import http from "node:http";
 
 // src/project-path.ts
 import fs from "node:fs";
 import path from "node:path";
-function resolveProjectPath(cwd) {
+function findProjectRoot(cwd) {
   let dir = cwd;
   for (let i = 0; i < 40; i++) {
     if (fs.existsSync(path.join(dir, "ProjectSettings", "ProjectVersion.txt"))) {
@@ -18,7 +18,7 @@ function resolveProjectPath(cwd) {
     if (parent === dir) break;
     dir = parent;
   }
-  return cwd;
+  return null;
 }
 
 // src/spawn-lock.ts
@@ -50,43 +50,83 @@ function releaseSpawnLock(fd, lockPath) {
   }
 }
 
+// src/hub-dir.ts
+import fs3 from "node:fs";
+import path2 from "node:path";
+var ENV_HUB_DIR = "HADES_HUB_DIR";
+var CONFIG_FILE_NAME = "config.local.yaml";
+var ARCFORGE_DIR_NAME = ".arcforge";
+var HUB_DIR_NAME = "hades-hub";
+var HUB_SCOPE_KEY = "hub_scope";
+function defaultReadFile(filePath) {
+  try {
+    return fs3.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+function readHubScope(arcforgeDir, readFile) {
+  const raw = readFile(path2.join(arcforgeDir, CONFIG_FILE_NAME));
+  if (raw === null) return "local";
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const colonIdx = trimmed.indexOf(":");
+    if (colonIdx <= 0) continue;
+    if (trimmed.slice(0, colonIdx).trim() !== HUB_SCOPE_KEY) continue;
+    return trimmed.slice(colonIdx + 1).trim().toLowerCase() === "global" ? "global" : "local";
+  }
+  return "local";
+}
+function resolveHubDir(opts) {
+  const override = opts.env[ENV_HUB_DIR];
+  if (override && override.trim()) return override.trim();
+  const home = opts.env.HOME ?? opts.env.USERPROFILE ?? "";
+  const globalDir = path2.join(home, ARCFORGE_DIR_NAME, HUB_DIR_NAME);
+  if (!opts.projectRoot) return globalDir;
+  const arcforgeDir = path2.join(opts.projectRoot, ARCFORGE_DIR_NAME);
+  if (readHubScope(arcforgeDir, opts.readFile) === "global") return globalDir;
+  return path2.join(arcforgeDir, HUB_DIR_NAME);
+}
+
 // src/index.ts
-var HUB_DIR = path2.join(
-  process.env.HOME ?? process.env.USERPROFILE ?? "",
-  ".arcforge",
-  "hades-hub"
-);
-var HUB_JSON_PATH = path2.join(HUB_DIR, "hub.json");
+var PROJECT_ROOT = findProjectRoot(process.cwd());
+var HUB_DIR = resolveHubDir({
+  env: process.env,
+  projectRoot: PROJECT_ROOT,
+  readFile: defaultReadFile
+});
+var HUB_JSON_PATH = path3.join(HUB_DIR, "hub.json");
 var HUB_ENTRY = findHubEntry();
 function findHubEntry() {
-  const relative = path2.resolve(
-    path2.dirname(new URL(import.meta.url).pathname),
+  const relative = path3.resolve(
+    path3.dirname(new URL(import.meta.url).pathname),
     "..",
     "..",
     "hub",
     "dist",
     "index.js"
   );
-  if (fs3.existsSync(relative)) return relative;
-  const pathFile = path2.join(HUB_DIR, "hub-path.json");
-  if (fs3.existsSync(pathFile)) {
+  if (fs4.existsSync(relative)) return relative;
+  const pathFile = path3.join(HUB_DIR, "hub-path.json");
+  if (fs4.existsSync(pathFile)) {
     try {
-      const data = JSON.parse(fs3.readFileSync(pathFile, "utf8"));
-      if (data.hubEntry && fs3.existsSync(data.hubEntry)) return data.hubEntry;
+      const data = JSON.parse(fs4.readFileSync(pathFile, "utf8"));
+      if (data.hubEntry && fs4.existsSync(data.hubEntry)) return data.hubEntry;
     } catch {
     }
   }
   return relative;
 }
-var PROJECT_PATH = resolveProjectPath(process.cwd());
+var PROJECT_PATH = PROJECT_ROOT ?? process.cwd();
 var HUB_STARTUP_TIMEOUT_MS = 15e3;
 var PROTOCOL_VERSION = "2024-11-05";
 var SERVER_NAME = "hades";
 var SERVER_VERSION = "1.1.0";
 function readHubJson() {
   try {
-    if (!fs3.existsSync(HUB_JSON_PATH)) return null;
-    const data = JSON.parse(fs3.readFileSync(HUB_JSON_PATH, "utf8"));
+    if (!fs4.existsSync(HUB_JSON_PATH)) return null;
+    const data = JSON.parse(fs4.readFileSync(HUB_JSON_PATH, "utf8"));
     return { port: data.port, pid: data.pid };
   } catch {
     return null;
@@ -122,7 +162,9 @@ function startHub() {
   const child = spawn("node", [HUB_ENTRY], {
     detached: true,
     stdio: "ignore",
-    env: { ...process.env }
+    // Hand the resolved dir down explicitly. If the hub re-derived it from $HOME it could
+    // disagree with this launcher and publish hub.json where nobody is looking.
+    env: { ...process.env, [ENV_HUB_DIR]: HUB_DIR }
   });
   child.unref();
 }
@@ -134,15 +176,15 @@ async function ensureHub() {
   }
   if (existing && !isProcessAlive(existing.pid)) {
     try {
-      fs3.unlinkSync(HUB_JSON_PATH);
+      fs4.unlinkSync(HUB_JSON_PATH);
     } catch {
     }
   }
   try {
-    fs3.mkdirSync(HUB_DIR, { recursive: true });
+    fs4.mkdirSync(HUB_DIR, { recursive: true });
   } catch {
   }
-  const lockPath = path2.join(HUB_DIR, "hub.lock");
+  const lockPath = path3.join(HUB_DIR, "hub.lock");
   const lockFd = acquireSpawnLock(lockPath);
   try {
     if (lockFd !== null) startHub();
