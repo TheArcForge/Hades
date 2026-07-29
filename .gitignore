@@ -50,6 +50,8 @@ Dashboard~/node_modules/
 .arcforge/graph.db-shm
 .arcforge/traces.db
 .arcforge/server.json
+.arcforge/config.local.yaml
+.arcforge/hades-hub/
 .mcp.json
 
 # Keep memory tracked
