@@ -53,19 +53,63 @@ namespace ArcForge.Hades.Editor.Core
         public static string GlobalHubDir(string homeDir)
             => Path.Combine(homeDir ?? "", ArcforgeDirName, HubDirName);
 
+        // Cached on the main thread by Prime(). MCPServer's heartbeat runs on a
+        // System.Threading.Timer and documents the invariant that "the timer only touches pure
+        // I/O" — it reaches HubDir via HubClient.DetectHubChange. Resolving live there would call
+        // PathSandbox.ProjectRoot -> Application.dataPath, which Unity permits only on the main
+        // thread, and would also re-read config.local.yaml on every heartbeat. So resolve once and
+        // let background threads read a plain field.
+        static string _cachedProjectRoot;
+        static string _cachedHubDir;
+
+        static string ProjectRootCached => _cachedProjectRoot ?? PathSandbox.ProjectRoot;
+
         public static string ArcforgeDir
-            => Path.Combine(PathSandbox.ProjectRoot, ArcforgeDirName);
+            => Path.Combine(ProjectRootCached, ArcforgeDirName);
 
         public static string HomeDir
             => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
         public static string GlobalHubDirForMachine => GlobalHubDir(HomeDir);
 
-        /// <summary>Live resolution for production callers. Reads env + this project's settings.</summary>
-        public static string HubDir => ResolveHubDir(
-            Environment.GetEnvironmentVariable(EnvHubDir),
-            new HadesSettings().HubScope,
-            PathSandbox.ProjectRoot,
-            HomeDir);
+        /// <summary>
+        /// Resolves and caches the project root and hub dir. MUST be called from the main thread,
+        /// early in boot, before anything registers with the hub. Re-callable; also the cache
+        /// invalidation path when the hub scope setting changes.
+        /// </summary>
+        public static void Prime()
+        {
+            _cachedProjectRoot = PathSandbox.ProjectRoot;
+            _cachedHubDir = ResolveHubDir(
+                Environment.GetEnvironmentVariable(EnvHubDir),
+                new HadesSettings().HubScope,
+                _cachedProjectRoot,
+                HomeDir);
+        }
+
+        /// <summary>Call after changing the hub scope so the next read reflects it.</summary>
+        public static void InvalidateHubDir() => Prime();
+
+        /// <summary>
+        /// The resolved hub directory. Safe to read from any thread once Prime() has run on the
+        /// main thread; falls back to a live resolve only if boot has not primed it yet.
+        /// </summary>
+        public static string HubDir
+        {
+            get
+            {
+                var cached = _cachedHubDir;
+                if (cached != null) return cached;
+
+                Prime();
+                return _cachedHubDir;
+            }
+        }
+
+        internal static void ResetCacheForTests()
+        {
+            _cachedProjectRoot = null;
+            _cachedHubDir = null;
+        }
     }
 }

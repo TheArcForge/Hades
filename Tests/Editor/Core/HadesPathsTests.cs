@@ -72,6 +72,32 @@ namespace ArcForge.Hades.Editor.Tests
         {
             Assert.AreEqual(Expected(Home, ".arcforge", "hades-hub"), HadesPaths.GlobalHubDir(Home));
         }
+
+        // Regression: MCPServer runs its heartbeat on a System.Threading.Timer and documents that
+        // "the timer only touches pure I/O". It reads HubDir via HubClient.DetectHubChange. When
+        // HubDir resolved live it reached PathSandbox.ProjectRoot -> Application.dataPath, which
+        // Unity allows only on the main thread, so every heartbeat threw.
+        [Test]
+        public void HubDir_IsReadableFromABackgroundThread_AfterPrime()
+        {
+            HadesPaths.Prime();
+            var expected = HadesPaths.HubDir;
+
+            string fromBackground = null;
+            System.Exception thrown = null;
+            var done = new System.Threading.ManualResetEventSlim(false);
+
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try { fromBackground = HadesPaths.HubDir; }
+                catch (System.Exception ex) { thrown = ex; }
+                finally { done.Set(); }
+            });
+
+            Assert.IsTrue(done.Wait(System.TimeSpan.FromSeconds(5)), "Background read timed out.");
+            Assert.IsNull(thrown, $"Reading HubDir off the main thread threw: {thrown}");
+            Assert.AreEqual(expected, fromBackground);
+        }
     }
 
     public class LegacyHubNoticeTests

@@ -36,6 +36,10 @@ namespace ArcForge.Hades.Editor.Core
                 // FIRST: Charon (next step) constructs HadesSettings, so the project-local
                 // settings file must exist and any EditorPrefs import must be done before it.
                 Step("Settings",       () => HadesSettings.EnsureMigrated());
+                // Immediately after Settings and before anything registers with the hub: resolves
+                // the hub dir on the main thread so MCPServer's background heartbeat timer can read
+                // it without touching Application.dataPath.
+                Step("Paths",          () => HadesPaths.Prime());
                 Step("Charon",         () => CharonInitializer.Initialize());
                 Step("GraphDb",        () => Graph.GraphInitializer.EnsureDatabase());
                 Step("Asphodel",       () => Asphodel.AsphodeInitializer.Initialize());

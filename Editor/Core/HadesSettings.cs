@@ -59,7 +59,13 @@ namespace ArcForge.Hades.Editor.Core
         public HadesScope HubScope
         {
             get => ParseScope(_config.GetString(KeyHubScope, "local"));
-            set => SetAndSave(KeyHubScope, ScopeToString(value));
+            set
+            {
+                SetAndSave(KeyHubScope, ScopeToString(value));
+                // HadesPaths caches the resolved dir for background-thread reads; without this the
+                // heartbeat would keep pointing at the old scope until the next domain reload.
+                HadesPaths.InvalidateHubDir();
+            }
         }
 
         public HadesScope SkillsScope
