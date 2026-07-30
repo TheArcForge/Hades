@@ -11,9 +11,6 @@ namespace ArcForge.Hades.Editor.Core
     {
         const string SettingsPath = "Project/Hades";
 
-        static readonly string[] ScopeLabels = { "Local (this project)", "Global (shared)" };
-        static readonly int[] ScopeValues = { (int)HadesScope.Local, (int)HadesScope.Global };
-
         [MenuItem("Hades/Settings...", priority = 300)]
         public static void Open() => SettingsService.OpenProjectSettings(SettingsPath);
 
@@ -35,22 +32,25 @@ namespace ArcForge.Hades.Editor.Core
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Installation Scope", EditorStyles.boldLabel);
 
-            var hubScope = (HadesScope)EditorGUILayout.IntPopup(
+            // EnumPopup, not IntPopup: EditorGUILayout.IntPopup has no GUIContent-label overload,
+            // so a tooltip is only reachable through the enum form. Costs the friendlier
+            // "Local (this project)" wording — the tooltip carries that detail instead.
+            var hubScope = (HadesScope)EditorGUILayout.EnumPopup(
                 new GUIContent("Hub",
                     "Local keeps hub.json in this project's .arcforge/hades-hub. " +
                     "Global shares one hub across every project on this machine."),
-                (int)settings.HubScope, ScopeLabels, ScopeValues);
+                settings.HubScope);
             if (hubScope != settings.HubScope) settings.HubScope = hubScope;
 
             EditorGUILayout.HelpBox(
                 "Changing the hub scope takes effect on the next Claude Code session — the " +
                 "launcher reads this setting when it starts.", MessageType.Info);
 
-            var skillsScope = (HadesScope)EditorGUILayout.IntPopup(
+            var skillsScope = (HadesScope)EditorGUILayout.EnumPopup(
                 new GUIContent("Skills",
                     "Local installs into this project's .claude/skills (Claude Code reads it). " +
                     "Global installs into ~/.claude/skills, which Claude Desktop requires."),
-                (int)settings.SkillsScope, ScopeLabels, ScopeValues);
+                settings.SkillsScope);
             if (skillsScope != settings.SkillsScope) settings.SkillsScope = skillsScope;
 
             var desktop = EditorGUILayout.Toggle(
