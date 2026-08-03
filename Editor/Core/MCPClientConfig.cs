@@ -129,7 +129,7 @@ namespace ArcForge.Hades.Editor.Core
                         ["hades"] = new JObject
                         {
                             ["command"] = "node",
-                            ["args"] = new JArray(launcherPath)
+                            ["args"] = new JArray(McpLauncherArg(launcherPath, projectRoot))
                         }
                     }
                 };
@@ -141,6 +141,50 @@ namespace ArcForge.Hades.Editor.Core
                 Debug.LogWarning($"[Hades] Failed to write project .mcp.json: {ex.Message}");
             }
         }
+
+        /// <summary>
+        /// The value written to .mcp.json `args[0]` for the launcher.
+        ///
+        /// Project-relative whenever the launcher lives inside the project — the default local hub
+        /// scope, i.e. .arcforge/hades-hub/launcher.js. Claude Code discovers .mcp.json in the
+        /// directory it was started from, and spawns the server with that same directory as cwd, so
+        /// a project-relative arg resolves to exactly the same file as the absolute one while
+        /// keeping the committed-adjacent file free of one developer's home directory. The launcher
+        /// itself already relies on that cwd (findProjectRoot walks up from process.cwd()), so this
+        /// adds no new assumption.
+        ///
+        /// Falls back to the absolute path when the launcher is outside the project — global hub
+        /// scope, or HADES_HUB_DIR pointing elsewhere — where no relative form exists.
+        /// Forward slashes on every platform: Windows node accepts them, and it avoids escaping
+        /// backslashes in JSON.
+        /// </summary>
+        internal static string McpLauncherArg(string launcherPath, string projectRoot)
+        {
+            if (string.IsNullOrEmpty(launcherPath) || string.IsNullOrEmpty(projectRoot))
+                return ToForwardSlashes(launcherPath);
+
+            string relative;
+            try
+            {
+                relative = Path.GetRelativePath(projectRoot, launcherPath);
+            }
+            catch (ArgumentException)
+            {
+                return ToForwardSlashes(launcherPath);
+            }
+
+            if (Path.IsPathRooted(relative) || EscapesProject(relative))
+                return ToForwardSlashes(launcherPath);
+
+            return ToForwardSlashes(relative);
+        }
+
+        static bool EscapesProject(string relative)
+            => relative == ".."
+               || relative.StartsWith("../", StringComparison.Ordinal)
+               || relative.StartsWith("..\\", StringComparison.Ordinal);
+
+        static string ToForwardSlashes(string path) => path?.Replace("\\", "/");
 
         const string HadesMarkerStart = "<!-- HADES:START -->";
         const string HadesMarkerEnd = "<!-- HADES:END -->";

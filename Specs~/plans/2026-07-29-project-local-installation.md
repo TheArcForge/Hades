@@ -1263,6 +1263,8 @@ copy plus .mcp.json write silently no-opped on the documented install path."
 
 `WriteProjectMcpJson` needs **no** change: it already writes whatever launcher path it is handed, and `.mcp.json` is already gitignored (`.gitignore:53`) and already machine-specific.
 
+> **Follow-up (post-Task 20).** Verification on a real project showed this reasoning was too narrow. "Machine-specific and gitignored" made an absolute path acceptable, not desirable — the written `args[0]` was `/Users/<name>/SourceCode/<Project>/.arcforge/hades-hub/launcher.js`. `MCPClientConfig.McpLauncherArg` now relativizes it to `.arcforge/hades-hub/launcher.js` whenever the launcher is inside the project, and keeps the absolute path when it is not (global hub scope, `HADES_HUB_DIR` elsewhere). Covered by `Tests/Editor/Core/MCPClientConfigTests.cs`.
+
 - [ ] **Step 1: Resolve the hub dir instead of hardcoding `$HOME`**
 
 In `Editor/Core/MCPClientConfig.cs`, replace lines 29-31 inside `EnsureStableLauncher`:
@@ -2456,7 +2458,7 @@ Expected:
 - `[Hades MCP] Server running on {endpoint}` appears.
 - `<projectRoot>/.arcforge/hades-hub/launcher.js` exists.
 - `<projectRoot>/.arcforge/hades-hub/hub-path.json` points at the package's `Bridge~/hub/dist/index.js`.
-- `<projectRoot>/.mcp.json` `args[0]` equals that `launcher.js` path.
+- `<projectRoot>/.mcp.json` `args[0]` is `.arcforge/hades-hub/launcher.js` — the project-relative form of that `launcher.js` path (see the Task 8 follow-up note).
 - `<projectRoot>/.arcforge/config.local.yaml` exists.
 - 22 `hades-*` dirs under `<projectRoot>/.claude/skills/`.
 

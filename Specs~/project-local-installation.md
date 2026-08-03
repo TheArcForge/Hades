@@ -144,9 +144,13 @@ the file at process start).
 - `hub-path.json` is written next to it, unchanged in content — it still points at the resolved
   package's `Bridge~/hub/dist/index.js`. In local mode that path stays inside the workspace
   (`Library/PackageCache/...`), so nothing escapes it.
-- Project `.mcp.json` points at the resolved `<hubDir>/launcher.js`. It is already gitignored
-  (`.gitignore:53`) and already machine-specific, so writing an absolute path is not a
-  regression. It is rewritten on every server start, which self-heals a package version bump.
+- Project `.mcp.json` points at the resolved `<hubDir>/launcher.js`, written **project-relative**
+  when the launcher is inside the project — `.arcforge/hades-hub/launcher.js` in local mode.
+  Claude Code discovers `.mcp.json` in the directory it was started from and spawns the server
+  with that directory as cwd, so the relative form resolves to the same file while keeping one
+  developer's home directory out of the file. Global hub scope (or `HADES_HUB_DIR` pointing
+  outside the project) has no relative form, so it stays absolute. Still gitignored
+  (`.gitignore:53`) and rewritten on every server start, which self-heals a package version bump.
 - Skills install to `<projectRoot>/.claude/skills/hades-*` when `skills_scope` is `local`
   (Claude Code reads project-scoped skills) and to `~/.claude/skills/hades-*` when `global`
   (required for Claude Desktop, which does not read project-scoped skills).
