@@ -74,9 +74,18 @@ namespace ArcForge.Hades.Editor.Core
             set => SetAndSave(KeySkillsScope, ScopeToString(value));
         }
 
+        /// <summary>
+        /// Whether to write ~/Library/Application Support/Claude/claude_desktop_config.json.
+        ///
+        /// Off by default. It is the one Hades write that leaves the workspace, and with the
+        /// default local hub scope the entry it writes cannot actually reach Unity: Claude Desktop
+        /// spawns the launcher outside the project, so the launcher finds no project root and
+        /// resolves the global hub dir, while Unity publishes hub.json into the project's. Opt in
+        /// only alongside `hub_scope: global` (and `skills_scope: global` for the skills).
+        /// </summary>
         public bool DesktopIntegration
         {
-            get => _config.GetBool(KeyDesktopIntegration, true);
+            get => _config.GetBool(KeyDesktopIntegration, false);
             set => SetAndSave(KeyDesktopIntegration, value);
         }
 

@@ -2507,6 +2507,35 @@ When a Unity project lives in a subdirectory of the git repo (e.g., `MyRepo/MyUn
 
 **Resolution:** The fix is now dual-path. (1) Hub parent match strategy: the Hub matches the CWD as a parent of a registered project path, so Claude Code launched from the repo root finds the correct Unity instance via the Hub. (2) `MCPClientConfig.WriteProjectMcpJson()` writes `.mcp.json` to the Unity project root pointing at the Hub launcher, giving Claude Code a project-local config to discover directly when launched from that directory. Together these cover the full range of CWD scenarios. See **Plugin document** §3.5.
 
+### Claude Desktop cannot reach a project-local hub
+
+**Discovered:** Project-local installation verification (2026-08-03)
+**Severity:** Low — Claude Code is unaffected; Claude Desktop has a documented working configuration
+**Status:** Open — mitigated by defaulting `desktop_integration` to off; fix designed, not implemented
+**Ref:** `Editor/Core/MCPClientConfig.cs:UpdateClaudeDesktopConfig()`, `Bridge~/launcher/src/hub-dir.ts:resolveHubDir()`
+
+The launcher finds the hub from its **working directory**, not from where its own file sits. Claude Code satisfies that by construction — it discovers `.mcp.json` in the directory it was started from and spawns the server there — but Claude Desktop spawns MCP servers from a directory outside any Unity project. `findProjectRoot` walks up and finds no `ProjectSettings/ProjectVersion.txt`, returns `null`, and `resolveHubDir` falls through to rung 3, `$HOME/.arcforge/hades-hub`. Meanwhile a Unity in the default `hub_scope: local` publishes `hub.json` into `<projectRoot>/.arcforge/hades-hub`. The two never rendezvous: Desktop's launcher finds no `hub.json`, spawns an orphan hub in the global directory, and Unity — which reads `hub.json` from its own scope — never joins it.
+
+**Current mitigation:** `desktop_integration` defaults to **off**, so nothing misleading is written. The working Claude Desktop configuration is `hub_scope: global` + `skills_scope: global` (the latter because `~/.claude/skills` is the only skills location Desktop reads) + Desktop integration on. Project Settings → Hades warns when Desktop integration is enabled against a local hub.
+
+**Designed fix:** have `UpdateClaudeDesktopConfig` write the resolved hub directory into the Desktop entry as an environment variable:
+
+```json
+{
+  "mcpServers": {
+    "hades": {
+      "command": "node",
+      "args": ["/Users/you/Projects/YourGame/.arcforge/hades-hub/launcher.js"],
+      "env": { "HADES_HUB_DIR": "/Users/you/Projects/YourGame/.arcforge/hades-hub" }
+    }
+  }
+}
+```
+
+`HADES_HUB_DIR` is rung 1 of the resolution chain, ahead of any cwd-derived inference, so this pins Desktop to exactly the hub Unity publishes to and makes Desktop work under the default local scope — at which point `desktop_integration` could reasonably default back to on.
+
+**Known remaining edge, to resolve before doing it:** the hub directory is pinned but the project identity is not. `PROJECT_PATH` still degrades to `process.cwd()` when no project root is found, so the `X-Hades-Project` header is wrong and routing leans on the hub's single-instance fallback. That is fine for one Unity attached to a project-scoped hub — which is exactly the local-scope case — but the launcher would want a companion `HADES_PROJECT_PATH` (or an argv) to be correct in general. Since a *global* hub can have several Unity instances attached, the env-var fix must not be applied to global scope without also fixing the header.
+
 ### Field bugs (Phase 7 feedback)
 
 **Status:** Resolved — bugs 1–3 shipped in v0.9.1 (Phase 8); bug 4 shipped in v0.9.5 (Phase 9)

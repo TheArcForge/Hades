@@ -31,7 +31,7 @@ namespace ArcForge.Hades.Editor.Tests
             var s = NewSettings();
             Assert.AreEqual(HadesScope.Local, s.HubScope);
             Assert.AreEqual(HadesScope.Local, s.SkillsScope);
-            Assert.AreEqual(true, s.DesktopIntegration);
+            Assert.AreEqual(false, s.DesktopIntegration);
             Assert.AreEqual(0, s.Port);
             Assert.AreEqual(true, s.Enabled);
             Assert.AreEqual(true, s.AutoStart);
@@ -49,7 +49,9 @@ namespace ArcForge.Hades.Editor.Tests
             var s = NewSettings();
             s.HubScope = HadesScope.Global;
             s.SkillsScope = HadesScope.Global;
-            s.DesktopIntegration = false;
+            // Set to true, not false: false is the default, so a false round-trip would pass even
+            // if the setter never wrote anything.
+            s.DesktopIntegration = true;
             s.Port = 51234;
             s.Enabled = false;
             s.AutoStart = false;
@@ -63,7 +65,7 @@ namespace ArcForge.Hades.Editor.Tests
             var reloaded = NewSettings();
             Assert.AreEqual(HadesScope.Global, reloaded.HubScope);
             Assert.AreEqual(HadesScope.Global, reloaded.SkillsScope);
-            Assert.AreEqual(false, reloaded.DesktopIntegration);
+            Assert.AreEqual(true, reloaded.DesktopIntegration);
             Assert.AreEqual(51234, reloaded.Port);
             Assert.AreEqual(false, reloaded.Enabled);
             Assert.AreEqual(false, reloaded.AutoStart);

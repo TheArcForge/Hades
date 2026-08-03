@@ -17,7 +17,7 @@
 - **Zero new runtime dependencies** on either side. C# may use only Newtonsoft.Json and BCL. The launcher bundle must stay dependency-free.
 - The launcher must remain a **single self-contained esbuild bundle**. `Bridge~/tests/launcher/bundle.test.ts` enforces: `dist/index.js` exists, contains **no relative imports**, and `dist/` holds only `index.js`. New launcher modules must be plain relative-imported siblings so esbuild inlines them.
 - Config file dialect is flat `key: value` only — no nesting, no YAML library on either side.
-- Config keys are `snake_case`. Defaults, verbatim from spec §4.2: `hub_scope: local`, `skills_scope: local`, `desktop_integration: true`, `mcp_port: 0`, `mcp_enabled: true`, `mcp_auto_start: true`, `mcp_log_level: 1`, `domain_reload_strategy: auto`, `reload_timeout_seconds: 120`, `charon_enabled: true`, `charon_retention_days: 30`, `charon_max_size_mb: 500`.
+- Config keys are `snake_case`. Defaults, verbatim from spec §4.2: `hub_scope: local`, `skills_scope: local`, `desktop_integration: true` — *superseded post-Task 20: now `false`, see the follow-up in Task 10* — `mcp_port: 0`, `mcp_enabled: true`, `mcp_auto_start: true`, `mcp_log_level: 1`, `domain_reload_strategy: auto`, `reload_timeout_seconds: 120`, `charon_enabled: true`, `charon_retention_days: 30`, `charon_max_size_mb: 500`.
 - Missing config file, missing key, and unparseable value **all** fall back to defaults, silently. A missing file is the normal state for a fresh clone and must never log a warning.
 - Never show a modal dialog when `Application.isBatchMode` is true — take the default path instead. CI and `-batchmode` builds must never block.
 - Bridge tests: `cd Bridge~ && npm test`. Bridge build: `cd Bridge~ && npm run build`.
@@ -652,6 +652,8 @@ git commit -m "feat: add HadesPaths hub-dir resolution chain"
 - Produces: `HadesSettings` with its **existing** members unchanged in name and type — `Port` (int), `Enabled` (bool), `AutoStart` (bool), `LogLevel` (int), `DomainReloadStrategy` (`ReloadStrategy`), `ReloadTimeoutSeconds` (int), `CharonEnabled` (bool), `CharonRetentionDays` (int), `CharonMaxSizeMb` (int) — plus new `HubScope` (`HadesScope`), `SkillsScope` (`HadesScope`), `DesktopIntegration` (bool). Constructors: `HadesSettings()` and `HadesSettings(HadesConfig)`. Statics: `HasLegacyEditorPrefs()`, `ImportFromEditorPrefs(HadesConfig)`, `EnsureMigrated()`.
 
 Preserving the existing member names is load-bearing: `MCPServer.cs:21,55,90`, `CharonInitializer.cs:18`, and `Tests/Editor/MCPServerIntegrationTests.cs:31,38,46,65` all construct `new HadesSettings()` and must keep compiling untouched.
+
+> **Follow-up (post-Task 20).** The `DesktopIntegration` default flipped to `false` — see the follow-up on Task 10 for why. The snippets below still show the original `true`, so as landed: the getter reads `GetBool(KeyDesktopIntegration, false)`, `Defaults_MatchSpec` asserts `false`, and `Setters_PersistAcrossReload` sets `true` (setting `false` would pass even with a dead setter, since it is now the default).
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1409,6 +1411,8 @@ git commit -m "feat: install skills into the project by default, global by setti
 - Consumes: `HadesSettings.DesktopIntegration` (Task 4). The call-site gate landed in Task 9 Step 1.
 
 Spec §4.6. An existing `mcpServers.hades` entry is deliberately **left in place** when the setting is turned off: removing an entry Hades does not exclusively own is riskier than leaving a harmless one that points at a launcher which starts a hub on demand.
+
+> **Follow-up (post-Task 20).** `desktop_integration` now defaults to **`false`**, not the `true` this task and Task 4 assumed. Two reasons, both found verifying on a real project: defaulting it on leaves the *default* install writing outside the workspace, which undercuts the headline claim; and the entry it writes cannot connect under the default local hub scope anyway — Claude Desktop spawns the launcher outside the project, so `findProjectRoot` returns `null` and `resolveHubDir` lands on `$HOME/.arcforge/hades-hub` while local-scope Unity publishes `hub.json` into the project's own hub dir. Step 2 below therefore reads inverted: the *default* state is now "nothing written", and case 1 is the opt-in. Claude Desktop needs `hub_scope: global` until the `HADES_HUB_DIR`-in-Desktop-entry fix lands — designed in Roadmap §15. Preferences shows a warning for the on + local-hub combination.
 
 - [ ] **Step 1: Document the gate on the method**
 
@@ -2579,8 +2583,8 @@ Under a new Unreleased heading, following the file's existing style:
 - Settings moved out of Unity EditorPrefs (global per Unity install, so projects shared them)
   into `<projectRoot>/.arcforge/config.local.yaml`. Existing settings can be imported on first
   load via a one-time prompt.
-- The Claude Desktop config write is now gated by a `desktop_integration` setting (default on).
-  It remains the one Hades write that cannot be project-local.
+- The Claude Desktop config write is now gated by a `desktop_integration` setting (default off —
+  see the Task 10 follow-up). It remains the one Hades write that cannot be project-local.
 
 ### Fixed
 - Package path resolution used a hardcoded `Packages/com.arcforge.hades` guess, which only

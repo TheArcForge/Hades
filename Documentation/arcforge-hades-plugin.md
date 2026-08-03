@@ -398,7 +398,7 @@ For a step-by-step guide covering both install paths, see [`Documentation/gettin
 
 ### 4.3 Claude Desktop
 
-Claude Desktop does not use the plugin system. For Claude Desktop users, Unity's `MCPClientConfig` writes to `claude_desktop_config.json` on server start:
+Claude Desktop does not use the plugin system. For Claude Desktop users — and only when the `desktop_integration` setting is turned on, which it is **not** by default — Unity's `MCPClientConfig` writes to `claude_desktop_config.json` on server start:
 
 ```json
 {
@@ -415,7 +415,11 @@ The config points to a **stable launcher copy** at `<hubDir>/launcher.js`, not t
 
 This single-file copy is correct **because the launcher is built as a self-contained esbuild bundle** — it has no sibling modules to resolve from the stable location. (Splitting it into multiple `tsc`-emitted files without updating the copy routine was the v1.1.0 install regression: the copied `launcher.js` died at startup with `ERR_MODULE_NOT_FOUND`. The bundle invariant is now guarded by `Bridge~/tests/launcher/bundle.test.ts`.)
 
-Note that `claude_desktop_config.json` itself has no project-local equivalent — Claude Desktop is a single application with exactly one config file — so it is the one Hades write that cannot be contained in a workspace. The `desktop_integration` setting (default on, at Project Settings → Hades) turns the write off for developers who never open Claude Desktop; an existing `mcpServers.hades` entry is left in place rather than removed.
+Note that `claude_desktop_config.json` itself has no project-local equivalent — Claude Desktop is a single application with exactly one config file — so it is the one Hades write that cannot be contained in a workspace. The `desktop_integration` setting (**default off**, at Project Settings → Hades) gates the write; with the default local hub and skills scopes, Hades therefore writes nothing outside the project directory at all. Turning the setting back off later does not remove an existing `mcpServers.hades` entry — Hades does not exclusively own that file, and a stale entry is harmless.
+
+**Claude Desktop currently needs `hub_scope: global`.** The absolute launcher path is not enough on its own: the launcher locates the hub from its *working directory*, not from where its own file sits. Claude Desktop spawns it outside the project, so `findProjectRoot` finds no `ProjectSettings/ProjectVersion.txt` above the cwd, returns `null`, and `resolveHubDir` falls through to `$HOME/.arcforge/hades-hub` — while a local-scope Unity is publishing `hub.json` into `<projectRoot>/.arcforge/hades-hub`. Desktop's launcher then finds no hub, spawns an orphan one, and Unity never joins it. So the working Desktop configuration today is Hub scope `Global` + Skills scope `Global` + Desktop Integration on, and Preferences warns when Desktop integration is enabled against a local hub.
+
+*Possible future improvement:* have `UpdateClaudeDesktopConfig` also write `"env": { "HADES_HUB_DIR": "<absolute resolved hub dir>" }` into the entry. That is rung 1 of the launcher's resolution chain, so it would pin Desktop to the exact hub Unity publishes to and make Desktop work under the default local scope. The remaining rough edge would be the `X-Hades-Project` header, which still degrades to the launcher's cwd when no project root is found — acceptable while one Unity is attached to the hub, since the hub's single-instance fallback routes the call, but not for a machine running several projects at once. Tracked in the roadmap.
 
 The stable launcher needs to locate the hub, but the hub is a multi-file Node.js app that can't be deployed as a single copy. Instead, Unity writes a **pointer file** (`hub-path.json`) containing the absolute path to the hub entry point at its original package location:
 

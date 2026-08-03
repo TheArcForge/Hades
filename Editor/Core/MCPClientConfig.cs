@@ -70,9 +70,16 @@ namespace ArcForge.Hades.Editor.Core
         ///
         /// This is the one Hades write that CANNOT be project-local: Claude Desktop is a single
         /// global application with exactly one config file. Gated by the `desktop_integration`
-        /// setting (default on) so a user who never opens Desktop can have Hades write nothing
-        /// outside the workspace. Turning the setting off does not remove an existing entry —
-        /// Hades does not exclusively own this file, and a stale entry is harmless.
+        /// setting, which defaults to OFF for two reasons: nothing should leave the workspace
+        /// unasked, and the entry is inert under the default local hub scope anyway. Desktop
+        /// spawns the launcher with a cwd outside the project, so findProjectRoot returns null and
+        /// resolveHubDir falls through to $HOME/.arcforge/hades-hub, while a local-scope Unity
+        /// publishes hub.json into the project's own hub dir — the two never meet. Desktop
+        /// therefore needs `hub_scope: global` today; see the roadmap item on passing
+        /// HADES_HUB_DIR through the Desktop entry to lift that restriction.
+        ///
+        /// Turning the setting off does not remove an existing entry — Hades does not exclusively
+        /// own this file, and a stale entry is harmless.
         /// </summary>
         static void UpdateClaudeDesktopConfig(string launcherPath)
         {

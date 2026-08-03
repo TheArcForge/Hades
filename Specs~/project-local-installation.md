@@ -104,7 +104,7 @@ side of the language boundary.
 |---|---|---|---|
 | `hub_scope` | `local` \| `global` | `local` | *(new)* |
 | `skills_scope` | `local` \| `global` | `local` | *(new)* |
-| `desktop_integration` | bool | `true` | *(new)* |
+| `desktop_integration` | bool | `false` | *(new)* |
 | `mcp_port` | int | `0` | `Hades_MCP_Port` |
 | `mcp_enabled` | bool | `true` | `Hades_MCP_Enabled` |
 | `mcp_auto_start` | bool | `true` | `Hades_MCP_AutoStart` |
@@ -171,10 +171,25 @@ single global application with one config file. When Desktop integration is on, 
 See §7.
 
 Because that write happens on every Unity start even for a user who never opens Claude Desktop,
-`desktop_integration` (default `true`, preserving current behaviour) gates it. When `false`,
-`UpdateClaudeDesktopConfig` is skipped entirely and Hades writes nothing outside the workspace —
-provided `skills_scope` is also `local`. Those two keys set to `local`/`false` is the fully
-isolated configuration, and §7 documents that pairing explicitly.
+`desktop_integration` gates it. When `false`, `UpdateClaudeDesktopConfig` is skipped entirely and
+Hades writes nothing outside the workspace — provided `skills_scope` is also `local`. Those two
+keys set to `local`/`false` is the fully isolated configuration, and §7 documents that pairing
+explicitly.
+
+> **Follow-up (post-Task 20).** The default is `false`, not the `true` this section originally
+> specified. Verification on a real project showed that "preserving current behaviour" was the
+> wrong goal for this key, on two counts. First, defaulting it on means the default installation
+> still writes outside the workspace, which contradicts the headline claim of the whole change —
+> §6 item 7 has to *opt out* to demonstrate isolation. Second, and decisively, the entry written
+> under a local hub cannot work: Claude Desktop spawns the launcher from a directory outside the
+> project, so `findProjectRoot` returns `null` and `resolveHubDir` falls through to
+> `$HOME/.arcforge/hades-hub` (rung 3), while a local-scope Unity publishes `hub.json` into the
+> project's own hub dir. Desktop's launcher finds no hub, spawns an orphan, and Unity never joins
+> it. Defaulting on would therefore have shipped a config entry that is inert in the default
+> configuration. Claude Desktop needs `hub_scope: global` today; the fix — writing
+> `env: { HADES_HUB_DIR: <resolved hub dir> }` into the Desktop entry, which is rung 1 — is
+> designed and recorded in Roadmap §15, along with the `X-Hades-Project` edge it must settle
+> first. Preferences warns when Desktop integration is on against a local hub.
 
 An existing `mcpServers.hades` entry is left in place when the key is turned off. Hades removing
 a Desktop config entry it did not exclusively own is riskier than leaving a stale one, and the
@@ -274,11 +289,15 @@ cannot be skipped):
    Code session, confirm it joins the HOME hub and still routes correctly.
 6. `skills_scope: local` → skills land in `<projectRoot>/.claude/skills/`; Claude Code lists
    them. Switch to `global` → they land in `~/.claude/skills/`.
-7. `hub_scope: local` + `skills_scope: local` + `desktop_integration: false` → restart Unity and
-   confirm, by timestamp, that nothing under `$HOME` is created or modified. This is the headline
-   claim of the whole change and is the one check that must not be skipped.
-8. With `desktop_integration: true` (default) the Desktop config is written as before; flipping
-   it to `false` afterwards leaves the existing entry untouched (§4.6).
+7. Defaults only — `hub_scope: local`, `skills_scope: local`, `desktop_integration: false` — with
+   no config file written by hand: restart Unity and confirm, by timestamp, that nothing under
+   `$HOME` is created or modified. This is the headline claim of the whole change and is the one
+   check that must not be skipped. (It runs on the shipped defaults now that
+   `desktop_integration` defaults to `false`; it originally required opting out first.)
+8. Set `desktop_integration: true` → the Desktop config gains the `mcpServers.hades` entry with
+   the absolute launcher path. Flip it back to `false` → the existing entry is left untouched
+   (§4.6). With `hub_scope: local` the entry is expected *not* to connect; pair it with
+   `hub_scope: global` + `skills_scope: global` for an end-to-end Desktop check.
 9. Legacy notice: with `~/.arcforge/hades-hub/` present, it appears once on first local-mode boot
    and never again, including after a domain reload and after an editor restart. With the folder
    absent it never appears.
@@ -313,6 +332,6 @@ All resolved; no open questions.
 |---|---|---|
 | 1 | Local scope is the default, with `$HOME` as automatic fallback, plus a Unity Editor menu toggle for local vs global | §4.1, §4.3 |
 | 2 | Skills: local default, global available via setting | §4.4 |
-| 3 | Claude Desktop config stays global and documented, gated by a `desktop_integration` opt-out defaulting to on | §4.6 |
+| 3 | Claude Desktop config stays global and documented, gated by `desktop_integration` — defaulting to **off**, so the shipped defaults write nothing outside the project | §4.6 |
 | 4 | EditorPrefs → project-local settings is in scope | §4.2, §4.3 |
 | 5 | Legacy global hub dir: one-time informational notice, no move, no delete | §4.7 |

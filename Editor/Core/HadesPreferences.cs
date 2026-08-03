@@ -55,11 +55,20 @@ namespace ArcForge.Hades.Editor.Core
 
             var desktop = EditorGUILayout.Toggle(
                 new GUIContent("Claude Desktop Integration",
-                    "Writes ~/Library/Application Support/Claude/claude_desktop_config.json. " +
-                    "This file cannot be project-local. Turn off to keep every Hades write " +
-                    "inside the workspace."),
+                    "Off by default. Writes ~/Library/Application Support/Claude/" +
+                    "claude_desktop_config.json, the one Hades write that cannot be " +
+                    "project-local. Requires Hub scope Global to actually connect."),
                 settings.DesktopIntegration);
             if (desktop != settings.DesktopIntegration) settings.DesktopIntegration = desktop;
+
+            if (desktop && settings.HubScope == HadesScope.Local)
+            {
+                EditorGUILayout.HelpBox(
+                    "Claude Desktop cannot reach a local hub: it spawns the launcher outside " +
+                    "the project, so the launcher resolves the global hub directory while this " +
+                    "project publishes hub.json into its own. Set Hub to Global (and Skills to " +
+                    "Global) for Desktop, or leave this off.", MessageType.Warning);
+            }
 
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("MCP Server", EditorStyles.boldLabel);
