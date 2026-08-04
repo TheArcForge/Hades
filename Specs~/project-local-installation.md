@@ -139,18 +139,28 @@ the file at process start).
 
 ### 4.4 Launcher and skills placement
 
-- Launcher stable copy moves to `<hubDir>/launcher.js`, i.e. it follows the hub dir. In local
-  mode that is `<projectRoot>/.arcforge/hades-hub/launcher.js`.
-- `hub-path.json` is written next to it, unchanged in content — it still points at the resolved
-  package's `Bridge~/hub/dist/index.js`. In local mode that path stays inside the workspace
-  (`Library/PackageCache/...`), so nothing escapes it.
-- Project `.mcp.json` points at the resolved `<hubDir>/launcher.js`, written **project-relative**
-  when the launcher is inside the project — `.arcforge/hades-hub/launcher.js` in local mode.
-  Claude Code discovers `.mcp.json` in the directory it was started from and spawns the server
-  with that directory as cwd, so the relative form resolves to the same file while keeping one
-  developer's home directory out of the file. Global hub scope (or `HADES_HUB_DIR` pointing
-  outside the project) has no relative form, so it stays absolute. Still gitignored
-  (`.gitignore:53`) and rewritten on every server start, which self-heals a package version bump.
+- Launcher stable copy moves to `<projectRoot>/.arcforge/hades-hub/launcher.js` — **always**, in
+  either hub scope.
+
+  > **Revised (post-Task 20).** This originally read "moves to `<hubDir>/launcher.js`, i.e. it
+  > follows the hub dir", which coupled two unrelated concerns and pushed `$HOME` into a shared
+  > file under global scope. The launcher resolves its hub at startup from `HADES_HUB_DIR`, a cwd
+  > walk-up, and `hub_scope` (`resolveHubDir`, `Bridge~/launcher/src/hub-dir.ts`) — never from its
+  > own location — so the hub dir was only ever a *storage* location for a file that needed nothing
+  > more than a version-stable path. Now `HadesPaths.LauncherDir` (project-local, scope-independent)
+  > and `HadesPaths.HubDir` (scope-dependent rendezvous) are separate.
+- `hub-path.json` is written into the resolved `<hubDir>`, unchanged in content — it still points at
+  the resolved package's `Bridge~/hub/dist/index.js`. In local mode that path stays inside the
+  workspace (`Library/PackageCache/...`), so nothing escapes it. It follows the hub rather than the
+  launcher because `findHubEntry` reads it from `HUB_DIR` at runtime.
+- Project `.mcp.json` points at `.arcforge/hades-hub/launcher.js`, **project-relative** and
+  identical on every machine. Claude Code discovers `.mcp.json` in the directory it was started
+  from and spawns the server with that directory as cwd, so the relative form resolves to the same
+  file while keeping one developer's home directory out of it. Rewritten on every server start,
+  which self-heals a package version bump.
+- `.mcp.json` is **git-tracked**, not gitignored. Its content is now deterministic, so it is team
+  configuration rather than machine state. Hades merges its `mcpServers.hades` entry rather than
+  replacing the file, since Claude Code reads any number of other servers from it.
 - Skills install to `<projectRoot>/.claude/skills/hades-*` when `skills_scope` is `local`
   (Claude Code reads project-scoped skills) and to `~/.claude/skills/hades-*` when `global`
   (required for Claude Desktop, which does not read project-scoped skills).
@@ -211,7 +221,8 @@ after the file exists.
 **Legacy hub dir (items 1–3) — one-time notice, no move, no delete.** Nothing in
 `~/.arcforge/hades-hub/` is worth moving:
 
-- `launcher.js` and `hub-path.json` are regenerated on every server start.
+- `hub-path.json` is regenerated on every server start, and `launcher.js` is no longer written
+  there at all — it is always project-local (§4.4).
 - `hub.json`, `hub.lock`, and `pending/` are **live runtime state** of a possibly-running hub
   process. Moving them would corrupt discovery for any other project currently using that hub.
 
@@ -256,7 +267,8 @@ Modified:
   `MCPServer.cs:21`/`:55`/`:90` and `CharonInitializer.cs:18` need no changes
 - `Editor/Asphodel/Inference/InferenceConfig.cs` — reuse the extracted flat parser (behaviour
   unchanged; it keeps reading `config.yaml`, not `config.local.yaml`)
-- `.gitignore` — add `.arcforge/config.local.yaml` and `.arcforge/hades-hub/`
+- `.gitignore` — add `.arcforge/config.local.yaml` and `.arcforge/hades-hub/`; remove `.mcp.json`,
+  which becomes git-tracked once its launcher path is deterministic (§4.4)
 - `Documentation/getting-started.md`, `Documentation/troubleshooting.md`,
   `Documentation/arcforge-hades-architecture.md` (§207, §1883, §2701, §2812)
 
@@ -286,7 +298,10 @@ cannot be skipped):
 4. Two projects open simultaneously, both local: two hubs, each seeing exactly one instance,
    tool calls routed to the correct editor.
 5. Switch one project to `hub_scope: global` via Project Settings → Hades, restart the Claude
-   Code session, confirm it joins the HOME hub and still routes correctly.
+   Code session, confirm it joins the HOME hub and still routes correctly. Also confirm
+   `.mcp.json` is byte-identical to its local-scope contents (`args[0]` stays
+   `.arcforge/hades-hub/launcher.js`), that `launcher.js` is still only in the project, and that
+   `hub.json` + `hub-path.json` moved to `~/.arcforge/hades-hub/`.
 6. `skills_scope: local` → skills land in `<projectRoot>/.claude/skills/`; Claude Code lists
    them. Switch to `global` → they land in `~/.claude/skills/`.
 7. Defaults only — `hub_scope: local`, `skills_scope: local`, `desktop_integration: false` — with

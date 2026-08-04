@@ -8,9 +8,10 @@ namespace ArcForge.Hades.Editor.Core
     /// <summary>
     /// Tells the user once that ~/.arcforge/hades-hub/ is no longer used by this project.
     ///
-    /// Nothing is moved or deleted, deliberately. launcher.js and hub-path.json are regenerated
-    /// on every startup, and hub.json / hub.lock / pending/ are the live runtime state of a hub
-    /// process that may be serving a different project — moving them would break its discovery.
+    /// Nothing is moved or deleted, deliberately. hub-path.json is regenerated on every startup,
+    /// launcher.js is no longer written here at all (HadesPaths.LauncherDir is always project-local),
+    /// and hub.json / hub.lock / pending/ are the live runtime state of a hub process that may be
+    /// serving a different project — moving them would break its discovery.
     /// Hades also cannot tell whether another project on this machine still depends on the folder,
     /// so deleting it is not Hades' call.
     /// </summary>

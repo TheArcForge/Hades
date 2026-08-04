@@ -69,7 +69,26 @@ By default, Hades keeps everything for a project *inside* that project. After St
 | `.claude/skills/` | The 22 Hades skills |
 | `CLAUDE.md` | Project guidance for the agent (appended, never overwritten) |
 
-Deleting the project directory removes the installation with it. Of the above, `.arcforge/memory/` is the part worth committing — it's shared team knowledge. The rest is machine-specific: the databases, `.arcforge/hades-hub/`, `.arcforge/config.local.yaml`, and `.mcp.json` are all regenerated locally and should stay out of version control.
+Deleting the project directory removes the installation with it.
+
+**What to commit.** Two of the above are worth committing: `.arcforge/memory/`, which is shared team knowledge, and `.mcp.json`, which is team configuration — it names the launcher by the project-relative path `.arcforge/hades-hub/launcher.js`, identical on every machine, so committing it means a new clone reaches Hades without opening Unity first. Claude Code will list the server as failed until the Editor has run once to create the launcher.
+
+Everything else is machine-specific and should stay out of version control — the databases, `.arcforge/hades-hub/`, and `.arcforge/config.local.yaml` are all regenerated locally. Add this to your project's `.gitignore`:
+
+```gitignore
+.arcforge/graph.db
+.arcforge/graph.db-wal
+.arcforge/graph.db-shm
+.arcforge/traces.db
+.arcforge/server.json
+.arcforge/config.local.yaml
+.arcforge/hades-hub/
+
+# Keep memory tracked
+!.arcforge/memory/
+```
+
+Hades merges its entry into `.mcp.json` rather than replacing the file, so any other MCP servers your team declares there are left alone.
 
 ### Switching to global
 

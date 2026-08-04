@@ -73,6 +73,30 @@ namespace ArcForge.Hades.Editor.Tests
             Assert.AreEqual(Expected(Home, ".arcforge", "hades-hub"), HadesPaths.GlobalHubDir(Home));
         }
 
+        // The regression these guard: the stable launcher copy used to be written into the *resolved*
+        // hub dir, so global hub scope put $HOME/.arcforge/hades-hub/launcher.js into .mcp.json's
+        // args[0] — and .mcp.json is committed. The launcher copy must stay project-local under every
+        // scope; only hub.json's location follows scope. Do not "simplify" LauncherDir to HubDir.
+        [Test]
+        public void LauncherDir_IsProjectLocal_ByConstruction()
+        {
+            Assert.AreEqual(Path.Combine(HadesPaths.ArcforgeDir, HadesPaths.HubDirName),
+                HadesPaths.LauncherDir);
+        }
+
+        [Test]
+        public void GlobalScope_MovesTheHub_ButNotTheLauncherArg()
+        {
+            Assert.AreEqual(Expected(Home, ".arcforge", "hades-hub"),
+                HadesPaths.ResolveHubDir(null, HadesScope.Global, Project, Home),
+                "hub.json still belongs under $HOME in global scope");
+
+            var launcher = Expected(Project, ".arcforge", "hades-hub", "launcher.js");
+            Assert.AreEqual(".arcforge/hades-hub/launcher.js",
+                MCPClientConfig.McpLauncherArg(launcher, Project),
+                "the launcher does not move with the hub, so args[0] has no machine path");
+        }
+
         // Regression: MCPServer runs its heartbeat on a System.Threading.Timer and documents that
         // "the timer only touches pure I/O". It reads HubDir via HubClient.DetectHubChange. When
         // HubDir resolved live it reached PathSandbox.ProjectRoot -> Application.dataPath, which

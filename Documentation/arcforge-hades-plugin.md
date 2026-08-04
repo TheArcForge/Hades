@@ -291,15 +291,28 @@ The Hades agent guidance lives Unity-side and is only reachable after a Unity in
 
 ### 3.7 Runtime state
 
+Under the default local hub scope, all of this lives in one directory:
+
 ```
-~/.arcforge/
+<projectRoot>/.arcforge/
   hades-hub/
     hub.json              # { port, pid, startedAt } — current hub location
     hub-path.json         # { hubEntry } — absolute path to hub entry point (written by Unity)
-    launcher.js           # Stable launcher copy for Claude Desktop
+    launcher.js           # Stable launcher copy, named by .mcp.json and the Desktop config
     pending/              # Breadcrumb files from Unity when hub was offline
       {hash}.json
 ```
+
+Under global hub scope the rendezvous files move to `~/.arcforge/hades-hub/` while `launcher.js` stays put:
+
+```
+~/.arcforge/hades-hub/          <projectRoot>/.arcforge/hades-hub/
+  hub.json                        launcher.js
+  hub-path.json
+  pending/
+```
+
+The split is deliberate — see §4.3 on the stable launcher copy. `launcher.js` is only a version-stable destination for a copied file; the hub directory is a rendezvous point that Unity, the launcher, and the hub must all resolve identically at runtime.
 
 This directory is a cross-process coordination point between Unity (C#) and the hub (Node.js). It uses Hades's own namespace (`~/.arcforge/`), not Claude Code's plugin data directory. Unity must find the hub independently of Claude Code's plugin system, which makes `~/.arcforge/` the right location.
 
@@ -325,7 +338,7 @@ The Hub architecture replaces the previous per-project discovery model:
 - ~~`~/.arcforge/servers/{name}-{hash}.json`~~ — server registry files (replaced by hub registry)
 - ~~`{project}/.mcp.json`~~ — per-project Claude Code config (replaced by plugin `.mcp.json`)
 - ~~`~/.arcforge/mcp-bridge.js`~~ — standalone bridge script (replaced by launcher)
-- ~~`MCPClientConfig.WriteClaudeCodeConfig()`~~ — replaced by `WriteProjectMcpJson()`, which writes `.mcp.json` to the Unity project root pointing to the stable launcher copy at `<hubDir>/launcher.js` — project-relative (`.arcforge/hades-hub/launcher.js`) when that is inside the project, absolute otherwise; Claude Code auto-discovers MCP when launched from the project directory. The old behavior was removed; a targeted replacement was added.
+- ~~`MCPClientConfig.WriteClaudeCodeConfig()`~~ — replaced by `WriteProjectMcpJson()`, which merges a `hades` entry into `.mcp.json` at the Unity project root pointing to the stable launcher copy at the project-relative `.arcforge/hades-hub/launcher.js`; Claude Code auto-discovers MCP when launched from the project directory. The old behavior was removed; a targeted replacement was added.
 - ~~`MCPClientConfig.OnServerStop()` file deletion~~ — server entry cleanup (replaced by hub deregistration)
 
 The previous model had three known issues documented in the Roadmap (§10): server entry lost during compilation failures, `.mcp.json` not found from wrong directory, and `.mcp.json` scoped to Unity project only. The Hub architecture resolves all three.
@@ -383,7 +396,7 @@ Step 1 is per-project (each Unity project installs the package). Step 2 is per-u
 
 Both steps are needed for the full experience. Skills alone (Step 2 only) provide general Unity guidance without project-specific context. The Unity Package alone (Step 1 only) provides project-scoped MCP access only — tools work when Claude Code is launched from the Unity project directory.
 
-**Note on MCP access:** Installing the Unity Package (Step 1) writes `.mcp.json` to the Unity project root, so Claude Code auto-discovers MCP tools when launched from that directory. Its launcher path is project-relative (`.arcforge/hades-hub/launcher.js`) under the default local hub scope, and absolute only when the hub lives outside the project. The plugin (Step 2) adds skills and enables MCP access from **any** directory — not just the project root. If you need MCP tools to work from unrelated directories (e.g., a separate repo or home directory), install the plugin. Claude Desktop is unaffected (it uses `claude_desktop_config.json` written by Unity directly).
+**Note on MCP access:** Installing the Unity Package (Step 1) writes `.mcp.json` to the Unity project root, so Claude Code auto-discovers MCP tools when launched from that directory. Its launcher path is the project-relative `.arcforge/hades-hub/launcher.js` in either hub scope, which is why that file is git-tracked rather than ignored. The plugin (Step 2) adds skills and enables MCP access from **any** directory — not just the project root. If you need MCP tools to work from unrelated directories (e.g., a separate repo or home directory), install the plugin. Claude Desktop is unaffected (it uses `claude_desktop_config.json` written by Unity directly).
 
 **Note on `--plugin-dir` (local install):** When Step 2 is done via `claude --plugin-dir`, skills and commands are only available for that session. They must be re-passed on every Claude Code start and do not appear in `/plugin list`.
 
@@ -411,7 +424,9 @@ Claude Desktop does not use the plugin system. For Claude Desktop users — and 
 }
 ```
 
-The config points to a **stable launcher copy** at `<hubDir>/launcher.js`, not the UPM cache path (which changes on package updates). Unity copies the launcher there on every server start and writes the absolute resolved path into the config — absolute here, unlike the project `.mcp.json`, because Claude Desktop spawns servers with no meaningful working directory of its own. Under the default local hub scope that is `<projectRoot>/.arcforge/hades-hub/launcher.js`, as in the example above; with Hub scope set to `Global` it is `~/.arcforge/hades-hub/launcher.js`. The requirement is a *stable* path rather than a *global* one — the UPM cache path is what must be avoided, and the resolved hub directory satisfies that in either scope.
+The config points to a **stable launcher copy** at `<projectRoot>/.arcforge/hades-hub/launcher.js`, not the UPM cache path (which changes on package updates). Unity copies the launcher there on every server start and writes the absolute path into this config — absolute here, unlike the project `.mcp.json`, because Claude Desktop spawns servers with no meaningful working directory of its own. The requirement is a *stable* path rather than a *global* one; the UPM cache path is what must be avoided.
+
+The launcher copy is always project-local, in either hub scope — it is `HadesPaths.LauncherDir`, not `HadesPaths.HubDir`. Hub scope moves the rendezvous directory (`hub.json`, `hub-path.json`), not the launcher binary, because the launcher resolves its hub at runtime and never derives it from its own location (§3.1). Keeping the copy in the project is what lets the committed `.mcp.json` name it by a relative path with no `$HOME` in it.
 
 This single-file copy is correct **because the launcher is built as a self-contained esbuild bundle** — it has no sibling modules to resolve from the stable location. (Splitting it into multiple `tsc`-emitted files without updating the copy routine was the v1.1.0 install regression: the copied `launcher.js` died at startup with `ERR_MODULE_NOT_FOUND`. The bundle invariant is now guarded by `Bridge~/tests/launcher/bundle.test.ts`.)
 
@@ -430,6 +445,8 @@ The stable launcher needs to locate the hub, but the hub is a multi-file Node.js
 The launcher's hub-finding priority chain:
 1. Relative path `../../hub/dist/index.js` — works when running from the plugin directory (Claude Code)
 2. `hub-path.json` — works when running from the stable location (Claude Desktop)
+
+Note that step 2 reads the pointer file from the *resolved hub directory*, not from beside the launcher. This is why `hub-path.json` follows hub scope while `launcher.js` does not: the launcher must look for it in the same place the running hub was registered.
 
 Both the pointer file and the launcher copy are refreshed every time Unity's MCP server starts, so package path changes self-heal automatically.
 

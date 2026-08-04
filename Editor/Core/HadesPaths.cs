@@ -67,6 +67,27 @@ namespace ArcForge.Hades.Editor.Core
         public static string ArcforgeDir
             => Path.Combine(ProjectRootCached, ArcforgeDirName);
 
+        /// <summary>
+        /// Where the version-stable launcher copy is installed — always
+        /// &lt;projectRoot&gt;/.arcforge/hades-hub, independent of hub scope and of HADES_HUB_DIR.
+        ///
+        /// Deliberately NOT HubDir, though it shares the path under the default local scope. The two
+        /// answer different questions. HubDir is the rendezvous directory where hub.json is
+        /// published, and Unity, the launcher, and the hub must each resolve it to the same place at
+        /// runtime. This is merely a stable destination for a copied file, needed only because the
+        /// launcher's real package location moves with every version bump
+        /// (Library/PackageCache/com.arcforge.hades@&lt;hash&gt;).
+        ///
+        /// Fusing the two made .mcp.json's args[0] track hub scope, which wrote one developer's
+        /// $HOME into a file the whole team shares — for no gain, because the launcher never derives
+        /// its hub from its own location. It resolves the hub at startup from HADES_HUB_DIR, a cwd
+        /// walk-up, and hub_scope in config.local.yaml (see resolveHubDir in
+        /// Bridge~/launcher/src/hub-dir.ts). Keeping the copy project-local therefore leaves global
+        /// hub scope working exactly as before, while making args[0] the same on every machine.
+        /// </summary>
+        public static string LauncherDir
+            => Path.Combine(ProjectRootCached, ArcforgeDirName, HubDirName);
+
         public static string HomeDir
             => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 

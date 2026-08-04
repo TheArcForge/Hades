@@ -14,6 +14,8 @@ Several fixes below refer to `<hubDir>`. Hades resolves that directory in this o
 
 **Project Settings → Hades** shows the resolved path for the current project, and is where the Hub scope setting lives. Substitute that path wherever the tables say `<hubDir>`.
 
+One exception: `launcher.js` is **always** at `<projectRoot>/.arcforge/hades-hub/launcher.js`, even under `Global` scope. Only the rendezvous files (`hub.json`, `hub-path.json`, `pending/`) move. So under `Global` scope you will see a project-local `hades-hub/` holding nothing but the launcher — that is expected, not a stale leftover.
+
 ---
 
 ## Common Issues
@@ -59,7 +61,7 @@ For more serious issues requiring manual intervention:
 | Trace database issues | Delete `.arcforge/traces.db`. Restart Unity — Charon creates a fresh database. Note: historical traces will be lost. |
 | MCP tools disappear after Unity restart | Check `<hubDir>/hub.json` — confirm the PID is still alive. Unity re-registers on the next heartbeat (a background timer that keeps running even when the editor is backgrounded, and re-registers automatically if the Hub has evicted it). If the Hub PID is dead, delete `hub.json` and restart your Claude Code session. |
 | Hub won't exit cleanly | Find the Hub process: `ps aux \| grep hades-hub`. Kill it manually: `kill <PID>`. Delete `<hubDir>/hub.json`. The next Claude Code session spawns a fresh Hub. |
-| Leftover global hub directory after moving to local scope | `~/.arcforge/hades-hub/` was the hub location before Hades installed project-local, and Hades neither moves nor deletes it — it can't know whether another project on the machine still uses it | Safe to remove by hand once every Unity project on the machine uses `Local` hub scope and no hub process is running. Confirm with `ps aux \| grep hades-hub` (expect no matches), then `rm -rf ~/.arcforge/hades-hub`. Nothing in there needs preserving: `launcher.js` and `hub-path.json` are regenerated on every Unity server start, and `hub.json`, `hub.lock`, and `pending/` are runtime state only. |
+| Leftover global hub directory after moving to local scope | `~/.arcforge/hades-hub/` was the hub location before Hades installed project-local, and Hades neither moves nor deletes it — it can't know whether another project on the machine still uses it | Safe to remove by hand once every Unity project on the machine uses `Local` hub scope and no hub process is running. Confirm with `ps aux \| grep hades-hub` (expect no matches), then `rm -rf ~/.arcforge/hades-hub`. Nothing in there needs preserving: `hub-path.json` is regenerated on every Unity server start, `hub.json`, `hub.lock`, and `pending/` are runtime state only, and `launcher.js` is no longer written there at all — it now always lives in the project. |
 | Memory file frontmatter broken | Open the file in a text editor. Ensure the YAML block between `---` markers is valid. Common mistakes: missing colon after a key name, or tabs used instead of spaces. |
 | Tool calls timing out | The tool timeout is fixed at 30s in the transport and is not user-configurable. The most common cause is a large graph rebuild blocking the main thread — wait for the rebuild to complete and retry. |
 | Unity is slow with Hades enabled | Disable Tier 2 inference if it isn't needed: add `enabled: false` to `.arcforge/config.yaml` (this is the only key `config.yaml` supports for Asphodel inference). The file-change debounce delay is hardcoded and not configurable. |

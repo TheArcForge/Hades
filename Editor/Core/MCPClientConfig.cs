@@ -25,15 +25,23 @@ namespace ArcForge.Hades.Editor.Core
         }
 
         /// <summary>
-        /// Copies the launcher to &lt;hubDir&gt;/launcher.js and writes hub-path.json beside it.
-        /// hubDir is resolved by HadesPaths — the project's .arcforge/hades-hub by default.
+        /// Copies the launcher to &lt;projectRoot&gt;/.arcforge/hades-hub/launcher.js and writes
+        /// hub-path.json into the resolved hub directory.
+        ///
+        /// The two destinations are the same directory under the default local hub scope and diverge
+        /// under global scope, which is correct and deliberate. The launcher copy only needs a stable
+        /// project-relative home so .mcp.json can name it without an absolute path
+        /// (HadesPaths.LauncherDir explains why). hub-path.json must go wherever the launcher will
+        /// look for it at runtime, and findHubEntry reads it from the *resolved* hub dir
+        /// (Bridge~/launcher/src/index.ts) — so it follows HubDir, not the launcher.
+        ///
         /// Returns the stable launcher path, or null if it can't be resolved.
         /// </summary>
         static string EnsureStableLauncher()
         {
-            var hubDir = HadesPaths.HubDir;
+            var launcherDir = HadesPaths.LauncherDir;
 
-            var stablePath = Path.Combine(hubDir, "launcher.js");
+            var stablePath = Path.Combine(launcherDir, "launcher.js");
 
             var packageLauncherDir = FindPackageLauncherDir();
             if (packageLauncherDir == null) return File.Exists(stablePath) ? stablePath : null;
@@ -41,8 +49,8 @@ namespace ArcForge.Hades.Editor.Core
             var sourcePath = Path.Combine(packageLauncherDir, "dist", "index.js");
             if (!File.Exists(sourcePath)) return File.Exists(stablePath) ? stablePath : null;
 
-            if (!Directory.Exists(hubDir))
-                Directory.CreateDirectory(hubDir);
+            if (!Directory.Exists(launcherDir))
+                Directory.CreateDirectory(launcherDir);
 
             // Single-file copy is sufficient ONLY because the launcher is built as a self-contained
             // esbuild bundle (Bridge~/package.json `build:launcher`) — it has no relative sibling
@@ -59,7 +67,7 @@ namespace ArcForge.Hades.Editor.Core
                 Debug.LogWarning($"[Hades] Failed to copy launcher: {ex.Message}");
             }
 
-            WriteHubPath(packageLauncherDir, hubDir);
+            WriteHubPath(packageLauncherDir, HadesPaths.HubDir);
 
             return stablePath;
         }
@@ -204,8 +212,12 @@ namespace ArcForge.Hades.Editor.Core
         /// itself already relies on that cwd (findProjectRoot walks up from process.cwd()), so this
         /// adds no new assumption.
         ///
-        /// Falls back to the absolute path when the launcher is outside the project — global hub
-        /// scope, or HADES_HUB_DIR pointing elsewhere — where no relative form exists.
+        /// Falls back to the absolute path when the launcher is outside the project, where no
+        /// relative form exists. HadesPaths.LauncherDir is now always project-local, so no supported
+        /// configuration reaches that branch — hub scope no longer moves the launcher copy. It is
+        /// kept as a total function rather than an assertion: the alternative is emitting a path
+        /// with a "../" escape into a file the whole team shares, and .mcp.json is committed.
+        ///
         /// Forward slashes on every platform: Windows node accepts them, and it avoids escaping
         /// backslashes in JSON.
         /// </summary>
@@ -449,6 +461,11 @@ namespace ArcForge.Hades.Editor.Core
                 var bridgeRoot = Path.GetDirectoryName(packageLauncherDir);
                 var hubEntry = Path.Combine(bridgeRoot, "hub", "dist", "index.js");
                 if (!File.Exists(hubEntry)) return;
+
+                // Not necessarily created by the launcher copy any more: under global hub scope this
+                // is $HOME/.arcforge/hades-hub while the launcher lands in the project.
+                if (!Directory.Exists(hubDir))
+                    Directory.CreateDirectory(hubDir);
 
                 var hubPathFile = Path.Combine(hubDir, "hub-path.json");
                 var json = $"{{\"hubEntry\":\"{hubEntry.Replace("\\", "/")}\"}}";
