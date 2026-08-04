@@ -106,13 +106,43 @@ namespace ArcForge.Hades.Editor.Tests
             Assert.AreEqual(ReloadStrategy.Manual, NewSettings().DomainReloadStrategy);
         }
 
+        // Snapshots a real EditorPrefs value before a test overwrites it, and returns an action
+        // that restores exactly what was there before — or deletes the key if it didn't exist.
+        // A bare DeleteKey in [finally] would destroy a developer's actual legacy Hades settings
+        // on any machine that has them, undermining the migration's own guarantee that those keys
+        // are left in place until every project has migrated.
+        static System.Action SnapshotIntPref(string key)
+        {
+            var had = UnityEditor.EditorPrefs.HasKey(key);
+            var prior = had ? UnityEditor.EditorPrefs.GetInt(key) : 0;
+            return () =>
+            {
+                if (had) UnityEditor.EditorPrefs.SetInt(key, prior);
+                else UnityEditor.EditorPrefs.DeleteKey(key);
+            };
+        }
+
+        static System.Action SnapshotBoolPref(string key)
+        {
+            var had = UnityEditor.EditorPrefs.HasKey(key);
+            var prior = had && UnityEditor.EditorPrefs.GetBool(key);
+            return () =>
+            {
+                if (had) UnityEditor.EditorPrefs.SetBool(key, prior);
+                else UnityEditor.EditorPrefs.DeleteKey(key);
+            };
+        }
+
         [Test]
         public void ImportFromEditorPrefs_CopiesLegacyValues()
         {
-            UnityEditor.EditorPrefs.SetInt("Hades_MCP_Port", 51999);
-            UnityEditor.EditorPrefs.SetBool("Hades_MCP_CharonEnabled", false);
+            var restorePort = SnapshotIntPref("Hades_MCP_Port");
+            var restoreCharon = SnapshotBoolPref("Hades_MCP_CharonEnabled");
             try
             {
+                UnityEditor.EditorPrefs.SetInt("Hades_MCP_Port", 51999);
+                UnityEditor.EditorPrefs.SetBool("Hades_MCP_CharonEnabled", false);
+
                 var config = HadesConfig.Load(_dir);
                 HadesSettings.ImportFromEditorPrefs(config);
                 config.Save();
@@ -123,22 +153,23 @@ namespace ArcForge.Hades.Editor.Tests
             }
             finally
             {
-                UnityEditor.EditorPrefs.DeleteKey("Hades_MCP_Port");
-                UnityEditor.EditorPrefs.DeleteKey("Hades_MCP_CharonEnabled");
+                restorePort();
+                restoreCharon();
             }
         }
 
         [Test]
         public void HasLegacyEditorPrefs_IsTrue_WhenAnyLegacyKeyExists()
         {
-            UnityEditor.EditorPrefs.SetInt("Hades_MCP_Port", 51999);
+            var restorePort = SnapshotIntPref("Hades_MCP_Port");
             try
             {
+                UnityEditor.EditorPrefs.SetInt("Hades_MCP_Port", 51999);
                 Assert.IsTrue(HadesSettings.HasLegacyEditorPrefs());
             }
             finally
             {
-                UnityEditor.EditorPrefs.DeleteKey("Hades_MCP_Port");
+                restorePort();
             }
         }
     }
