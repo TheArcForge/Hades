@@ -108,6 +108,8 @@ To override the hub directory for a single Claude Code session — ignoring both
 HADES_HUB_DIR=/path/to/hub claude
 ```
 
+Use an absolute path. It's resolved as-is by both Unity and the launcher, each from its own working directory — a relative path can point the two at different directories and break the rendezvous it's meant to force.
+
 ### The two things that stay outside your project
 
 Hades can't quite contain everything, and it's worth knowing exactly what:
