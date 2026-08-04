@@ -99,16 +99,7 @@ namespace ArcForge.Hades.Editor.Core
                     root = new JObject();
                 }
 
-                if (root["mcpServers"] == null)
-                    root["mcpServers"] = new JObject();
-
-                var servers = (JObject)root["mcpServers"];
-
-                servers["hades"] = new JObject
-                {
-                    ["command"] = "node",
-                    ["args"] = new JArray(launcherPath)
-                };
+                SetHadesServer(root, launcherPath);
 
                 AtomicWrite(configPath, root.ToString(Formatting.Indented));
             }
@@ -119,8 +110,12 @@ namespace ArcForge.Hades.Editor.Core
         }
 
         /// <summary>
-        /// Writes .mcp.json to the Unity project root so Claude Code auto-discovers the MCP server.
-        /// Replaces any stale .mcp.json from the pre-Hub architecture.
+        /// Writes .mcp.json in the Unity project root so Claude Code auto-discovers the MCP server.
+        ///
+        /// Merges into the existing file rather than replacing it. `.mcp.json` is Claude Code's
+        /// project-level MCP registry, not a Hades-owned file: a team may declare any number of
+        /// other servers there. This method runs on every server start, so a wholesale rewrite
+        /// silently deleted every sibling entry each time Unity came up.
         /// </summary>
         static void WriteProjectMcpJson(string launcherPath)
         {
@@ -129,24 +124,73 @@ namespace ArcForge.Hades.Editor.Core
                 var projectRoot = PathSandbox.ProjectRoot;
                 var mcpJsonPath = Path.Combine(projectRoot, ".mcp.json");
 
-                var root = new JObject
-                {
-                    ["mcpServers"] = new JObject
-                    {
-                        ["hades"] = new JObject
-                        {
-                            ["command"] = "node",
-                            ["args"] = new JArray(McpLauncherArg(launcherPath, projectRoot))
-                        }
-                    }
-                };
+                var existing = File.Exists(mcpJsonPath) ? File.ReadAllText(mcpJsonPath) : null;
+                var merged = MergeHadesServer(existing, McpLauncherArg(launcherPath, projectRoot));
 
-                AtomicWrite(mcpJsonPath, root.ToString(Formatting.Indented));
+                AtomicWrite(mcpJsonPath, merged);
             }
             catch (Exception ex)
             {
                 Debug.LogWarning($"[Hades] Failed to write project .mcp.json: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Returns the contents of `.mcp.json` with the `hades` server entry set to
+        /// <paramref name="launcherArg"/>, preserving every other server and top-level key in
+        /// <paramref name="existingJson"/>.
+        ///
+        /// Unparseable input is replaced with a fresh config rather than left alone. Hades owns its
+        /// own entry and must be able to self-heal a package version bump or a hub scope change on
+        /// startup; refusing to write would leave the MCP server permanently unreachable with only
+        /// an Editor console warning to explain it. Nothing recoverable is lost — a file that does
+        /// not parse has no readable sibling entries to preserve. The Claude Desktop config is
+        /// deliberately NOT treated this way: it is a global file holding settings well outside
+        /// Hades' remit, so a parse failure there aborts the write instead.
+        /// </summary>
+        internal static string MergeHadesServer(string existingJson, string launcherArg)
+        {
+            JObject root = null;
+
+            if (!string.IsNullOrWhiteSpace(existingJson))
+            {
+                try
+                {
+                    root = JObject.Parse(existingJson);
+                }
+                catch (JsonException)
+                {
+                    Debug.LogWarning("[Hades] .mcp.json is not valid JSON — replacing it. Any "
+                        + "other MCP servers it declared will need re-adding.");
+                }
+            }
+
+            if (root == null) root = new JObject();
+
+            SetHadesServer(root, launcherArg);
+
+            return root.ToString(Formatting.Indented);
+        }
+
+        /// <summary>
+        /// Sets <c>mcpServers.hades</c> on <paramref name="root"/>, creating the container when it
+        /// is absent and replacing it when it is present but not an object (e.g. an explicit JSON
+        /// null, which reads back as a non-null JValue and would fail a blind cast).
+        /// </summary>
+        static void SetHadesServer(JObject root, string launcherArg)
+        {
+            var servers = root["mcpServers"] as JObject;
+            if (servers == null)
+            {
+                servers = new JObject();
+                root["mcpServers"] = servers;
+            }
+
+            servers["hades"] = new JObject
+            {
+                ["command"] = "node",
+                ["args"] = new JArray(launcherArg)
+            };
         }
 
         /// <summary>

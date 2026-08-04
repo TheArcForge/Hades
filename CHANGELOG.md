@@ -18,6 +18,8 @@ A Unity project can now hold its entire Hades installation inside its own worksp
 ### Fixed
 
 - **Package path resolution never worked on the documented install path.** `FindPackageLauncherDir` and `FindPackageSkillsDir` guessed `<project>/Packages/com.arcforge.hades`, which only exists for an *embedded* package. A git-URL UPM install resolves to `Library/PackageCache/com.arcforge.hades@<hash>`, so both returned `null` and the stable launcher copy plus the skills install silently no-opped. Both now resolve through `PackageInfo.FindForAssembly`, matching the rest of the codebase.
+- **Writing `.mcp.json` deleted every other MCP server declared in it.** `WriteProjectMcpJson` built a fresh single-entry object and wrote it over the file on every Unity server start, so a project that also declared, say, a Postgres or Playwright server lost those entries each time the Editor came up — silently, and with `.mcp.json` gitignored, git could not show what had gone. `.mcp.json` is Claude Code's project-level MCP registry, not a Hades-owned file; Hades now merges its own `mcpServers.hades` entry and leaves all sibling servers and top-level keys intact. A file that does not parse as JSON is still replaced, with a warning, so a package version bump or hub scope change can always self-heal.
+- **A non-object `mcpServers` crashed the Claude Desktop config write.** `"mcpServers": null` reads back as a JSON-null `JValue` rather than C# `null`, so the existing `== null` guard passed and the following `(JObject)` cast threw; the exception was swallowed and the entry silently never written. Both config writers now share one type-checked accessor.
 
 ### Notes
 
