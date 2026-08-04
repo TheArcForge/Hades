@@ -2536,6 +2536,33 @@ The launcher finds the hub from its **working directory**, not from where its ow
 
 **Known remaining edge, to resolve before doing it:** the hub directory is pinned but the project identity is not. `PROJECT_PATH` still degrades to `process.cwd()` when no project root is found, so the `X-Hades-Project` header is wrong and routing leans on the hub's single-instance fallback. That is fine for one Unity attached to a project-scoped hub — which is exactly the local-scope case — but the launcher would want a companion `HADES_PROJECT_PATH` (or an argv) to be correct in general. Since a *global* hub can have several Unity instances attached, the env-var fix must not be applied to global scope without also fixing the header.
 
+### `.mcp.json` merge silently strips JSON comments
+
+**Discovered:** Project-local installation code review (2026-08-04)
+**Severity:** Low — only affects teams that hand-annotate `.mcp.json` with `//` or `/* */` comments
+**Status:** Open
+**Ref:** `Editor/Core/MCPClientConfig.cs:MergeHadesServer()`
+
+`MergeHadesServer` parses `.mcp.json` with `JObject.Parse` (Json.NET), which accepts JSONC input but does not preserve comments on round-trip — `ToString(Formatting.Indented)` emits comment-free JSON. Since the file is now git-tracked and merged into on every server start, any comments a team added by hand are silently dropped the next time Unity starts. Not a correctness bug (the file stays valid JSON with the same data), but a surprising diff for whoever added the comment.
+
+### Skills are never pruned after being renamed or removed upstream
+
+**Discovered:** Project-local installation code review (2026-08-04)
+**Severity:** Low — leaves stale files, does not affect functionality
+**Status:** Open
+**Ref:** `Editor/Core/MCPClientConfig.cs:InstallSkills()`
+
+`InstallSkills` copies every skill directory the installed package currently ships into `<skillsRoot>/hades-<name>/SKILL.md`, overwriting in place. It never removes a `hades-<name>` directory whose source skill was renamed or deleted in a later package version, so upgrading leaves stale skill files behind indefinitely in both local and global scope.
+
+### `HadesPreferences` re-reads `config.local.yaml` on every GUI repaint
+
+**Discovered:** Project-local installation code review (2026-08-04)
+**Severity:** Low — a Settings window is not a hot path
+**Status:** Open
+**Ref:** `Editor/Core/HadesPreferences.cs:Draw()`
+
+`Draw()` reconstructs `HadesSettings` — including a disk read of `config.local.yaml` — on every repaint while the Project Settings window is open, rather than caching it and invalidating on save. Harmless at today's call frequency; worth revisiting only if the window grows more expensive to redraw.
+
 ### Field bugs (Phase 7 feedback)
 
 **Status:** Resolved — bugs 1–3 shipped in v0.9.1 (Phase 8); bug 4 shipped in v0.9.5 (Phase 9)
