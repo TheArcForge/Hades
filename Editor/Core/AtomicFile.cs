@@ -17,9 +17,7 @@ namespace ArcForge.Hades.Editor.Core
 
             var tmpPath = filePath + ".tmp";
             File.WriteAllText(tmpPath, content);
-            if (File.Exists(filePath))
-                File.Delete(filePath);
-            File.Move(tmpPath, filePath);
+            File.Move(tmpPath, filePath, overwrite: true);
         }
     }
 }
