@@ -11,13 +11,29 @@ namespace ArcForge.Hades.Editor.Core
     {
         public static void Write(string filePath, string content)
         {
-            var dir = Path.GetDirectoryName(filePath);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
+            EnsureDir(filePath);
 
             var tmpPath = filePath + ".tmp";
             File.WriteAllText(tmpPath, content);
             File.Move(tmpPath, filePath, overwrite: true);
+        }
+
+        /// <summary>Byte-safe variant — for copying binary or pre-encoded files (e.g. the launcher
+        /// bundle) without a text round-trip that could alter encoding.</summary>
+        public static void Write(string filePath, byte[] content)
+        {
+            EnsureDir(filePath);
+
+            var tmpPath = filePath + ".tmp";
+            File.WriteAllBytes(tmpPath, content);
+            File.Move(tmpPath, filePath, overwrite: true);
+        }
+
+        static void EnsureDir(string filePath)
+        {
+            var dir = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
         }
     }
 }

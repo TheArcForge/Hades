@@ -60,7 +60,10 @@ namespace ArcForge.Hades.Editor.Core
             // Bridge~/tests/launcher/bundle.test.ts.
             try
             {
-                File.Copy(sourcePath, stablePath, true);
+                // AtomicFile rather than File.Copy: a Claude Code spawn racing this copy must never
+                // see a half-written bundle, since a partial file is exactly the ERR_MODULE_NOT_FOUND
+                // failure mode the single-bundle invariant above exists to prevent.
+                AtomicFile.Write(stablePath, File.ReadAllBytes(sourcePath));
             }
             catch (Exception ex)
             {
