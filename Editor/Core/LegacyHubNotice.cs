@@ -28,16 +28,33 @@ namespace ArcForge.Hades.Editor.Core
 
         /// <summary>Pure decision function — no dialogs, no filesystem, no prefs.</summary>
         internal static bool ShouldShow(string resolvedHubDir, string globalHubDir,
-            bool alreadyShown, bool globalDirExists)
+            bool alreadyShown, bool globalDirExists, bool desktopEntryStale)
         {
             if (alreadyShown) return false;
-            if (!globalDirExists) return false;
             if (string.IsNullOrEmpty(resolvedHubDir) || string.IsNullOrEmpty(globalHubDir))
                 return false;
 
-            // Still using the global dir — there is nothing to tell them.
-            return !string.Equals(Normalize(resolvedHubDir), Normalize(globalHubDir),
+            return HubMoved(resolvedHubDir, globalHubDir, globalDirExists) || desktopEntryStale;
+        }
+
+        // Still using the global dir — there is nothing to tell them about the hub.
+        static bool HubMoved(string resolvedHubDir, string globalHubDir, bool globalDirExists)
+            => globalDirExists && !string.Equals(Normalize(resolvedHubDir), Normalize(globalHubDir),
                 PathComparison);
+
+        /// <summary>
+        /// True when Claude Desktop's config still names the launcher at its pre-migration home
+        /// (&lt;globalHubDir&gt;/launcher.js). launcher.js is no longer written there in either hub
+        /// scope, so an entry pointing there is permanently stale — Desktop will fail to start
+        /// Hades and nothing will ever rewrite the entry, since desktop_integration now defaults off.
+        /// </summary>
+        internal static bool DesktopEntryIsStale(string desktopLauncherArg, string globalHubDir)
+        {
+            if (string.IsNullOrEmpty(desktopLauncherArg) || string.IsNullOrEmpty(globalHubDir))
+                return false;
+
+            var staleArg = Path.Combine(globalHubDir, "launcher.js");
+            return string.Equals(Normalize(desktopLauncherArg), Normalize(staleArg), PathComparison);
         }
 
         static string Normalize(string path)
@@ -50,26 +67,36 @@ namespace ArcForge.Hades.Editor.Core
             try
             {
                 var globalHubDir = HadesPaths.GlobalHubDirForMachine;
+                var globalDirExists = Directory.Exists(globalHubDir);
+                var hubMoved = HubMoved(HadesPaths.HubDir, globalHubDir, globalDirExists);
+                var desktopStale = DesktopEntryIsStale(
+                    MCPClientConfig.ReadDesktopHadesLauncherArg(), globalHubDir);
 
                 if (!ShouldShow(HadesPaths.HubDir, globalHubDir,
-                        EditorPrefs.GetBool(ShownKey, false),
-                        Directory.Exists(globalHubDir)))
+                        EditorPrefs.GetBool(ShownKey, false), globalDirExists, desktopStale))
                     return;
 
+                var message = "Hades now keeps its hub inside this project:\n\n" +
+                    "    .arcforge/hades-hub/\n\n";
+
+                if (hubMoved)
+                    message += "The old shared folder is no longer used by this project:\n\n" +
+                        $"    {globalHubDir}\n\n" +
+                        "Other Unity projects may still be using it. It is safe to delete only " +
+                        "once every project has been updated.\n\n";
+
+                if (desktopStale)
+                    message += "Claude Desktop's config still points at the old launcher location " +
+                        "and will fail to start Hades. Re-enable Desktop integration in " +
+                        "Project Settings > Hades to rewrite it to the new location.";
+
                 var ok = EditorUtility.DisplayDialog(
-                    "Hades — Hub Moved Into This Project",
-                    "Hades now keeps its hub inside this project:\n\n" +
-                    "    .arcforge/hades-hub/\n\n" +
-                    "The old shared folder is no longer used by this project:\n\n" +
-                    $"    {globalHubDir}\n\n" +
-                    "Other Unity projects may still be using it. It is safe to delete only " +
-                    "once every project has been updated.",
-                    "OK", "Open Folder");
+                    "Hades — Hub Moved Into This Project", message.TrimEnd('\n'), "OK", "Open Folder");
 
                 // Recorded either way — the notice is informational and must fire only once.
                 EditorPrefs.SetBool(ShownKey, true);
 
-                if (!ok) EditorUtility.RevealInFinder(globalHubDir);
+                if (!ok && globalDirExists) EditorUtility.RevealInFinder(globalHubDir);
             }
             catch (Exception ex)
             {

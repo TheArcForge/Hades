@@ -483,6 +483,28 @@ namespace ArcForge.Hades.Editor.Core
             return Directory.Exists(launcherDir) ? launcherDir : null;
         }
 
+        /// <summary>
+        /// Reads `args[0]` of the `hades` entry in Claude Desktop's config, or null if the config
+        /// file, the entry, or the arg doesn't exist. Used by LegacyHubNotice to detect a stale
+        /// absolute path left over from before the launcher moved out of the global hub directory.
+        /// </summary>
+        internal static string ReadDesktopHadesLauncherArg()
+        {
+            try
+            {
+                var configPath = GetDesktopConfigPath();
+                if (configPath == null || !File.Exists(configPath)) return null;
+
+                var root = JObject.Parse(File.ReadAllText(configPath));
+                var args = root["mcpServers"]?["hades"]?["args"] as JArray;
+                return args != null && args.Count > 0 ? args[0]?.ToString() : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         static string GetDesktopConfigPath()
         {
             string dir;

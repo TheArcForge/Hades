@@ -132,31 +132,73 @@ namespace ArcForge.Hades.Editor.Tests
         [Test]
         public void ShouldShow_IsTrue_WhenLocalAndGlobalDirExists()
         {
-            Assert.IsTrue(LegacyHubNotice.ShouldShow(LocalDir, GlobalDir, false, true));
+            Assert.IsTrue(LegacyHubNotice.ShouldShow(LocalDir, GlobalDir, false, true, false));
         }
 
         [Test]
         public void ShouldShow_IsFalse_WhenAlreadyShown()
         {
-            Assert.IsFalse(LegacyHubNotice.ShouldShow(LocalDir, GlobalDir, true, true));
+            Assert.IsFalse(LegacyHubNotice.ShouldShow(LocalDir, GlobalDir, true, true, false));
         }
 
         [Test]
         public void ShouldShow_IsFalse_WhenGlobalDirAbsent()
         {
-            Assert.IsFalse(LegacyHubNotice.ShouldShow(LocalDir, GlobalDir, false, false));
+            Assert.IsFalse(LegacyHubNotice.ShouldShow(LocalDir, GlobalDir, false, false, false));
         }
 
         [Test]
         public void ShouldShow_IsFalse_WhenStillUsingTheGlobalDir()
         {
-            Assert.IsFalse(LegacyHubNotice.ShouldShow(GlobalDir, GlobalDir, false, true));
+            Assert.IsFalse(LegacyHubNotice.ShouldShow(GlobalDir, GlobalDir, false, true, false));
         }
 
         [Test]
         public void ShouldShow_IsFalse_WhenGlobalDirDiffersOnlyByTrailingSlash()
         {
-            Assert.IsFalse(LegacyHubNotice.ShouldShow(GlobalDir + "/", GlobalDir, false, true));
+            Assert.IsFalse(LegacyHubNotice.ShouldShow(GlobalDir + "/", GlobalDir, false, true, false));
+        }
+
+        [Test]
+        public void ShouldShow_IsTrue_WhenDesktopEntryStale_EvenIfHubNeverMoved()
+        {
+            Assert.IsTrue(LegacyHubNotice.ShouldShow(GlobalDir, GlobalDir, false, true, true));
+        }
+
+        [Test]
+        public void ShouldShow_IsTrue_WhenDesktopEntryStale_EvenIfGlobalDirAbsent()
+        {
+            Assert.IsTrue(LegacyHubNotice.ShouldShow(LocalDir, GlobalDir, false, false, true));
+        }
+
+        [Test]
+        public void ShouldShow_IsFalse_WhenAlreadyShown_EvenIfDesktopEntryStale()
+        {
+            Assert.IsFalse(LegacyHubNotice.ShouldShow(LocalDir, GlobalDir, true, true, true));
+        }
+
+        [Test]
+        public void DesktopEntryIsStale_IsTrue_ForOldAbsoluteLauncherPath()
+        {
+            Assert.IsTrue(LegacyHubNotice.DesktopEntryIsStale(GlobalDir + "/launcher.js", GlobalDir));
+        }
+
+        [Test]
+        public void DesktopEntryIsStale_IsFalse_ForNewProjectLocalPath()
+        {
+            Assert.IsFalse(LegacyHubNotice.DesktopEntryIsStale(LocalDir + "/launcher.js", GlobalDir));
+        }
+
+        [Test]
+        public void DesktopEntryIsStale_IsFalse_WhenNoDesktopEntry()
+        {
+            Assert.IsFalse(LegacyHubNotice.DesktopEntryIsStale(null, GlobalDir));
+        }
+
+        [Test]
+        public void DesktopEntryIsStale_IsTrue_DespiteTrailingSlashDifference()
+        {
+            Assert.IsTrue(LegacyHubNotice.DesktopEntryIsStale(GlobalDir + "/launcher.js/", GlobalDir + "/"));
         }
     }
 }
