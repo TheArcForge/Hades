@@ -5,6 +5,7 @@ import {
   readHubScope,
   ENV_HUB_DIR,
   CONFIG_FILE_NAME,
+  type HubScope,
 } from "../../launcher/src/hub-dir.js";
 
 const HOME = "/Users/tester";
@@ -60,6 +61,19 @@ describe("readHubScope", () => {
 
   it("ignores lines without a colon", () => {
     expect(readHubScope(arcforge, files({ [CONFIG_PATH]: "garbage\n" }))).toBe("local");
+  });
+
+  // Mirrored in HadesConfigTests.cs (DuplicateKeyParity) — same config text must resolve to the
+  // same scope on both sides of the language boundary. Keep these two tables in sync.
+  const duplicateKeyCases: Array<[string, HubScope]> = [
+    ["hub_scope: local\nhub_scope: global\n", "global"],
+    ["hub_scope: global\nhub_scope: local\n", "local"],
+    ["hub_scope: local\nmcp_port: 51234\nhub_scope: global\n", "global"],
+    ["hub_scope: global\nmcp_port: 51234\nhub_scope: local\n", "local"],
+  ];
+
+  it.each(duplicateKeyCases)("last occurrence wins for %j", (contents, expected) => {
+    expect(readHubScope(arcforge, files({ [CONFIG_PATH]: contents }))).toBe(expected);
   });
 });
 

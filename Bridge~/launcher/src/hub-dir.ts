@@ -39,6 +39,8 @@ export function readHubScope(arcforgeDir: string, readFile: ReadFile): HubScope 
   const raw = readFile(path.join(arcforgeDir, CONFIG_FILE_NAME));
   if (raw === null) return "local";
 
+  let value: string | null = null;
+
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
@@ -48,10 +50,11 @@ export function readHubScope(arcforgeDir: string, readFile: ReadFile): HubScope 
 
     if (trimmed.slice(0, colonIdx).trim() !== HUB_SCOPE_KEY) continue;
 
-    return trimmed.slice(colonIdx + 1).trim().toLowerCase() === "global" ? "global" : "local";
+    // Last occurrence of a duplicated key wins — must match HadesConfig.Parse on the C# side.
+    value = trimmed.slice(colonIdx + 1).trim();
   }
 
-  return "local";
+  return value?.toLowerCase() === "global" ? "global" : "local";
 }
 
 /**

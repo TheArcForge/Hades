@@ -135,5 +135,23 @@ namespace ArcForge.Hades.Editor.Tests
             var reloaded = HadesConfig.Load(_dir);
             Assert.AreEqual("keepme", reloaded.GetString("some_future_key", ""));
         }
+
+        // Mirrored in hub-dir.test.ts (duplicateKeyCases) — same config text must resolve to the
+        // same scope on both sides of the language boundary. Keep these two tables in sync.
+        static readonly object[] DuplicateKeyCases =
+        {
+            new object[] { "hub_scope: local\nhub_scope: global\n", "global" },
+            new object[] { "hub_scope: global\nhub_scope: local\n", "local" },
+            new object[] { "hub_scope: local\nmcp_port: 51234\nhub_scope: global\n", "global" },
+            new object[] { "hub_scope: global\nmcp_port: 51234\nhub_scope: local\n", "local" },
+        };
+
+        [TestCaseSource(nameof(DuplicateKeyCases))]
+        public void DuplicateKeyParity(string contents, string expected)
+        {
+            WriteConfig(contents);
+            var config = HadesConfig.Load(_dir);
+            Assert.AreEqual(expected, config.GetString("hub_scope", "local"));
+        }
     }
 }
