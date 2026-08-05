@@ -50,10 +50,18 @@ Dashboard~/node_modules/
 .arcforge/graph.db-shm
 .arcforge/traces.db
 .arcforge/server.json
-.mcp.json
+.arcforge/config.local.yaml
+.arcforge/hades-hub/
 
 # Keep memory tracked
 !.arcforge/memory/
+
+# .mcp.json is deliberately NOT ignored. Its only Hades entry is
+# `node .arcforge/hades-hub/launcher.js` — a project-relative path that is byte-identical on every
+# machine and under either hub scope, so it is team config, not machine state. Claude Code reads
+# any number of other servers from the same file; Hades merges rather than overwrites.
+# The launcher it names IS ignored (above), so a fresh clone reports the server as failed until
+# the Unity Editor has been opened once to regenerate it.
 
 # Superpowers artifacts
 docs/

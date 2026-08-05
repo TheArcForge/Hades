@@ -14,23 +14,34 @@ namespace ArcForge.Hades.Editor.Core
             var launcherPath = EnsureStableLauncher();
             if (launcherPath == null) return;
 
-            UpdateClaudeDesktopConfig(launcherPath);
+            var settings = new HadesSettings();
+
+            if (settings.DesktopIntegration)
+                UpdateClaudeDesktopConfig(launcherPath);
+
             WriteProjectMcpJson(launcherPath);
             WriteProjectClaudeMd();
-            InstallSkillsForDesktop();
+            InstallSkills(settings.SkillsScope);
         }
 
         /// <summary>
-        /// Copies the launcher to ~/.arcforge/hades-hub/launcher.js and writes hub-path.json.
+        /// Copies the launcher to &lt;projectRoot&gt;/.arcforge/hades-hub/launcher.js and writes
+        /// hub-path.json into the resolved hub directory.
+        ///
+        /// The two destinations are the same directory under the default local hub scope and diverge
+        /// under global scope, which is correct and deliberate. The launcher copy only needs a stable
+        /// project-relative home so .mcp.json can name it without an absolute path
+        /// (HadesPaths.LauncherDir explains why). hub-path.json must go wherever the launcher will
+        /// look for it at runtime, and findHubEntry reads it from the *resolved* hub dir
+        /// (Bridge~/launcher/src/index.ts) — so it follows HubDir, not the launcher.
+        ///
         /// Returns the stable launcher path, or null if it can't be resolved.
         /// </summary>
         static string EnsureStableLauncher()
         {
-            var hubDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".arcforge", "hades-hub");
+            var launcherDir = HadesPaths.LauncherDir;
 
-            var stablePath = Path.Combine(hubDir, "launcher.js");
+            var stablePath = Path.Combine(launcherDir, "launcher.js");
 
             var packageLauncherDir = FindPackageLauncherDir();
             if (packageLauncherDir == null) return File.Exists(stablePath) ? stablePath : null;
@@ -38,8 +49,8 @@ namespace ArcForge.Hades.Editor.Core
             var sourcePath = Path.Combine(packageLauncherDir, "dist", "index.js");
             if (!File.Exists(sourcePath)) return File.Exists(stablePath) ? stablePath : null;
 
-            if (!Directory.Exists(hubDir))
-                Directory.CreateDirectory(hubDir);
+            if (!Directory.Exists(launcherDir))
+                Directory.CreateDirectory(launcherDir);
 
             // Single-file copy is sufficient ONLY because the launcher is built as a self-contained
             // esbuild bundle (Bridge~/package.json `build:launcher`) — it has no relative sibling
@@ -49,20 +60,37 @@ namespace ArcForge.Hades.Editor.Core
             // Bridge~/tests/launcher/bundle.test.ts.
             try
             {
-                File.Copy(sourcePath, stablePath, true);
+                // AtomicFile rather than File.Copy: a Claude Code spawn racing this copy must never
+                // see a half-written bundle, since a partial file is exactly the ERR_MODULE_NOT_FOUND
+                // failure mode the single-bundle invariant above exists to prevent.
+                AtomicFile.Write(stablePath, File.ReadAllBytes(sourcePath));
             }
             catch (Exception ex)
             {
                 Debug.LogWarning($"[Hades] Failed to copy launcher: {ex.Message}");
             }
 
-            WriteHubPath(packageLauncherDir, hubDir);
+            WriteHubPath(packageLauncherDir, HadesPaths.HubDir);
 
             return stablePath;
         }
 
         /// <summary>
-        /// Writes/updates claude_desktop_config.json so Claude Desktop (Chat/Cowork) can reach the hub.
+        /// Writes/updates claude_desktop_config.json so Claude Desktop (Chat/Cowork) can reach
+        /// the hub.
+        ///
+        /// This is the one Hades write that CANNOT be project-local: Claude Desktop is a single
+        /// global application with exactly one config file. Gated by the `desktop_integration`
+        /// setting, which defaults to OFF for two reasons: nothing should leave the workspace
+        /// unasked, and the entry is inert under the default local hub scope anyway. Desktop
+        /// spawns the launcher with a cwd outside the project, so findProjectRoot returns null and
+        /// resolveHubDir falls through to $HOME/.arcforge/hades-hub, while a local-scope Unity
+        /// publishes hub.json into the project's own hub dir — the two never meet. Desktop
+        /// therefore needs `hub_scope: global` today; see the roadmap item on passing
+        /// HADES_HUB_DIR through the Desktop entry to lift that restriction.
+        ///
+        /// Turning the setting off does not remove an existing entry — Hades does not exclusively
+        /// own this file, and a stale entry is harmless.
         /// </summary>
         static void UpdateClaudeDesktopConfig(string launcherPath)
         {
@@ -82,16 +110,7 @@ namespace ArcForge.Hades.Editor.Core
                     root = new JObject();
                 }
 
-                if (root["mcpServers"] == null)
-                    root["mcpServers"] = new JObject();
-
-                var servers = (JObject)root["mcpServers"];
-
-                servers["hades"] = new JObject
-                {
-                    ["command"] = "node",
-                    ["args"] = new JArray(launcherPath)
-                };
+                SetHadesServer(root, launcherPath);
 
                 AtomicWrite(configPath, root.ToString(Formatting.Indented));
             }
@@ -102,8 +121,12 @@ namespace ArcForge.Hades.Editor.Core
         }
 
         /// <summary>
-        /// Writes .mcp.json to the Unity project root so Claude Code auto-discovers the MCP server.
-        /// Replaces any stale .mcp.json from the pre-Hub architecture.
+        /// Writes .mcp.json in the Unity project root so Claude Code auto-discovers the MCP server.
+        ///
+        /// Merges into the existing file rather than replacing it. `.mcp.json` is Claude Code's
+        /// project-level MCP registry, not a Hades-owned file: a team may declare any number of
+        /// other servers there. This method runs on every server start, so a wholesale rewrite
+        /// silently deleted every sibling entry each time Unity came up.
         /// </summary>
         static void WriteProjectMcpJson(string launcherPath)
         {
@@ -112,25 +135,122 @@ namespace ArcForge.Hades.Editor.Core
                 var projectRoot = PathSandbox.ProjectRoot;
                 var mcpJsonPath = Path.Combine(projectRoot, ".mcp.json");
 
-                var root = new JObject
-                {
-                    ["mcpServers"] = new JObject
-                    {
-                        ["hades"] = new JObject
-                        {
-                            ["command"] = "node",
-                            ["args"] = new JArray(launcherPath)
-                        }
-                    }
-                };
+                var existing = File.Exists(mcpJsonPath) ? File.ReadAllText(mcpJsonPath) : null;
+                var merged = MergeHadesServer(existing, McpLauncherArg(launcherPath, projectRoot));
 
-                AtomicWrite(mcpJsonPath, root.ToString(Formatting.Indented));
+                AtomicWrite(mcpJsonPath, merged);
             }
             catch (Exception ex)
             {
                 Debug.LogWarning($"[Hades] Failed to write project .mcp.json: {ex.Message}");
             }
         }
+
+        /// <summary>
+        /// Returns the contents of `.mcp.json` with the `hades` server entry set to
+        /// <paramref name="launcherArg"/>, preserving every other server and top-level key in
+        /// <paramref name="existingJson"/>.
+        ///
+        /// Unparseable input is replaced with a fresh config rather than left alone. Hades owns its
+        /// own entry and must be able to self-heal a package version bump or a hub scope change on
+        /// startup; refusing to write would leave the MCP server permanently unreachable with only
+        /// an Editor console warning to explain it. Nothing recoverable is lost — a file that does
+        /// not parse has no readable sibling entries to preserve. The Claude Desktop config is
+        /// deliberately NOT treated this way: it is a global file holding settings well outside
+        /// Hades' remit, so a parse failure there aborts the write instead.
+        /// </summary>
+        internal static string MergeHadesServer(string existingJson, string launcherArg)
+        {
+            JObject root = null;
+
+            if (!string.IsNullOrWhiteSpace(existingJson))
+            {
+                try
+                {
+                    root = JObject.Parse(existingJson);
+                }
+                catch (JsonException)
+                {
+                    Debug.LogWarning("[Hades] .mcp.json is not valid JSON — replacing it. Any "
+                        + "other MCP servers it declared will need re-adding.");
+                }
+            }
+
+            if (root == null) root = new JObject();
+
+            SetHadesServer(root, launcherArg);
+
+            return root.ToString(Formatting.Indented);
+        }
+
+        /// <summary>
+        /// Sets <c>mcpServers.hades</c> on <paramref name="root"/>, creating the container when it
+        /// is absent and replacing it when it is present but not an object (e.g. an explicit JSON
+        /// null, which reads back as a non-null JValue and would fail a blind cast).
+        /// </summary>
+        static void SetHadesServer(JObject root, string launcherArg)
+        {
+            var servers = root["mcpServers"] as JObject;
+            if (servers == null)
+            {
+                servers = new JObject();
+                root["mcpServers"] = servers;
+            }
+
+            servers["hades"] = new JObject
+            {
+                ["command"] = "node",
+                ["args"] = new JArray(launcherArg)
+            };
+        }
+
+        /// <summary>
+        /// The value written to .mcp.json `args[0]` for the launcher.
+        ///
+        /// Project-relative whenever the launcher lives inside the project — the default local hub
+        /// scope, i.e. .arcforge/hades-hub/launcher.js. Claude Code discovers .mcp.json in the
+        /// directory it was started from, and spawns the server with that same directory as cwd, so
+        /// a project-relative arg resolves to exactly the same file as the absolute one while
+        /// keeping the committed-adjacent file free of one developer's home directory. The launcher
+        /// itself already relies on that cwd (findProjectRoot walks up from process.cwd()), so this
+        /// adds no new assumption.
+        ///
+        /// Falls back to the absolute path when the launcher is outside the project, where no
+        /// relative form exists. HadesPaths.LauncherDir is now always project-local, so no supported
+        /// configuration reaches that branch — hub scope no longer moves the launcher copy. It is
+        /// kept as a total function rather than an assertion: the alternative is emitting a path
+        /// with a "../" escape into a file the whole team shares, and .mcp.json is committed.
+        ///
+        /// Forward slashes on every platform: Windows node accepts them, and it avoids escaping
+        /// backslashes in JSON.
+        /// </summary>
+        internal static string McpLauncherArg(string launcherPath, string projectRoot)
+        {
+            if (string.IsNullOrEmpty(launcherPath) || string.IsNullOrEmpty(projectRoot))
+                return ToForwardSlashes(launcherPath);
+
+            string relative;
+            try
+            {
+                relative = Path.GetRelativePath(projectRoot, launcherPath);
+            }
+            catch (ArgumentException)
+            {
+                return ToForwardSlashes(launcherPath);
+            }
+
+            if (Path.IsPathRooted(relative) || EscapesProject(relative))
+                return ToForwardSlashes(launcherPath);
+
+            return ToForwardSlashes(relative);
+        }
+
+        static bool EscapesProject(string relative)
+            => relative == ".."
+               || relative.StartsWith("../", StringComparison.Ordinal)
+               || relative.StartsWith("..\\", StringComparison.Ordinal);
+
+        static string ToForwardSlashes(string path) => path?.Replace("\\", "/");
 
         const string HadesMarkerStart = "<!-- HADES:START -->";
         const string HadesMarkerEnd = "<!-- HADES:END -->";
@@ -266,19 +386,23 @@ namespace ArcForge.Hades.Editor.Core
         }
 
         /// <summary>
-        /// Copies Hades skills to ~/.claude/skills/ so Claude Desktop can discover them.
-        /// Runs on every startup to keep skills in sync with the installed package version.
+        /// Installs Hades skills so a Claude client can discover them. Runs on every startup to
+        /// keep them in sync with the installed package version.
+        ///
+        /// Local scope targets &lt;projectRoot&gt;/.claude/skills/, which Claude Code reads —
+        /// nothing leaves the workspace. Global scope targets ~/.claude/skills/, which is the only
+        /// location Claude Desktop reads.
         /// </summary>
-        static void InstallSkillsForDesktop()
+        static void InstallSkills(HadesScope scope)
         {
             try
             {
-                var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                var skillsRoot = Path.Combine(userHome, ".claude", "skills");
-                var packageSkillsDir = FindPackageSkillsDir();
+                var skillsRoot = scope == HadesScope.Global
+                    ? Path.Combine(HadesPaths.HomeDir, ".claude", "skills")
+                    : Path.Combine(PathSandbox.ProjectRoot, ".claude", "skills");
 
-                if (packageSkillsDir == null || !Directory.Exists(packageSkillsDir))
-                    return;
+                var packageSkillsDir = FindPackageSkillsDir();
+                if (packageSkillsDir == null) return;
 
                 foreach (var skillDir in Directory.GetDirectories(packageSkillsDir))
                 {
@@ -290,30 +414,46 @@ namespace ArcForge.Hades.Editor.Core
                     if (!Directory.Exists(targetDir))
                         Directory.CreateDirectory(targetDir);
 
-                    var targetFile = Path.Combine(targetDir, "SKILL.md");
-                    File.Copy(skillFile, targetFile, true);
+                    File.Copy(skillFile, Path.Combine(targetDir, "SKILL.md"), true);
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[Hades] Failed to install skills for Desktop: {ex.Message}");
+                Debug.LogWarning($"[Hades] Failed to install skills: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// The installed package root, whatever the install channel — embedded (Packages/),
+        /// registry, git URL, or local disk all resolve through PackageInfo. Falls back to the
+        /// project root, which is correct when running Hades from a source checkout.
+        ///
+        /// Do NOT reintroduce a hardcoded "Packages/com.arcforge.hades" guess: a git-URL install
+        /// lands in Library/PackageCache/com.arcforge.hades@&lt;hash&gt; and the guess silently
+        /// misses, leaving the launcher uncopied and no .mcp.json written.
+        /// </summary>
+        static string PackageRoot()
+        {
+            try
+            {
+                var info = UnityEditor.PackageManager.PackageInfo
+                    .FindForAssembly(typeof(MCPClientConfig).Assembly);
+                if (info != null && !string.IsNullOrEmpty(info.resolvedPath)
+                    && Directory.Exists(info.resolvedPath))
+                    return info.resolvedPath;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Hades] Package path resolution failed: {ex.Message}");
+            }
+
+            return PathSandbox.ProjectRoot;
         }
 
         static string FindPackageSkillsDir()
         {
-            // Try the package location first (when installed via UPM)
-            var packageRoot = Path.GetFullPath(
-                Path.Combine(Application.dataPath, "..", "Packages", "com.arcforge.hades"));
-            var skillsDir = Path.Combine(packageRoot, "skills");
-            if (Directory.Exists(skillsDir)) return skillsDir;
-
-            // Fallback: dev repo root (when running from source)
-            var devRoot = PathSandbox.ProjectRoot;
-            skillsDir = Path.Combine(devRoot, "skills");
-            if (Directory.Exists(skillsDir)) return skillsDir;
-
-            return null;
+            var skillsDir = Path.Combine(PackageRoot(), "skills");
+            return Directory.Exists(skillsDir) ? skillsDir : null;
         }
 
         static void WriteHubPath(string packageLauncherDir, string hubDir)
@@ -324,6 +464,11 @@ namespace ArcForge.Hades.Editor.Core
                 var bridgeRoot = Path.GetDirectoryName(packageLauncherDir);
                 var hubEntry = Path.Combine(bridgeRoot, "hub", "dist", "index.js");
                 if (!File.Exists(hubEntry)) return;
+
+                // Not necessarily created by the launcher copy any more: under global hub scope this
+                // is $HOME/.arcforge/hades-hub while the launcher lands in the project.
+                if (!Directory.Exists(hubDir))
+                    Directory.CreateDirectory(hubDir);
 
                 var hubPathFile = Path.Combine(hubDir, "hub-path.json");
                 var json = $"{{\"hubEntry\":\"{hubEntry.Replace("\\", "/")}\"}}";
@@ -337,16 +482,30 @@ namespace ArcForge.Hades.Editor.Core
 
         static string FindPackageLauncherDir()
         {
-            var packageRoot = Path.GetFullPath(
-                Path.Combine(Application.dataPath, "..", "Packages", "com.arcforge.hades"));
-            var launcherDir = Path.Combine(packageRoot, "Bridge~", "launcher");
-            if (Directory.Exists(launcherDir)) return launcherDir;
+            var launcherDir = Path.Combine(PackageRoot(), "Bridge~", "launcher");
+            return Directory.Exists(launcherDir) ? launcherDir : null;
+        }
 
-            var devRoot = PathSandbox.ProjectRoot;
-            launcherDir = Path.Combine(devRoot, "Bridge~", "launcher");
-            if (Directory.Exists(launcherDir)) return launcherDir;
+        /// <summary>
+        /// Reads `args[0]` of the `hades` entry in Claude Desktop's config, or null if the config
+        /// file, the entry, or the arg doesn't exist. Used by LegacyHubNotice to detect a stale
+        /// absolute path left over from before the launcher moved out of the global hub directory.
+        /// </summary>
+        internal static string ReadDesktopHadesLauncherArg()
+        {
+            try
+            {
+                var configPath = GetDesktopConfigPath();
+                if (configPath == null || !File.Exists(configPath)) return null;
 
-            return null;
+                var root = JObject.Parse(File.ReadAllText(configPath));
+                var args = root["mcpServers"]?["hades"]?["args"] as JArray;
+                return args != null && args.Count > 0 ? args[0]?.ToString() : null;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         static string GetDesktopConfigPath()
@@ -377,16 +536,6 @@ namespace ArcForge.Hades.Editor.Core
         }
 
         static void AtomicWrite(string filePath, string content)
-        {
-            var dir = Path.GetDirectoryName(filePath);
-            if (!Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
-
-            var tmpPath = filePath + ".tmp";
-            File.WriteAllText(tmpPath, content);
-            if (File.Exists(filePath))
-                File.Delete(filePath);
-            File.Move(tmpPath, filePath);
-        }
+            => AtomicFile.Write(filePath, content);
     }
 }
