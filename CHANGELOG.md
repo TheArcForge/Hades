@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] — Project-Local Installation
 
+Contributed by [@paolooranges-voodoo](https://github.com/paolooranges-voodoo).
+
 A Unity project can now hold its entire Hades installation inside its own workspace, and does so by default. Previously the data plane was project-scoped but the control plane was not: the hub rendezvous directory was hardcoded under `$HOME`, skills were copied to `~/.claude/skills/`, and settings lived in Unity `EditorPrefs`, which is global per Unity install. Two projects on one machine therefore shared a hub process and a single set of preferences.
 
 ### Changed
