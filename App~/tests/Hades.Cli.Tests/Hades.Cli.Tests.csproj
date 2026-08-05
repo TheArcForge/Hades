@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The CLI under test, plus Hades.Server/Hades.Core to construct a real ControlListener the
+         same way Hades.Server.Tests/Control/*.cs does - these tests prove the CLI against a real
+         loopback listener, never a mocked HttpClient. -->
+    <ProjectReference Include="..\..\src\Hades.Cli\Hades.Cli.csproj" />
+    <ProjectReference Include="..\..\src\Hades.Server\Hades.Server.csproj" />
+  </ItemGroup>
+
+</Project>

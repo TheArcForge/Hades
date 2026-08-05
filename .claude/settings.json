@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__hades__find_references_to",
+      "mcp__hades__search_by_name",
+      "mcp__hades__query_graph",
+      "mcp__hades__hades_ping",
+      "mcp__hades__hades_status"
+    ]
+  }
+}

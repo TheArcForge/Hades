@@ -264,6 +264,18 @@ namespace ArcForge.Hades.Editor.MCP
 
             while (_workQueue.TryDequeue(out var item))
             {
+                // Narrow residual: an item dequeued just under its deadline can still start and
+                // outlast it; this guard only targets the backlog-drain case (the reported failure).
+                if (IsExpired(item.DeadlineUtc, DateTime.UtcNow))
+                {
+                    // The client already received a Timeout for this request; running it now would
+                    // apply a mutation the caller was told failed (and will retry) — a double-apply.
+                    item.Completion.TrySetResult(
+                        @"{""jsonrpc"":""2.0"",""id"":null,""error"":{""code"":-32000,""message"":""Timeout (skipped stale work)""}}");
+                    AppNapGuard.Release(); // balance the Acquire() from EnqueueAndWait
+                    continue;
+                }
+
                 try
                 {
                     var toolName = ExtractToolName(item.Json);
@@ -338,13 +350,17 @@ namespace ArcForge.Hades.Editor.MCP
             public string Json { get; }
             public string TraceId { get; }
             public TaskCompletionSource<string> Completion { get; }
+            public DateTime DeadlineUtc { get; }
 
             public WorkItem(string json, TaskCompletionSource<string> completion, string traceId = null)
             {
                 Json = json;
                 Completion = completion;
                 TraceId = traceId;
+                DeadlineUtc = DateTime.UtcNow.AddMilliseconds(HttpTransport.RequestTimeoutMs);
             }
         }
+
+        internal static bool IsExpired(DateTime deadlineUtc, DateTime nowUtc) => nowUtc > deadlineUtc;
     }
 }

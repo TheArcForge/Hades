@@ -10,6 +10,8 @@ namespace ArcForge.Hades.Editor.MCP
 {
     public class HttpTransport : IMCPTransport
     {
+        public const int RequestTimeoutMs = 30000;
+
         HttpListener _listener;
         CancellationTokenSource _cts;
         Func<string, Task<string>> _requestHandler;
@@ -147,7 +149,7 @@ namespace ArcForge.Hades.Editor.MCP
             else
                 responseTask = _requestHandler(json);
 
-            if (await Task.WhenAny(responseTask, Task.Delay(30000)) != responseTask)
+            if (await Task.WhenAny(responseTask, Task.Delay(RequestTimeoutMs)) != responseTask)
             {
                 WriteResponse(context.Response,
                     @"{""jsonrpc"":""2.0"",""id"":null,""error"":{""code"":-32000,""message"":""Timeout""}}");

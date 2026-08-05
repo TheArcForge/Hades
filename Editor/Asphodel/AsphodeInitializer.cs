@@ -18,6 +18,8 @@ namespace ArcForge.Hades.Editor.Asphodel
         public static MemoryManager Manager => _manager;
         public static MemoryValidator Validator => _validator;
         public static Inference.PatternInferenceEngine InferenceEngine { get; private set; }
+        public static Conventions.ConventionInferrer ConventionInferrer { get; private set; }
+        const double ConventionThrottleSeconds = 60.0;
 
         /// <summary>
         /// Lazy-init the validator if it wasn't created at startup (e.g. GraphDatabase wasn't ready).
@@ -54,6 +56,21 @@ namespace ArcForge.Hades.Editor.Asphodel
                 if (charonDb != null)
                 {
                     InferenceEngine = new Inference.PatternInferenceEngine(Manager, charonDb, inferenceConfig);
+                }
+
+                var conventionDb = GraphDatabase.Instance;
+                if (conventionDb != null)
+                {
+                    ConventionInferrer = new Conventions.ConventionInferrer(_manager, conventionDb,
+                        new System.Collections.Generic.List<Conventions.IConventionDetector>
+                        {
+                            new Conventions.EventChannelDetector(),
+                            new Conventions.AddressablesDetector(),
+                            new Conventions.PrefabVariantDetector(),
+                            new Conventions.ScriptableObjectConfigDetector(),
+                            new Conventions.NamingConventionDetector(),
+                            new Conventions.RenderPipelineDetector(),
+                        });
                 }
 
                 GraphBuilder.OnRebuildComplete -= OnGraphRebuild;
@@ -112,6 +129,14 @@ namespace ArcForge.Hades.Editor.Asphodel
                     UnityEditor.EditorUtility.DisplayProgressBar("Hades", "Validating memory…", 0.3f);
                     Validator?.ValidateAll();
 
+                    if (ShouldRunConventions())
+                    {
+                        UnityEditor.EditorUtility.DisplayProgressBar("Hades", "Reading conventions…", 0.5f);
+                        ConventionInferrer?.Run();
+                        UnityEditor.SessionState.SetString("Hades_LastConventionTicks",
+                            System.DateTime.UtcNow.Ticks.ToString());
+                    }
+
                     if (ShouldRunInference())
                     {
                         UnityEditor.EditorUtility.DisplayProgressBar("Hades", "Analyzing patterns…", 0.7f);
@@ -139,6 +164,17 @@ namespace ArcForge.Hades.Editor.Asphodel
             {
                 var elapsed = System.DateTime.UtcNow - new System.DateTime(ticks, System.DateTimeKind.Utc);
                 if (elapsed.TotalMinutes < InferenceThrottleMinutes) return false;
+            }
+            return true;
+        }
+
+        static bool ShouldRunConventions()
+        {
+            var last = UnityEditor.SessionState.GetString("Hades_LastConventionTicks", "");
+            if (long.TryParse(last, out var ticks))
+            {
+                var elapsed = System.DateTime.UtcNow - new System.DateTime(ticks, System.DateTimeKind.Utc);
+                if (elapsed.TotalSeconds < ConventionThrottleSeconds) return false;
             }
             return true;
         }

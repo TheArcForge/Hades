@@ -1,0 +1,280 @@
+{
+    "documents": [
+        {
+            "name": "conventions.md",
+            "sizeBytes": 191,
+            "sizeDisplay": "191 B",
+            "lastReviewed": "2026-05-12"
+        },
+        {
+            "name": "decisions.md",
+            "sizeBytes": 922,
+            "sizeDisplay": "922 B",
+            "lastReviewed": "2026-05-12"
+        },
+        {
+            "name": "glossary.md",
+            "sizeBytes": 177,
+            "sizeDisplay": "177 B",
+            "lastReviewed": "2026-05-12"
+        },
+        {
+            "name": "intent.md",
+            "sizeBytes": 181,
+            "sizeDisplay": "181 B",
+            "lastReviewed": "2026-05-12"
+        },
+        {
+            "name": "p13t1-fixture-conventions.md",
+            "sizeBytes": 184,
+            "sizeDisplay": "184 B",
+            "lastReviewed": "2026-08-05"
+        },
+        {
+            "name": "p13t1-no-frontmatter.md",
+            "sizeBytes": 70,
+            "sizeDisplay": "70 B"
+        },
+        {
+            "name": "patterns.md",
+            "sizeBytes": 216,
+            "sizeDisplay": "216 B",
+            "lastReviewed": "2026-05-12"
+        },
+        {
+            "name": "pitfalls.md",
+            "sizeBytes": 186,
+            "sizeDisplay": "186 B",
+            "lastReviewed": "2026-05-12"
+        }
+    ],
+    "proposals": [
+        {
+            "fileName": "topic_cluster-b798e65931d6785f.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nFrequent topic: memory, validate (appeared in 483 of 2245 traces)\n\nObserved in 483 traces with 22% confidence.\n"
+        },
+        {
+            "fileName": "topic_cluster-7b3f67f265c040f9.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nFrequent topic: guid (appeared in 363 of 2245 traces)\n\nObserved in 363 traces with 16% confidence.\n"
+        },
+        {
+            "fileName": "topic_cluster-58384f27a34797f4.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nFrequent topic: lifecycle (appeared in 72 of 280 traces)\n\nObserved in 72 traces with 26% confidence.\n"
+        },
+        {
+            "fileName": "topic_cluster-2ed0c39428fb959b.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nFrequent topic: memory (appeared in 178 of 1150 traces)\n\nObserved in 178 traces with 15% confidence.\n"
+        },
+        {
+            "fileName": "topic_cluster-1ea2b51594a6f56b.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nFrequent topic: ping (appeared in 699 of 1150 traces)\n\nObserved in 699 traces with 61% confidence.\n"
+        },
+        {
+            "fileName": "topic_cluster-1576d46795b60b40.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nFrequent topic: pitfalls (appeared in 50 of 280 traces)\n\nObserved in 50 traces with 18% confidence.\n"
+        },
+        {
+            "fileName": "time_of_day-9550f14bb49a07dd.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nPrimary work window: 11:00-13:00 (87% of traces)\n\nObserved in 1150 traces with 87% confidence.\n"
+        },
+        {
+            "fileName": "time_of_day-5605acc58f4e6c9d.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nPrimary work window: 13:00-15:00 (35% of traces)\n\nObserved in 280 traces with 35% confidence.\n"
+        },
+        {
+            "fileName": "time_of_day-15caf2baef4956b4.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nPrimary work window: 07:00-09:00 (17% of traces)\n\nObserved in 2245 traces with 17% confidence.\n"
+        },
+        {
+            "fileName": "time_of_day-146eaf60740b7498.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nPrimary work window: 10:00-13:00 (62% of traces)\n\nObserved in 1435 traces with 62% confidence.\n"
+        },
+        {
+            "fileName": "failure_correlation-ec254fd006154a0b.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nFailures correlate with analyzer.time_of_day.count=1 (45.7x higher error rate than baseline, 8 of 15 errors)\n\nObserved in 15 traces with 53% confidence.\n"
+        },
+        {
+            "fileName": "failure_correlation-db4dce6d49ffcfa0.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nFailures correlate with analyzer.acceptance_rate.count=0 (53.3x higher error rate than baseline, 8 of 15 errors)\n\nObserved in 15 traces with 53% confidence.\n"
+        },
+        {
+            "fileName": "failure_correlation-bfb93696fa497fd0.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nFailures correlate with tool.name=query_graph (20.3x higher error rate than baseline, 5 of 15 errors)\n\nObserved in 15 traces with 33% confidence.\n"
+        },
+        {
+            "fileName": "failure_correlation-bce91e1d24cffa52.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nFailures correlate with analyzer.topic_cluster.count=2 (53.3x higher error rate than baseline, 8 of 15 errors)\n\nObserved in 15 traces with 53% confidence.\n"
+        },
+        {
+            "fileName": "failure_correlation-588b807f87cc6751.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nFailures correlate with analyzer.failure_correlation.count=1 (20.0x higher error rate than baseline, 3 of 15 errors)\n\nObserved in 15 traces with 20% confidence.\n"
+        },
+        {
+            "fileName": "failure_correlation-5538df62c6b1d0d2.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nFailures correlate with analyzer.failure_correlation.count=5 (20.0x higher error rate than baseline, 3 of 15 errors)\n\nObserved in 15 traces with 20% confidence.\n"
+        },
+        {
+            "fileName": "convention-render_pipeline.md",
+            "targetFile": "conventions",
+            "createdAtUtc": "2026-07-09T09:19:21.17006+00:00",
+            "createdAgo": "27d ago",
+            "rationale": "RenderPipelineAsset pipeline_type = UniversalRenderPipelineAsset. (confidence 95 %)",
+            "status": "pending",
+            "content": "Targets URP (Universal Render Pipeline).\n\n_Evidence: RenderPipelineAsset pipeline_type = UniversalRenderPipelineAsset._\n<!-- hades-convention:render_pipeline -->"
+        },
+        {
+            "fileName": "convention-prefab_variants.md",
+            "targetFile": "patterns",
+            "createdAtUtc": "2026-07-09T09:19:21.165149+00:00",
+            "createdAgo": "27d ago",
+            "rationale": "4 of 9 prefabs are variants (44 %). (confidence 100 %)",
+            "status": "pending",
+            "content": "Relies on prefab variants for shared-base composition.\n\n_Evidence: 4 of 9 prefabs are variants (44 %)._\n<!-- hades-convention:prefab_variants -->"
+        },
+        {
+            "fileName": "convention-naming.md",
+            "targetFile": "conventions",
+            "createdAtUtc": "2026-08-03T16:41:57.128904+00:00",
+            "createdAgo": "2d ago",
+            "rationale": "1 suffix bucket(s) at or above 5 project types. (confidence 85 %)",
+            "status": "pending",
+            "content": "Naming conventions: common type suffixes 'Commands' (10).\n\n_Evidence: 1 suffix bucket(s) at or above 5 project types._\n<!-- hades-convention:naming -->"
+        },
+        {
+            "fileName": "acceptance_rate-e02cb5f707db1aa5.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nRecurring use of project_run_tests with tool.input={\"filter\":\"OwnerGuidModelTests\",\"test_mode\":\"EditMode\"}\n\nObserved in 20 traces with 95% confidence.\n"
+        },
+        {
+            "fileName": "acceptance_rate-d7296738010ba754.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nRecurring use of hades_status with tool.input={}\n\nObserved in 29 traces with 86% confidence.\n"
+        },
+        {
+            "fileName": "acceptance_rate-9f76b5fe4cd09470.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nRecurring use of project_recompile_scripts with tool.input={}\n\nObserved in 16 traces with 94% confidence.\n"
+        },
+        {
+            "fileName": "acceptance_rate-8966911d4faf7fcd.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nRecurring use of trace_dependencies with tool.input={\"asset_path\":\"Assets/Scripts/DamageSystem.cs\",\"max_depth\":2}\n\nObserved in 10 traces with 60% confidence.\n"
+        },
+        {
+            "fileName": "acceptance_rate-707620088166ae2e.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nRecurring use of get_project_summary with tool.input={}\n\nObserved in 12 traces with 83% confidence.\n"
+        },
+        {
+            "fileName": "acceptance_rate-6ac8287b3a1f303b.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nRecurring use of search_by_name with tool.input={\"name_pattern\":\"%Manager%\",\"type_filter\":\"ScriptType\"}\n\nObserved in 11 traces with 64% confidence.\n"
+        },
+        {
+            "fileName": "acceptance_rate-61372908dde11bb8.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nRecurring use of prefab_instantiate with tool.input={\"prefab_path\":\"Assets/Prefabs/NestTest/Inner.prefab\",\"parent\":\"Outer\"}\n\nObserved in 10 traces with 60% confidence.\n"
+        },
+        {
+            "fileName": "acceptance_rate-58ce050900fe0e57.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\nRecurring use of hades_ping with tool.input={}\n\nObserved in 699 traces with 100% confidence.\n"
+        },
+        {
+            "fileName": "20260805-084055-p13t1-fixture-conventions.md",
+            "targetFile": "p13t1-fixture-conventions.md",
+            "createdAtUtc": "2026-08-05T08:40:55.468879+00:00",
+            "createdAgo": "4m ago",
+            "rationale": "Live fixture capture for HadesControl decode tests.",
+            "status": "accepted",
+            "content": "# Fixture convention\n\nCreated during Plan 13 Task 1 fixture capture."
+        },
+        {
+            "fileName": "20260805-084055-p13t1-fixture-conventions-3.md",
+            "targetFile": "p13t1-fixture-conventions.md",
+            "createdAtUtc": "2026-08-05T08:40:55.543562+00:00",
+            "createdAgo": "4m ago",
+            "rationale": "Live fixture capture.",
+            "status": "deferred",
+            "content": "Third proposal, will be deferred."
+        },
+        {
+            "fileName": "-render_pipeline.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\n\n\nObserved in 0 traces with 95% confidence.\n"
+        },
+        {
+            "fileName": "-prefab_variants.md",
+            "targetFile": "",
+            "rationale": "",
+            "status": "inferred",
+            "content": "\nINFERRED PATTERN (not confirmed by team)\n\n\n\nObserved in 0 traces with 100% confidence.\n"
+        }
+    ]
+}

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Hades.Contract is compiled twice: once here into the .NET 10 app, and once more
+    inside a Unity Editor plugin (Unity 6000.3, which caps out at C# 9). LangVersion is
+    pinned so a feature that would silently fail to compile in Unity fails loudly here
+    instead - see the file-level comment in Wire/MiniJson.cs for the full rationale.
+
+    ImplicitUsings is off because C# 10's "global using" directives (which is what
+    ImplicitUsings generates) are not available at LangVersion 9.
+  -->
+  <PropertyGroup>
+    <LangVersion>9.0</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>

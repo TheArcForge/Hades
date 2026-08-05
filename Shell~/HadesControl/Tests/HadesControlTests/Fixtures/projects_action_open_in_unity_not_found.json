@@ -1,0 +1,4 @@
+{
+    "success": false,
+    "message": "Unity 0000.0.0f1-p13t1-fixture-version-not-installed was not found at the default Unity Hub install location (/Applications/Unity/Hub/Editor/0000.0.0f1-p13t1-fixture-version-not-installed/Unity.app/Contents/MacOS/Unity). Open this project from Unity Hub instead."
+}

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Hades.Cli</RootNamespace>
+    <AssemblyName>hades</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- AppPaths only - see Discovery.cs's own doc comment for why this project stops there and
+         does not also reference Hades.Server for its wire-shaped record types. -->
+    <ProjectReference Include="..\Hades.Core\Hades.Core.csproj" />
+  </ItemGroup>
+
+</Project>

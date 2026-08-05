@@ -82,7 +82,7 @@ var PROJECT_PATH = resolveProjectPath(process.cwd());
 var HUB_STARTUP_TIMEOUT_MS = 15e3;
 var PROTOCOL_VERSION = "2024-11-05";
 var SERVER_NAME = "hades";
-var SERVER_VERSION = "1.1.0";
+var SERVER_VERSION = "1.2.0";
 function readHubJson() {
   try {
     if (!fs3.existsSync(HUB_JSON_PATH)) return null;

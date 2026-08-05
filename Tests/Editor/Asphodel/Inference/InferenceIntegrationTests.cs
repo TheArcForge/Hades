@@ -78,8 +78,11 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel.Inference
                 };
                 var engine = new PatternInferenceEngine(_memManager, charonDb, config);
 
-                // Seed 20 traces with high acceptance pattern
-                var baseTime = new DateTimeOffset(2026, 4, 1, 9, 0, 0, TimeSpan.Zero);
+                // Seed 20 traces with high acceptance pattern. Anchor to "now" (not a fixed
+                // calendar date) so the traces always fall inside the engine's MaxTraceLookbackDays
+                // (90d) window regardless of when the suite runs — a fixed 2026-04-01 date aged out
+                // of the window on 2026-06-30 and silently failed inference from then on.
+                var baseTime = DateTimeOffset.UtcNow.AddDays(-1);
                 for (int i = 0; i < 20; i++)
                 {
                     var t = baseTime.AddMinutes(i * 15);

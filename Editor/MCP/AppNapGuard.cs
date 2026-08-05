@@ -56,6 +56,9 @@ namespace ArcForge.Hades.Editor.MCP
             }
         }
 
+        // Test-only visibility into the refcount. Guarded by the same lock for a consistent read.
+        internal static int ActiveCount { get { lock (_lock) { return _count; } } }
+
         static void Begin()
         {
 #if UNITY_EDITOR_OSX

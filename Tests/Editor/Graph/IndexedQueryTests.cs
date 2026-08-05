@@ -123,5 +123,29 @@ namespace ArcForge.Hades.Editor.Tests.Graph
                 foreach (var e in new[] { "", "-wal", "-shm" }) if (File.Exists(dbPath + e)) File.Delete(dbPath + e);
             }
         }
+
+        [Test]
+        public void FindNodesByTypeAndTier_ScopesToTier()
+        {
+            var dbPath = Path.Combine(Path.GetTempPath(), $"hades_tier_{System.Guid.NewGuid()}.db");
+            var saved = GraphDatabase.Instance;
+            var db = new GraphDatabase(dbPath);
+            try
+            {
+                db.InsertNode(new NodeRecord("ScriptType", "p1") { Name = "PlayerManager" });          // tier "project" (default)
+                db.InsertNode(new NodeRecord("ScriptType", "b1") { Name = "MonoBehaviour" }, "builtin"); // tier "builtin"
+
+                var project = db.FindNodesByTypeAndTier("ScriptType", "project");
+                Assert.AreEqual(1, project.Count);
+                Assert.AreEqual("PlayerManager", project[0].Name);
+                Assert.AreEqual(1, db.FindNodesByTypeAndTier("ScriptType", "builtin").Count);
+            }
+            finally
+            {
+                db.Dispose();
+                GraphDatabase.RestoreInstanceForTests(saved);
+                foreach (var e in new[] { "", "-wal", "-shm" }) if (File.Exists(dbPath + e)) File.Delete(dbPath + e);
+            }
+        }
     }
 }

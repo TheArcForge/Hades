@@ -1552,6 +1552,31 @@ The promotion is never automatic. This is intentional. Inference is suggestion, 
 
 The pattern-detection logic is open-source and inspectable. Users who don't trust the inferences can disable Tier 2 entirely; Hades remains useful with Tier 1 only.
 
+#### 4.6.3 Graph-grounded convention inference (v1.2)
+
+The pattern detection above reads **Charon traces** — it needs behavior to accumulate across sessions before it can say anything, and its acceptance-rate signal depends on outcome capture that is still thin. v1.2 adds a **second, independent Tier 2 producer** that sidesteps that entirely: `ConventionInferrer` (`Editor/Asphodel/Conventions/`) reads the **knowledge graph's structure** rather than traces. The graph already knows a project uses ScriptableObject event channels, Addressables, prefab variants, a naming pattern, or URP — so those conventions can be read straight off it, deterministically, from a single scan.
+
+It is a sibling to `PatternInferenceEngine`: constructed in `AsphodeInitializer.Initialize()` alongside it, and invoked from the same `OnGraphRebuild` handler — but on its **own 60-second throttle** (`Hades_LastConventionTicks`), separate from the 30-minute trace-inference throttle, because a cheap read-only graph pass should keep conventions current without waiting half an hour.
+
+**Six deterministic detectors** (`IConventionDetector`), each a graph query plus a prevalence→confidence heuristic returning `{Fired, Statement, Evidence, Confidence, TargetFile}`:
+
+| Key | Signal | Tier-1 target |
+|---|---|---|
+| `event_channels` | `ScriptableObject`s whose `so_type` ends in `Channel`/`Event`, referenced by components via `references` edges (≥2 types, ≥3 referenced) | `patterns` |
+| `asset_loading` | `AddressableGroup`/`AddressableEntry` node volume (≥10 entries) | `conventions` |
+| `prefab_variants` | `PrefabVariant`:`Prefab` node ratio (>20%, ≥5 total) | `patterns` |
+| `so_config` | `ScriptableObject` instances grouped by `so_type`, channels excluded (≥10 across ≥3 types) | `patterns` |
+| `naming` | trailing-CamelCase-token buckets over **project-tier** `ScriptType` names (any suffix on ≥5 types) | `conventions` |
+| `render_pipeline` | a `RenderPipelineAsset`'s `pipeline_type` (URP/HDRP); absent → built-in RP, does not fire | `conventions` |
+
+**Self-validation — the defining property.** Each run reconciles `inferred/convention-{key}.md`: written when a detector fires, **deleted when it does not**. A convention is therefore re-derived from the current graph on every rebuild and cannot go stale — switch a project off SO channels and the entry retracts itself on the next scan. This is the one guarantee the trace-based analyzers cannot make.
+
+**Reuses the promotion lifecycle (§4.6.2), with one difference.** Each fired convention becomes a promotion proposal through the same `.arcforge/memory/proposals/` queue the dashboard and `/hades:show-proposals` already read (via `MemoryManager.CreateProposal`, with a stable id `convention-{key}` so repeated rebuilds don't flood the queue). Unlike trace patterns, conventions do **not** wait on a 90%/50-sample threshold — a structural convention is evident from a single scan, so it is proposed immediately. Accept still writes to Tier 1 (`patterns.md`/`conventions.md`) carrying a stable `<!-- hades-convention:{key} -->` marker; promotion is never automatic.
+
+**Dismissal memory.** Because a dashboard *reject* simply deletes the proposal file, "Dismiss → stop proposing" needs state the proposal store can't hold. A small C#-owned ledger `inferred/.conventions-state.json` (dot-prefixed, so the dashboard's `*.md` listing ignores it) records each key's lifecycle: a previously-pending proposal whose file is gone resolves to **promoted** (its marker is now in a Tier-1 file) or **dismissed** (marker absent). A dismissed convention is not re-proposed unless its confidence later rises by ≥0.2. And a **promoted convention that stops firing** emits a one-time `convention-stale-{key}` removal proposal — closing the self-validation loop even for confirmed entries.
+
+**Known limitation — `Resources.Load` is invisible to the graph.** The scanners capture Addressables as nodes but do not capture runtime string-based `Resources.Load("path")` calls at all (no node, no edge). The `asset_loading` detector therefore reports **Addressables adoption only**; it cannot contrast Addressables-vs-Resources. Capturing Resources usage would require new scanning and is out of scope for v1.2.
+
 ### 4.7 Privacy and data handling
 
 Memory in Tier 1 is git-tracked and shared with the team. The developer has full control over what goes in (directly via text editing or via approving proposals).

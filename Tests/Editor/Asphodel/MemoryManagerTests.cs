@@ -128,5 +128,34 @@ namespace ArcForge.Hades.Editor.Tests.Asphodel
             var proposals = _manager.ListProposals();
             Assert.AreEqual(1, proposals.Count);
         }
+
+        [Test]
+        public void CreateProposal_RejectsTraversalTargetFile()
+        {
+            Assert.Throws<System.ArgumentException>(() => _manager.CreateProposal("../../evil", "body", "why"));
+            Assert.Throws<System.ArgumentException>(() => _manager.CreateProposal("sub/dir", "body", "why"));
+            Assert.Throws<System.ArgumentException>(() => _manager.CreateProposal("", "body", "why"));
+        }
+
+        [Test]
+        public void CreateProposal_AcceptsPlainName()
+        {
+            Assert.DoesNotThrow(() => _manager.CreateProposal("patterns", "body", "why"));
+        }
+
+        [Test]
+        public void AcceptProposal_RefusesTraversalTargetFileInFrontmatter()
+        {
+            // Hand-write a poisoned proposal (bypassing CreateProposal's guard) to prove accept re-validates.
+            _manager.EnsureProposalsDirectory();
+            var dir = System.IO.Path.Combine(_manager.MemoryDir, "proposals");
+            var id = "poison";
+            System.IO.File.WriteAllText(System.IO.Path.Combine(dir, id + ".md"),
+                "---\ntarget_file: ../../escape\ncreated_at: 2026-01-01T00:00:00Z\nrationale: x\nstatus: pending\n---\nBODY");
+            Assert.IsFalse(_manager.AcceptProposal(id));
+            Assert.IsFalse(System.IO.File.Exists(System.IO.Path.Combine(
+                System.IO.Path.GetDirectoryName(_manager.MemoryDir), "escape.md")),
+                "accept must not write outside the memory dir");
+        }
     }
 }

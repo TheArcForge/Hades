@@ -94,10 +94,11 @@ namespace ArcForge.Hades.Editor.Asphodel
                 Directory.CreateDirectory(dir);
         }
 
-        public string CreateProposal(string targetFile, string content, string rationale)
+        public string CreateProposal(string targetFile, string content, string rationale, string id = null)
         {
+            ValidateMemoryName(targetFile);
             EnsureProposalsDirectory();
-            var id = $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{targetFile}";
+            id = id ?? $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{targetFile}";
             var proposalPath = Path.Combine(_memoryDir, "proposals", id + ".md");
 
             var proposalContent = $"---\ntarget_file: {targetFile}\ncreated_at: {DateTime.UtcNow:o}\nrationale: {rationale}\nstatus: pending\n---\n{content}";
@@ -131,6 +132,8 @@ namespace ArcForge.Hades.Editor.Asphodel
             string targetFile;
             if (!proposal.Frontmatter.TryGetValue("target_file", out targetFile))
                 return false;
+            try { ValidateMemoryName(targetFile); }
+            catch (ArgumentException) { return false; }
 
             var existing = ReadFile(targetFile);
             if (existing == null)
@@ -172,6 +175,17 @@ namespace ArcForge.Hades.Editor.Asphodel
         static string DefaultTemplate(string title, string description)
         {
             return $"---\nlast_reviewed: {DateTime.UtcNow:yyyy-MM-dd}\nvalidation_status: ok\n---\n# {title}\n\n{description}\n";
+        }
+
+        // A memory file name must be a bare basename (no separators, no traversal, no rooting) that
+        // resolves to a direct child of the memory dir. Valid Tier-1 targets are names like "patterns".
+        static string ValidateMemoryName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                throw new ArgumentException("Memory file name must be non-empty.", nameof(name));
+            if (name != Path.GetFileName(name) || name.Contains("..") || Path.IsPathRooted(name))
+                throw new ArgumentException($"Invalid memory file name: '{name}'", nameof(name));
+            return name;
         }
     }
 }

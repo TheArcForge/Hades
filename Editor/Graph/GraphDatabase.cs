@@ -476,6 +476,21 @@ namespace ArcForge.Hades.Editor.Graph
             return results;
         }
 
+        public List<NodeRecord> FindNodesByTypeAndTier(string type, string tier)
+        {
+            var results = new List<NodeRecord>();
+            using (var stmt = new SQLitePreparedStatement(_connection,
+                "SELECT * FROM nodes WHERE type = ? AND tier = ?;"))
+            {
+                stmt.Bind(1, type);
+                stmt.Bind(2, tier);
+                while (stmt.Step() == SQLite3.Result.Row)
+                    results.Add(ReadNodeFromStatement(stmt));
+            }
+
+            return results;
+        }
+
         public List<EdgeInfo> FindEdgesFrom(long sourceId, string type = null)
         {
             var results = new List<EdgeInfo>();

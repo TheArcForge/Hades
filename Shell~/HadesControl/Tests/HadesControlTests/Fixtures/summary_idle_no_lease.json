@@ -1,0 +1,11 @@
+{
+    "iconState": "idle",
+    "headline": "No Unity Editor attached",
+    "rows": [
+        {
+            "project": "Hades-Unity-Client",
+            "status": "No Editor attached \u00b7 indexed 32s ago",
+            "severity": "ok"
+        }
+    ]
+}

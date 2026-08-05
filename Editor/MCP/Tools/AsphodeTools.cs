@@ -221,6 +221,9 @@ namespace ArcForge.Hades.Editor.MCP.Tools
                 var manager = GetManager();
                 if (manager == null) return MCPToolResult.Error("Memory not initialized");
 
+                if (file != System.IO.Path.GetFileName(file) || file.Contains("..") || System.IO.Path.IsPathRooted(file))
+                    return MCPToolResult.Error($"Invalid memory file name: '{file}'. Use a bare name like 'patterns'.");
+
                 var id = manager.CreateProposal(file, content, rationale);
 
                 span.SetAttribute("proposal_id", id);

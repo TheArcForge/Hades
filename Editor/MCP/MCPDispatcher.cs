@@ -161,7 +161,7 @@ namespace ArcForge.Hades.Editor.MCP
                     ["name"] = "hades",
                     // Resolve from the package manifest so it never goes stale (mirrors HadesStatus).
                     ["version"] = UnityEditor.PackageManager.PackageInfo
-                        .FindForAssembly(typeof(MCPDispatcher).Assembly)?.version ?? "1.1.0"
+                        .FindForAssembly(typeof(MCPDispatcher).Assembly)?.version ?? "1.2.0"
                 },
                 ["instructions"] = McpInstructions
             };

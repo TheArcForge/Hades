@@ -1,0 +1,18 @@
+{
+    "iconState": "leaseHeld",
+    "headline": "Holding script reload for Hades-Unity-Client \u2014 42s",
+    "rows": [
+        {
+            "project": "Hades-Unity-Client",
+            "status": "Editor attached \u00b7 indexed 5m ago",
+            "severity": "ok"
+        }
+    ],
+    "lease": {
+        "project": "Hades-Unity-Client",
+        "leaseId": "15c012f27331e49229cef25e74537816",
+        "heldForSeconds": 42,
+        "expiresInSeconds": 18,
+        "releasable": true
+    }
+}

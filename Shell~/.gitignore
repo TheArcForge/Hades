@@ -1,0 +1,16 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+
+# Xcode / HadesApp build output. HadesApp ended up as a bare SwiftPM package (like HadesControl
+# and HadesSupervision) rather than a checked-in .xcodeproj - xcodebuild builds it non-interactively
+# with no project file at all (verified: Xcode 26.6 auto-generates a scheme for a SwiftPM manifest -
+# see the Plan 12 Task 3 report). DerivedData/ is HadesApp/scripts/build-app.sh's own output
+# directory (xcodebuild's -derivedDataPath, and the assembled HadesApp.app lives under it too) -
+# entirely generated, never checked in.
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
+.DS_Store

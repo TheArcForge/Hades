@@ -1,0 +1,22 @@
+{
+    "projects": [
+        {
+            "name": "Hades-Unity-Client",
+            "path": "/Users/mike/Projects/Hades-Unity-Client",
+            "productGuid": "15c012f27331e49229cef25e74537816",
+            "unityVersion": "6000.3.2f1",
+            "indexState": "indexed",
+            "indexStatus": "indexed 4m ago",
+            "nodeCount": 494,
+            "edgeCount": 332,
+            "editor": {
+                "state": "attached",
+                "status": "Editor attached",
+                "unityVersion": "6000.3.2f1",
+                "processId": 54321,
+                "connectionAgeSeconds": 180
+            },
+            "warnings": []
+        }
+    ]
+}

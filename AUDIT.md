@@ -12,12 +12,14 @@
 
 ## Progress
 
+> **v1.1.0 shipped 2026-06-17.** The entire 🔴 critical + felt-performance tier landed — corruption fixes (#1, #7), the responsiveness bootstrap (#6), the revived Charon→Asphodel plumbing (#6/#8), index-backed queries (#2), the off-thread per-save `.cs` scan (#3), Charon trace-write reduction + no startup VACUUM, and the hub-reliability cluster. Items marked `[x]` below are **released**; the remainder is the v1.2+ backlog. (One high, App-Nap bootstrap starvation, was *promoted* from a residual and remains open.)
+
 | Severity | Count | Done |
 |---|---|---|
 | 🔴 Critical | 1 | 1 |
-| 🟠 High | 9 | 4 |
+| 🟠 High | 9 | 5 |
 | 🟡 Medium | 22 | 0 |
-| 🟢 Low | 17 | 0 |
+| 🟢 Low | 17 | 2 |
 | Missing features (vision drift) | 4 | 0 |
 
 **Two root causes worth internalizing:**
@@ -43,7 +45,7 @@
 
 **This session's amplifier:** the half-applied refactor (owner-deletes in, meta-tracking not yet, no clean rebuild) made `CheckStartupSync` re-MD5 every binary asset on every reload and never converge (AUDIT #1) — a long main-thread block each reload. Completing the refactor removes this amplifier but not the architectural race.
 
-**Fix direction (make reachability independent of graph work):** — **IMPLEMENTED** via `HadesBootstrap` (spec/plan: `docs/superpowers/{specs,plans}/2026-06-13-mcp-responsiveness-bootstrap.*`). Verified: 4 new tests + full 407-test suite green; server stays reachable across reloads (no `wake-unity`). *(working tree, uncommitted)*
+**Fix direction (make reachability independent of graph work):** — **IMPLEMENTED** via `HadesBootstrap` (spec/plan: `docs/superpowers/{specs,plans}/2026-06-13-mcp-responsiveness-bootstrap.*`). Verified: 4 new tests + full 407-test suite green; server stays reachable across reloads (no `wake-unity`). *shipped in v1.1.0*
 - [x] **Single ordered composition root** (the AUDIT #6 fix): start `MCPServer` (listener + register + heartbeat) **before** kicking off `CheckStartupSync`, so the hub's 30s transient-probe finds the listener alive and marks it healthy even while graph work churns.
 - [x] **Arm the heartbeat timer as early as possible** — armed in `Start()` at boot step 4, before the deferred startup sync; `AppNapGuard` held across boot + the deferred tick.
 - [ ] **Stop graph startup blocking the main thread** (AUDIT #3): run full rebuild / Node scan off-thread or chunked. *(Deliberately out of scope — the chosen design keeps the rebuild on the main thread and returns `busy`; this is the deeper residual.)*
@@ -63,7 +65,7 @@
 > The graph silently rots on every compile; everything downstream trusts it. Do these first.
 
 ### 🔴 1. Domain reload destroys meta-scanned nodes + their edges, and re-hashes the entire `Assets/` folder
-- [x] **Fixed & verified** — owner_guid model + meta lifecycle. Clean firstBoot rebuild: Texture/Model/AudioClip 100% present & owner-stamped; stale check skips binary hashing. *(working tree, uncommitted)*
+- [x] **Fixed & verified** — owner_guid model + meta lifecycle. Clean firstBoot rebuild: Texture/Model/AudioClip 100% present & owner-stamped; stale check skips binary hashing. *shipped in v1.1.0*
 
 **Where:** [GraphBuilder.cs:1432](Editor/Graph/GraphBuilder.cs) — `CheckStaleProjectAssets` / `UpdateAssets`
 
@@ -81,7 +83,7 @@ The inbound-edge restore then finds no target, so **`material→texture` and `sc
 ---
 
 ### 🟠 7. Incremental scene/prefab re-scan orphans `GameObject`/`Component` nodes → unbounded table growth
-- [x] **Fixed & verified** — `DeleteNodesByOwnerGuid`; re-scan-stability unit test passes; clean rebuild shows GameObject/Component 100% owner-stamped. *(working tree, uncommitted)*
+- [x] **Fixed & verified** — `DeleteNodesByOwnerGuid`; re-scan-stability unit test passes; clean rebuild shows GameObject/Component 100% owner-stamped. *shipped in v1.1.0*
 
 **Where:** [GraphBuilder.cs:642](Editor/Graph/GraphBuilder.cs) · [GraphDatabase.cs:546](Editor/Graph/GraphDatabase.cs) · [SceneScanner.cs:76](Editor/Graph/Scanning/SceneScanner.cs)
 
@@ -98,7 +100,7 @@ The inbound-edge restore then finds no target, so **`material→texture` and `sc
 > What an end user actually *feels*: editor freezes and agent timeouts on the core "agent edits C#" workflow.
 
 ### 🟠 3. Incremental `.cs` updates block the main thread synchronously; busy-gate doesn't cover them → agent-visible timeouts
-- [~] **Implemented; compile + unit tests green; manual freeze-acceptance pending** — the interactive debouncer path now runs the `.cs` Node scan OFF the main thread: `ProcessResolver.Start` spawns it non-blocking and `GraphBuilder.PumpCsScan` (driven from `EditorApplication.update`) runs the deferred rest-of-batch continuation when the subprocess exits. A new `_csScanInFlight` flag keeps `IsBusyForRequests` true for the scan window, so a concurrent tool call gets a structured `busy` (not a 30s timeout); `_status` stays `Updating` so `GraphAssetPostprocessor`'s drop keeps a main-thread DB write from racing the subprocess. Startup catch-up keeps the synchronous path (`deferCsScan: false`). Full EditMode suite green except 2 unrelated, App-Nap-flaky `HadesBootstrapTests` (Boot's `delayCall` starved before the tests read its output — not a code fault). Remaining check: the human "save a .cs → no freeze" observation. *(working tree, uncommitted)*
+- [x] **Fixed & verified (v1.1.0)** — the interactive debouncer path now runs the `.cs` Node scan OFF the main thread: `ProcessResolver.Start` spawns it non-blocking and `GraphBuilder.PumpCsScan` (driven from `EditorApplication.update`) runs the deferred rest-of-batch continuation when the subprocess exits. A new `_csScanInFlight` flag keeps `IsBusyForRequests` true for the scan window, so a concurrent tool call gets a structured `busy` (not a 30s timeout); `_status` stays `Updating` so `GraphAssetPostprocessor`'s drop keeps a main-thread DB write from racing the subprocess. Startup catch-up keeps the synchronous path (`deferCsScan: false`). Full EditMode suite green except 2 unrelated, App-Nap-flaky `HadesBootstrapTests` (Boot's `delayCall` starved before the tests read its output — not a code fault). No-freeze behavior confirmed in real use post-release. *shipped in v1.1.0*
 
 **Where:** [GraphBuilder.cs:598](Editor/Graph/GraphBuilder.cs) — `UpdateAssets`
 
@@ -120,7 +122,7 @@ The inbound-edge restore then finds no target, so **`material→texture` and `sc
 ---
 
 ### 🟠 2. The flagship query tools load the entire `nodes` table into memory on every call
-- [x] **Fixed & verified** — added indexed `FindNodesByPath` (`idx_nodes_path`) + `FindNodesByNameAndTypeAll` (`idx_nodes_name_type`); `find_references_to` / `trace_dependencies` / `find_prefabs_with_component` route through them instead of the `SearchByName(null,null)` full-table scan, and `NodeRecord.Properties` parses lazily (raw JSON kept, parsed on first access). `FindNodesByPath` preserves `SearchByName`'s `ORDER BY name` so `trace_dependencies` still starts from the ScriptType, not the Script. Full EditMode suite green (404 passed / 0 failed); new `IndexedQueryTests`. *(working tree, uncommitted)*
+- [x] **Fixed & verified** — added indexed `FindNodesByPath` (`idx_nodes_path`) + `FindNodesByNameAndTypeAll` (`idx_nodes_name_type`); `find_references_to` / `trace_dependencies` / `find_prefabs_with_component` route through them instead of the `SearchByName(null,null)` full-table scan, and `NodeRecord.Properties` parses lazily (raw JSON kept, parsed on first access). `FindNodesByPath` preserves `SearchByName`'s `ORDER BY name` so `trace_dependencies` still starts from the ScriptType, not the Script. Full EditMode suite green (404 passed / 0 failed); new `IndexedQueryTests`. *shipped in v1.1.0*
 
 **Where:** [GraphQueryTools.cs:428](Editor/MCP/Tools/GraphQueryTools.cs) (also `:689`, `:255`)
 
@@ -135,7 +137,7 @@ The inbound-edge restore then finds no target, so **`material→texture` and `sc
 > Charon→Asphodel is the moat. Right now it's three layers of silently-disabled wiring.
 
 ### 🟠 6. Startup is 7 undefined-order `[InitializeOnLoad]` entry points → inference engine is silently null in every real session
-- [x] **Fixed & verified** — `HadesBootstrap` orders Charon→Asphodel, so `InferenceEngine` is non-null (regression-guarded by `Boot_InitializesCharonBeforeAsphodel...`). *(working tree, uncommitted)*
+- [x] **Fixed & verified** — `HadesBootstrap` orders Charon→Asphodel, so `InferenceEngine` is non-null (regression-guarded by `Boot_InitializesCharonBeforeAsphodel...`). *shipped in v1.1.0*
 
 **Where:** [AsphodeInitializer.cs:56](Editor/Asphodel/AsphodeInitializer.cs)
 
@@ -146,7 +148,7 @@ The inbound-edge restore then finds no target, so **`material→texture` and `sc
 ---
 
 ### 🟠 8. Charon → Asphodel feedback loop is dead: `tool.name` vs `tool_name` attribute-key mismatch
-- [x] **Fixed & verified** — shared `Charon.SpanAttributes` constant used by emitter + all analyzers + fixtures (can't drift again); `TopicClusterAnalyzer` also stops tokenizing the input blob. Inference suite 41/41 (incl. end-to-end promotion); full suite 408, 0 failed. *(working tree, uncommitted)*
+- [x] **Fixed & verified** — shared `Charon.SpanAttributes` constant used by emitter + all analyzers + fixtures (can't drift again); `TopicClusterAnalyzer` also stops tokenizing the input blob. Inference suite 41/41 (incl. end-to-end promotion); full suite 408, 0 failed. *shipped in v1.1.0*
 
 **Where:** [MCPDispatcher.cs:138](Editor/MCP/MCPDispatcher.cs) · [AcceptanceRateAnalyzer.cs:39](Editor/Asphodel/Inference/AcceptanceRateAnalyzer.cs) · `TopicClusterAnalyzer.cs:57` · `FailureCorrelationAnalyzer.cs:14`
 
@@ -301,11 +303,12 @@ The inbound-edge restore then finds no target, so **`material→texture` and `sc
 
 ### 🟡 Hub / Node robustness cluster
 
-> **Connectivity-reliability pass done (working tree, uncommitted)** — 54 Bridge unit tests green, type-checked, `dist/` rebuilt. Addresses the launcher/hub friction hit repeatedly this session.
+> **Connectivity-reliability pass done shipped in v1.1.0** — 54 Bridge unit tests green, type-checked, `dist/` rebuilt. Addresses the launcher/hub friction hit repeatedly this session.
 
 - [x] **`forwardToolCall` error handling** — a healthy-but-now-unreachable instance (Unity reloading mid-call) returns a clean JSON-RPC error instead of a raw `HTTP 500`. [mcp-handler.ts](Bridge~/hub/src/mcp-handler.ts)
 - [x] **Lexical project-path matching** — `normalizePath` now `realpath`-canonicalizes + case-folds (macOS/Windows); the launcher resolves the real project root by walking up from cwd (`resolveProjectPath`); a **single-instance fallback** routes an unidentifiable call (cwd `/`) when exactly one Unity is open. Fixes the `No Unity instance found for /` we kept hitting. *(also fixed a latent `normalizePath("/") → ""` parent-match-everything bug)*
 - [x] **Hub spawn race** — `O_EXCL` spawn lock (with stale-lock recovery) so only one launcher starts the hub; losers wait for `hub.json` instead of spawning a zombie. [spawn-lock.ts](Bridge~/launcher/src/spawn-lock.ts)
+- [x] **Time-based hub liveness (the "immortal hub" fix)** — the hub auto-exits on *time since last launcher activity*, not a leaked launcher *count* (an abruptly-killed launcher never POSTs `disconnect`, so the count leaked and the hub ran for days serving stale code). A fresh build now deploys on the next call once the old hub idles out. [index.ts](Bridge~/hub/src/index.ts) · [registry.ts](Bridge~/hub/src/registry.ts)
 - [ ] **Hub heartbeat auto-registers unknown instances**, defeating eviction/re-registration. *(not in this pass)* [registry.ts](Bridge~/hub/src/registry.ts)
 - [ ] **Incremental inbound-edge capture/restore not guarded by transaction-failure cleanup** of `scanned_assets`. [db-writer.js](Scanner~/src/db-writer.js)
 
@@ -322,13 +325,13 @@ The inbound-edge restore then finds no target, so **`material→texture` and `sc
 
 ## 🟢 Low (verified)
 
-- [ ] **`MCP initialize` reports hardcoded version "0.9.1"** while package is 1.0.0 — resolve dynamically via `PackageInfo.FindForAssembly` (pattern already used in `HadesStatus`). [MCPDispatcher.cs:162](Editor/MCP/MCPDispatcher.cs)
+- [x] **`MCP initialize` now resolves its version dynamically (v1.1.0)** — was a hardcoded `"0.9.1"`; `MCPDispatcher`'s `serverInfo.version` uses `PackageInfo.FindForAssembly` (matching `HadesStatus`), so it tracks the package version. The launcher's separate `SERVER_VERSION` constant was also bumped (it stays a per-release manual bump — see ReleasePipeline.md). [MCPDispatcher.cs:162](Editor/MCP/MCPDispatcher.cs)
 - [ ] **`ManualReloadStrategy` + its persisted setting + `Begin/EndScriptEditing`'s manual path are unreachable** (`MCPServer.Start` always builds `AutoReloadStrategy`). Wire the setting or delete the dead path. [MCPServer.cs:96](Editor/MCP/MCPServer.cs)
 - [ ] **Inverted layering** — `RegressionRunner` lives in Charon but imports the MCP layer (takes an `MCPDispatcher`). Move it to the MCP layer or invert via an interface. [RegressionRunner.cs:4](Editor/Charon/RegressionRunner.cs)
 - [ ] **`ProcessMainThreadQueue` drains the whole queue in one tick** — one slow tool freezes the frame for the whole batch. [MCPServer.cs:258](Editor/MCP/MCPServer.cs)
 - [ ] **Copy-pasted helpers across tool files** — `GameObjectNotFoundError` ×5, `GetPath` ×4, `FindComponentType` ×2. Consolidate into `Editor/MCP/Utilities`.
 - [ ] **Fully-silent `catch` blocks** hide scanner-registration + HTTP-handler faults. Log at minimum.
-- [x] **`EnforceSizeLimit`'s synchronous startup `VACUUM` removed** — startup now caps the trace table by row count (`PruneToTraceCap`: delete-oldest + PASSIVE checkpoint, no VACUUM), so freed pages are reused and the file plateaus instead of blocking startup on a multi-GB rewrite. New `SizeEnforcementTests`. *(working tree, uncommitted)*
+- [x] **`EnforceSizeLimit`'s synchronous startup `VACUUM` removed** — startup now caps the trace table by row count (`PruneToTraceCap`: delete-oldest + PASSIVE checkpoint, no VACUUM), so freed pages are reused and the file plateaus instead of blocking startup on a multi-GB rewrite. New `SizeEnforcementTests`. *shipped in v1.1.0*
 - [ ] **Session port restore writes through to machine-global `EditorPrefs`**, permanently pinning the "auto" port. Use `SessionState` (per-session) instead.
 - [ ] **Scanner GUID regex requires lowercase 32-hex anchored to line start** — uppercase/indented `.meta` GUIDs silently skipped. Relax the pattern.
 - [ ] **`FrontmatterParser` drops a frontmatter block with zero parseable lines** (reclassifies as body). [Editor/Asphodel](Editor/Asphodel)

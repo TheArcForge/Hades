@@ -1,0 +1,133 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Hades.Core is headless by design: it must stay testable with no web host.
+       This target makes that architectural boundary self-enforcing. -->
+  <Target Name="EnsureHeadless" BeforeTargets="Build">
+    <Error Condition="@(FrameworkReference-&gt;AnyHaveMetadataValue('Identity', 'Microsoft.AspNetCore.App'))" Text="Hades.Core must not reference ASP.NET Core. It is a headless library by design." />
+  </Target>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" />
+    <PackageReference Include="YamlDotNet" />
+    <!-- ModelContextProtocol.Core (not the "ModelContextProtocol.AspNetCore" package
+         Hades.Server references) is the base protocol package: McpException and friends, with no
+         ASP.NET Core dependency at all - verified against its own nuspec, which depends only on
+         Microsoft.Extensions.AI.Abstractions and Microsoft.Extensions.Logging.Abstractions for
+         net10.0. That is what lets EditorProxy (Editors/) throw the same McpException every MCP
+         tool already throws without tripping the EnsureHeadless guard above. -->
+    <PackageReference Include="ModelContextProtocol.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Hades.Contract\Hades.Contract.csproj" />
+  </ItemGroup>
+
+  <!--
+    PluginInstaller.cs (Editors/) embeds the Unity plugin as assembly resources rather than
+    reading it from disk at install time - see that class's own doc comment for why. Two
+    different source directories, deliberately:
+      - Contract/*.cs come from ..\Hades.Contract\Wire - the sources THIS APP actually compiled
+        against, so the installed copy can never drift from what is running right now.
+      - Hades.asmdef, Runtime/*.cs and Transport/*.cs come from ..\..\..\Plugin~\Assets\Hades -
+        the canonical plugin folder this repo installs (see that folder's own "~ is load-bearing"
+        note). Plugin~\Assets\Hades\Contract\ itself is NOT embedded from here: it is a separately
+        maintained copy used for Unity-side development/testing, not the install source of truth.
+    LogicalName is set explicitly on every entry rather than relying on MSBuild's default
+    (path-derived) naming - predictable names PluginInstaller can reference directly, and
+    immune to the default scheme's mangling of paths that step outside the project directory.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\Hades.Contract\Wire\EditorConnectionInfo.cs">
+      <LogicalName>Hades.Plugin.Contract.EditorConnectionInfo.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\Hades.Contract\Wire\Hello.cs">
+      <LogicalName>Hades.Plugin.Contract.Hello.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\Hades.Contract\Wire\JsonRpc.cs">
+      <LogicalName>Hades.Plugin.Contract.JsonRpc.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\Hades.Contract\Wire\MiniJson.cs">
+      <LogicalName>Hades.Plugin.Contract.MiniJson.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Hades.asmdef">
+      <LogicalName>Hades.Plugin.Hades.asmdef</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Runtime\HadesBoot.cs">
+      <LogicalName>Hades.Plugin.Runtime.HadesBoot.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Runtime\IEditorLockApi.cs">
+      <LogicalName>Hades.Plugin.Runtime.IEditorLockApi.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Runtime\MainThreadPump.cs">
+      <LogicalName>Hades.Plugin.Runtime.MainThreadPump.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Runtime\ReloadGate.cs">
+      <LogicalName>Hades.Plugin.Runtime.ReloadGate.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Runtime\ReloadLease.cs">
+      <LogicalName>Hades.Plugin.Runtime.ReloadLease.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\CommandTable.cs">
+      <LogicalName>Hades.Plugin.Tools.CommandTable.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\SceneCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.SceneCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\SceneApplyCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.SceneApplyCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\ComponentCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.ComponentCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\MaterialCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.MaterialCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\MaterialApplyCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.MaterialApplyCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\AnimationCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.AnimationCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\AnimationApplyCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.AnimationApplyCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\TagLayerCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.TagLayerCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\SceneManagementCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.SceneManagementCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\AssetCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.AssetCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\AssetManageCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.AssetManageCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\SceneManageCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.SceneManageCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\ProjectSettingsApplyCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.ProjectSettingsApplyCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\InspectorCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.InspectorCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\PrefabCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.PrefabCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\PrefabApplyCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.PrefabApplyCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\ProjectCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.ProjectCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Transport\HadesClient.cs">
+      <LogicalName>Hades.Plugin.Transport.HadesClient.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Transport\HadesConnectionFile.cs">
+      <LogicalName>Hades.Plugin.Transport.HadesConnectionFile.cs</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>

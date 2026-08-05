@@ -1,0 +1,11 @@
+{
+    "iconState": "quantumFlux",
+    "headline": "No Unity Editor attached",
+    "rows": [
+        {
+            "project": "Hades-Unity-Client",
+            "status": "No Editor attached · indexed 32s ago",
+            "severity": "critical"
+        }
+    ]
+}

@@ -1,0 +1,5 @@
+{
+    "success": true,
+    "needsRestart": false,
+    "message": "Plugin installed. It will load automatically the next time this project opens in Unity."
+}

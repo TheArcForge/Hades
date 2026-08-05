@@ -1,0 +1,13 @@
+{
+    "id": "ab147404-1ed5-4e5a-82f8-ae31715d0f2f",
+    "kind": "rebuild",
+    "state": "done",
+    "startedAtUtc": "2026-08-05T08:39:05.172842+00:00",
+    "finishedAtUtc": "2026-08-05T08:39:05.516226+00:00",
+    "elapsedSeconds": 0,
+    "result": {
+        "nodesBefore": 494,
+        "nodesAfter": 494,
+        "message": "Rebuild complete \u2014 494 nodes (+0 from before)."
+    }
+}

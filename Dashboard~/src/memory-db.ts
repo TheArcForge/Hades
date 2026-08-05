@@ -40,6 +40,13 @@ interface Frontmatter {
   [key: string]: string;
 }
 
+// A memory file name must be a bare basename — reject anything that would escape the memory dir.
+function safeMemoryName(name: string): string | null {
+  const stripped = name.endsWith(".md") ? name.slice(0, -3) : name;
+  if (!stripped || stripped !== basename(stripped) || stripped.includes("..")) return null;
+  return stripped;
+}
+
 function parseFrontmatter(raw: string): { frontmatter: Frontmatter; body: string } {
   const lines = raw.split("\n");
   if (lines[0]?.trim() !== "---") {
@@ -100,7 +107,9 @@ export class MemoryDB {
   }
 
   getFile(filename: string): MemoryFileDetail | null {
-    const name = filename.endsWith(".md") ? filename : filename + ".md";
+    const safe = safeMemoryName(filename);
+    if (safe === null) return null;
+    const name = safe + ".md";
     const filePath = join(this.memoryDir, name);
     if (!existsSync(filePath)) return null;
 
@@ -138,6 +147,7 @@ export class MemoryDB {
   }
 
   acceptProposal(id: string): boolean {
+    if (safeMemoryName(id) === null) return false;
     const proposalPath = join(this.memoryDir, "proposals", id + ".md");
     if (!existsSync(proposalPath)) return false;
 
@@ -145,9 +155,10 @@ export class MemoryDB {
     const { frontmatter, body } = parseFrontmatter(raw);
 
     const targetFile = frontmatter.target_file;
-    if (!targetFile) return false;
+    const safeTarget = targetFile ? safeMemoryName(targetFile) : null;
+    if (safeTarget === null) return false;
 
-    const targetPath = join(this.memoryDir, targetFile + ".md");
+    const targetPath = join(this.memoryDir, safeTarget + ".md");
     if (existsSync(targetPath)) {
       const existing = readFileSync(targetPath, "utf-8");
       writeFileSync(targetPath, existing.trimEnd() + "\n\n" + body);
@@ -160,6 +171,7 @@ export class MemoryDB {
   }
 
   rejectProposal(id: string): boolean {
+    if (safeMemoryName(id) === null) return false;
     const proposalPath = join(this.memoryDir, "proposals", id + ".md");
     if (!existsSync(proposalPath)) return false;
     unlinkSync(proposalPath);
@@ -206,7 +218,9 @@ export class MemoryDB {
   }
 
   getInferredFile(filename: string): (InferredFileMeta & { content: string; body: string }) | null {
-    const name = filename.endsWith(".md") ? filename : filename + ".md";
+    const safe = safeMemoryName(filename);
+    if (safe === null) return null;
+    const name = safe + ".md";
     const filePath = join(this.memoryDir, "inferred", name);
     if (!existsSync(filePath)) return null;
 

@@ -1,0 +1,6 @@
+{
+  "name": "Hades",
+  "includePlatforms": ["Editor"],
+  "references": [],
+  "autoReferenced": false
+}

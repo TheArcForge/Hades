@@ -22,6 +22,10 @@ namespace ArcForge.Hades.Editor.Core
 
         static HadesBootstrap()
         {
+            // Acquire synchronously during domain reload (the static ctor is NOT subject to the
+            // delayCall starvation that App-Nap imposes on Boot). This keeps the editor awake across
+            // the ctor→Boot window so Boot actually runs and MCPServer re-registers after a reload.
+            AppNapGuard.Acquire();
             EditorApplication.delayCall += Boot;
         }
 
@@ -47,7 +51,10 @@ namespace ArcForge.Hades.Editor.Core
             }
             finally
             {
-                AppNapGuard.Release();
+                AppNapGuard.Release();  // existing: release the Boot-window guard
+                AppNapGuard.Release();  // NEW: release the static-ctor guard — exactly one, so the assertion
+                                        // is not held forever. If Boot somehow never runs, staying awake is
+                                        // the safe failure mode.
             }
         }
 

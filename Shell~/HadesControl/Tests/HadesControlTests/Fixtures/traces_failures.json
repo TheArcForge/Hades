@@ -1,0 +1,11 @@
+{
+    "failures": [
+        {
+            "traceId": "0186f14733ee4656ace4074295c5915b",
+            "tool": "search_by_name",
+            "startUtcMs": 1785919241100,
+            "durationMs": 0,
+            "error": "search_by_name needs a non-empty 'namePattern' \u2014 the substring to look for, e.g. {\"namePattern\": \"PlayerController\"}. Add it and call again."
+        }
+    ]
+}

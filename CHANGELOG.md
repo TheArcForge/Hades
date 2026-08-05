@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.0] — Graph-Grounded Convention Inference
+
+Hades now reads a project's *conventions* directly off the knowledge graph and offers each one as a promotable memory entry — so a fresh session, or a teammate after `git pull`, starts already knowing how the project does things without anyone having written it down.
+
+A new `ConventionInferrer` runs alongside the existing trace-based inference but reads graph *structure* instead of behaviour: six deterministic detectors recognize ScriptableObject event channels, Addressables adoption, prefab-variant strategy, ScriptableObject config data, type-naming conventions, and the render pipeline. Each fired convention is re-derived on every rebuild, so it is **self-validating** — it retracts itself the moment the structure that supports it disappears, the one guarantee statistical trace inference can't make. Conventions surface through the existing proposal queue (dashboard + `/hades:show-proposals`), and a small dismissal ledger means a rejected convention is never proposed again.
+
+This release also hardens the memory-write path and closes three reliability/security gaps carried on the audit.
+
+### Added
+
+- **Graph-grounded convention inference** — a `ConventionInferrer` (a sibling to `PatternInferenceEngine`, but reading the graph rather than Charon traces) with six deterministic detectors: ScriptableObject **event channels**, **Addressables** adoption, **prefab-variant** strategy, **ScriptableObject config** data, type-**naming** suffixes, and the **render pipeline** (URP/HDRP). It runs on graph-rebuild-complete on its own throttle, separate from the periodic trace-inference pass.
+- **Self-validating Tier-2 conventions** — `.arcforge/memory/inferred/convention-*.md` is reconciled on every run (written when a detector fires, deleted when it stops firing), so the inferred view can never go stale.
+- **Convention promotion proposals** — each detected convention becomes a one-click-promotable proposal in the existing queue; Accept writes it to Tier-1 (`patterns.md` / `conventions.md`) with a stable marker. A dismissal ledger (`inferred/.conventions-state.json`) remembers rejections so a dismissed convention isn't re-proposed, and re-flags a promoted convention that later stops holding.
+- **`GraphDatabase.FindNodesByTypeAndTier`** — a tier-scoped node query (reads project-only types for the naming detector, so engine/BCL builtins don't pollute the result).
+
+### Changed
+
+- **`MemoryManager.CreateProposal` accepts an optional stable id** — lets the convention inferrer write one idempotent proposal per detector (`convention-{key}`) instead of a fresh timestamped file every rebuild.
+
+### Fixed
+
+- **Security: path traversal in memory-file writes.** `propose_memory_update` and the proposal-accept path (C#), and the dashboard's memory API (Node), accepted caller-supplied file names and joined them into the memory directory with no validation — so a `../…` name could read or overwrite files outside `.arcforge/memory/`. Both now reject any non-basename / traversal / rooted name, on both the propose and the accept side (accept re-validates the untrusted `target_file` it reads back from the proposal).
+- **A timed-out tool no longer applies twice.** A tool call that exceeded the 30-second transport timeout was reported to the client as failed, but its work item stayed queued and still executed when the main thread freed up — so a mutating tool the agent was told had failed applied late, and the agent's retry applied it a second time. Queued work now carries a deadline and is skipped once it has expired.
+- **App-Nap starvation window narrowed.** The anti–App-Nap activity assertion is now acquired in the `[InitializeOnLoad]` static constructor (which runs synchronously during a domain reload) rather than inside the later, starvable `Boot` tick, so a backgrounded editor is more likely to keep running long enough to re-register the MCP server after a reload. *(A deeply backgrounded editor can still nap; this narrows the window rather than eliminating it.)*
+
 ## [1.1.0] — Graph Ownership Model, Incremental Integrity, Startup Reliability & Felt Performance
 
 A correctness round on the incremental-update path. Every graph node now records the asset that owns it (`owner_guid`), so an asset's full node set is created, deleted, and rebuilt as a single unit. This closes a class of silent graph corruption where domain reloads and re-scans destroyed or leaked nodes, and promotes meta-scanned assets (textures, models, audio, animation, fonts, etc.) to first-class citizens of the incremental lifecycle.

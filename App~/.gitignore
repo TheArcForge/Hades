@@ -1,0 +1,12 @@
+bin/
+obj/
+*.user
+
+# Un-ignore .NET project files: the repo-root .gitignore excludes *.csproj and *.sln
+# because Unity regenerates those. The .NET solution's project files are real source.
+!*.csproj
+!*.sln
+
+TestResults/
+*.nupkg
+.vscode/
