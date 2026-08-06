@@ -3,7 +3,7 @@
         {
             "tool": "propose_memory_update",
             "callCount": 3,
-            "averageDurationMs": 5.333333333333333,
+            "averageDurationMs": 5.3,
             "maxDurationMs": 16
         },
         {

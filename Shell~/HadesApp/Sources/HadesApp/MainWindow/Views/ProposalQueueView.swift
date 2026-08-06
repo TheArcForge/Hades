@@ -14,10 +14,15 @@ struct ProposalQueueView: View {
 
     var body: some View {
         if viewModel.proposals.isEmpty {
+            // Same fix, same reason as `TracesView`'s empty states (see that type's own doc
+            // comment): without a greedy frame here, `MemoryView`'s `Project` picker and
+            // Documents/Proposals control above this view jump down whenever there are no
+            // proposals, the same way Traces' filter block used to.
             ContentUnavailableView(
                 "No Proposals", systemImage: "tray",
                 description: Text("Promotion proposals and inferred conventions will appear here once Hades has some.")
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List(viewModel.proposals, id: \.fileName) { proposal in
                 MemoryProposalRowView(proposal: proposal, viewModel: viewModel)

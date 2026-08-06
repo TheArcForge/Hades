@@ -693,6 +693,76 @@ final class FakeResourceGuardReading: ResourceGuardReading {
     }
 }
 
+/// A settable stand-in for `OnboardingCompletionTracking` - see that protocol's own doc comment for
+/// why the real `UserDefaultsOnboardingStore` must never be touched by an automated test (real
+/// `UserDefaults` persists on disk across test runs on the same machine).
+@MainActor
+final class FakeOnboardingCompletionTracking: OnboardingCompletionTracking {
+    private(set) var hasCompletedOnboarding: Bool
+    private(set) var markCompletedCallCount = 0
+
+    init(hasCompletedOnboarding: Bool = false) {
+        self.hasCompletedOnboarding = hasCompletedOnboarding
+    }
+
+    func markCompleted() {
+        markCompletedCallCount += 1
+        hasCompletedOnboarding = true
+    }
+}
+
+/// A scriptable stand-in for `ClaudeCodeVerifying` - `LiveClaudeCodeVerifier` genuinely dials a
+/// loopback socket, so `OnboardingViewModelTests` fakes the protocol instead, the same reasoning
+/// every other real-network/real-OS seam in this file already follows. Same consume-in-order /
+/// repeat-last-on-exhaustion contract `FakeProjectsFetcher.projects()` established.
+actor FakeClaudeCodeVerifying: ClaudeCodeVerifying {
+    private var script: [ClaudeCodeVerification]
+    private(set) var verifyCallCount = 0
+
+    init(_ script: [ClaudeCodeVerification]) {
+        self.script = script
+    }
+
+    func verify() async -> ClaudeCodeVerification {
+        verifyCallCount += 1
+        if script.isEmpty {
+            fatalError("FakeClaudeCodeVerifying.verify() called with an empty script - not scripted for this call")
+        } else if script.count == 1 {
+            return script[0]
+        } else {
+            return script.removeFirst()
+        }
+    }
+}
+
+/// A scriptable stand-in for `MigrationOffering` - see that protocol's own doc comment for why
+/// production never constructs a real conformance at all (the control API has no migration endpoint
+/// yet). Exists purely to prove `OnboardingViewModel`'s offered-never-silently-performed contract
+/// ahead of that endpoint existing.
+actor FakeMigrationOffering: MigrationOffering {
+    private let isV12ProjectResult: Bool
+    private(set) var isV12ProjectCallCount = 0
+    private(set) var lastCheckedPath: String?
+
+    private(set) var performMigrationCallCount = 0
+    private(set) var lastPerformedPath: String?
+
+    init(isV12ProjectResult: Bool) {
+        self.isV12ProjectResult = isV12ProjectResult
+    }
+
+    func isV12Project(projectPath: String) async -> Bool {
+        isV12ProjectCallCount += 1
+        lastCheckedPath = projectPath
+        return isV12ProjectResult
+    }
+
+    func performMigration(projectPath: String) async {
+        performMigrationCallCount += 1
+        lastPerformedPath = projectPath
+    }
+}
+
 /// Polls `condition` until it is true or `timeout` elapses - the same "never trust a fixed sleep"
 /// standard `HadesSupervisionTests`' own `waitUntil` applies, reused here for the same reason:
 /// tests run as fast as real async work allows and still tolerate a slow CI machine. `@MainActor`

@@ -173,8 +173,13 @@ public sealed record ProjectStateSnapshot
     /// <c>ProjectSettings/EditorSettings.asset</c>, not <c>ProjectSettings.asset</c>.</summary>
     public int? SerializationMode { get; init; }
 
-    /// <summary>Null when the plugin is not installed in this project at all - see
-    /// <see cref="PluginInstaller.InstalledPluginVersion"/>.</summary>
+    /// <summary>The plugin version to compare against <see cref="AppPluginVersion"/>: the live
+    /// attached Editor's own self-reported version when one is attached (freshest truth - spec #4
+    /// §6, "the plugin reports its version on connect"), otherwise a file scan of
+    /// <c>Assets/Hades/Runtime/HadesBoot.cs</c> (see <see cref="PluginInstaller.InstalledPluginVersion"/>).
+    /// Same "live wins, else fall back to what is on disk" rule <see cref="UnityVersion"/> above
+    /// already uses, and for the same reason. Null when neither is available - nothing attached
+    /// AND the plugin is not installed in this project at all.</summary>
     public string? InstalledPluginVersion { get; init; }
 
     /// <summary>The version this APP would install - see
@@ -204,12 +209,24 @@ public sealed record ProjectStateSnapshot
 /// assets), not a PLAYER/project setting, so it lives in EditorSettings.asset. Implementing it
 /// against the path the plan states would have made this - the plan's own words - "the most
 /// important" warning never fire against any real project.</item>
-/// <item><b>Plugin version mismatch.</b> <see cref="PluginInstaller.InstalledPluginVersion"/>
-/// (reads the installed <c>Assets/Hades/Runtime/HadesBoot.cs</c> on disk) compared against
+/// <item><b>Plugin version mismatch (Plan 14 Task 5, spec #4 §6 - "degrade, never refuse").</b>
+/// The live attached Editor's own self-reported version (<c>CharonStatus.PluginVersion</c>,
+/// hello-derived - spec #4 §6: "the plugin reports its version on connect") when one is attached,
+/// otherwise <see cref="PluginInstaller.InstalledPluginVersion"/> (reads the installed
+/// <c>Assets/Hades/Runtime/HadesBoot.cs</c> on disk) - compared against
 /// <see cref="PluginInstaller.AppPluginVersion"/> (reads the SAME embedded resource bytes
-/// <c>PluginInstaller.Install</c> itself writes) - see those methods' own doc comments for why
-/// reading both off the identical regex against two different copies of the same file, rather than
-/// a second hand-maintained version constant, is what makes this comparison trustworthy.</item>
+/// <c>PluginInstaller.Install</c> itself writes). Preferring the live value when attached is not
+/// merely "freshest wins": it is what keeps this warning alive for an Editor that is STILL RUNNING
+/// the old build right after <c>installPlugin</c> has already written the new bytes to disk (see
+/// <see cref="InstallPluginResult.NeedsRestart"/>) - a file-scan-only comparison would wrongly read
+/// "matches" the instant the new bytes land, before Unity has actually reloaded. Severity and
+/// wording scale with <see cref="Editors.PluginVersionSkew"/>: a same-major skew, regardless of
+/// direction or magnitude, keeps the ordinary "does not match" wording (matching what this app
+/// already shipped for a two-minor-version gap before this task); a different major version
+/// escalates the WORDING only, never the severity (still <see cref="ControlSeverity.Warning"/> -
+/// some tools, and every file-derived one, still work regardless) and never refuses the underlying
+/// connection at all (proved at the transport layer in EditorListenerTests, where Hello.PluginVersion
+/// is never even inspected).</item>
 /// <item><b>Path missing or volume unmounted.</b> <c>Directory.Exists(project.Path)</c> - the same
 /// check <see cref="SummaryEndpoint"/> already uses for its own Error condition.</item>
 /// <item><b>Oracle conformance mismatch.</b> RESERVED, per the plan: the check itself is spec #1
@@ -339,7 +356,7 @@ public static class ProjectsEndpoint
             NodeCount = summary?.TotalNodes ?? 0,
             EdgeCount = summary?.TotalEdges ?? 0,
             SerializationMode = pathExists ? TryReadSerializationMode(project.Path) : null,
-            InstalledPluginVersion = pathExists ? PluginInstaller.InstalledPluginVersion(project.Path) : null,
+            InstalledPluginVersion = charon?.PluginVersion ?? (pathExists ? PluginInstaller.InstalledPluginVersion(project.Path) : null),
             AppPluginVersion = appPluginVersion,
         };
     }
@@ -429,16 +446,31 @@ public static class ProjectsEndpoint
             });
         }
 
-        if (p.InstalledPluginVersion is { } installed && p.AppPluginVersion is { } app
-            && !string.Equals(installed, app, StringComparison.Ordinal))
+        if (p.InstalledPluginVersion is { } installed && p.AppPluginVersion is { } app)
         {
-            warnings.Add(new ProjectWarning
+            // Same/Unknown: no claim made - see PluginVersionSkew's own doc comment for why an
+            // unparseable version string is treated as "nothing to compare", not as a problem.
+            var message = PluginVersionComparison.Classify(installed, app) switch
             {
-                Code = "pluginVersionMismatch",
-                Severity = ControlSeverity.Warning,
-                Message = $"The installed Hades plugin (v{installed}) does not match this app (v{app}). Editor-dependent tools may not work correctly until it is updated.",
-                Remedy = "Use Install/Update Plugin for this project, then restart Unity if it is already running.",
-            });
+                PluginVersionSkew.Minor =>
+                    $"The installed Hades plugin (v{installed}) does not match this app (v{app}). Editor-dependent tools may not work correctly until it is updated.",
+                PluginVersionSkew.Major =>
+                    $"The installed Hades plugin (v{installed}) is a different major version from this app (v{app}) — compatibility is not assured, and most Editor-dependent tools should be expected to fail until it is updated.",
+                _ => null,
+            };
+
+            if (message is not null)
+            {
+                warnings.Add(new ProjectWarning
+                {
+                    Code = "pluginVersionMismatch",
+                    Severity = ControlSeverity.Warning,
+                    Message = message,
+                    // Same remedy regardless of skew - one writer either way (spec #4 §6: "the app
+                    // offers an in-place update", never a second installer path).
+                    Remedy = "Use Install/Update Plugin for this project, then restart Unity if it is already running.",
+                });
+            }
         }
 
         return warnings;

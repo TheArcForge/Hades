@@ -65,17 +65,26 @@ struct MemoryProposalRowView: View {
     /// discipline `ProjectsView`'s Remove button holds to - `MemoryViewModel.
     /// dismissProposal(fileName:confirmed:)` never reaches the network until this dialog's own
     /// Dismiss button sets `confirmed: true`.
+    ///
+    /// **Every label carries `.fixedSize()`** so none of the three ever truncates ("Acc…"/"Dis…" at
+    /// the window's default width, three-word buttons rendering as two real words and two ellipses -
+    /// not this view's job to make readable data illegible for space). A `Text` inside a `Button`
+    /// still shrinks under `HStack` pressure exactly like any other `Text` unless told not to; the
+    /// three short labels comfortably fit this row's own width once they are allowed to ask for it.
     private var actions: some View {
         HStack {
             Button("Accept") {
                 Task { await viewModel.acceptProposal(fileName: proposal.fileName) }
             }
+            .fixedSize()
             Button("Defer") {
                 Task { await viewModel.deferProposal(fileName: proposal.fileName) }
             }
+            .fixedSize()
             Button("Dismiss\u{2026}", role: .destructive) {
                 isConfirmingDismiss = true
             }
+            .fixedSize()
         }
         .confirmationDialog(
             "Dismiss \(proposal.fileName)?",

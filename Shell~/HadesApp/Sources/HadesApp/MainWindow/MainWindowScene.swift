@@ -41,6 +41,18 @@ public final class MainWindowScene: NSObject, NSWindowDelegate {
     /// `focusWindow` closures' own call counts, never by reading this property directly.
     private var window: NSWindow?
 
+    /// Whether THIS type currently has an outstanding `activationCoordinator.windowOpened()` call -
+    /// i.e. whether `windowClosed()` is still owed. `show()` is safely callable any number of times
+    /// while the window is already open (that is the whole point of "created once and reused" -
+    /// `MainWindowSceneTests.showCreatesOnceAndReuses` calls it three times in a row), but the
+    /// coordinator's contract is one `windowOpened()` per eventual `windowClosed()` - see that type's
+    /// own doc comment. Gating on THIS flag, not on `window == nil`, is what keeps those two facts
+    /// compatible: without it, a second `show()` while already visible (e.g. "Open Hades" clicked
+    /// again from the menu bar) pushes `.regular` a second time with only one `windowWillClose(_:)`
+    /// ever coming to undo it, so the count never reaches zero and the Dock icon never goes away -
+    /// this was reproduced live and is that defect's actual root cause.
+    private var isWindowOpen = false
+
     /// `projectsViewModel`/`tracesViewModel`/`memoryViewModel` default to a fresh instance each so
     /// every existing `MainWindowSceneTests` call site - none of which cares about Projects/Traces/
     /// Memory data, only AppKit window lifecycle - keeps compiling unchanged. The composition root
@@ -87,7 +99,10 @@ public final class MainWindowScene: NSObject, NSWindowDelegate {
             self.window = window
         }
         viewModel.select(.projects)
-        activationCoordinator.windowOpened()
+        if !isWindowOpen {
+            isWindowOpen = true
+            activationCoordinator.windowOpened()
+        }
         focusWindow(window)
         viewModel.startPolling()
     }
@@ -102,7 +117,10 @@ public final class MainWindowScene: NSObject, NSWindowDelegate {
     /// ordinary Swift dispatch, not a simulated AppKit event.
     public func windowWillClose(_ notification: Notification) {
         viewModel.stopPolling()
-        activationCoordinator.windowClosed()
+        if isWindowOpen {
+            isWindowOpen = false
+            activationCoordinator.windowClosed()
+        }
     }
 
     // MARK: - Real defaults (composition-root path only; never exercised by tests, which inject fakes)
@@ -118,6 +136,21 @@ public final class MainWindowScene: NSObject, NSWindowDelegate {
             defer: false
         )
         window.title = "Hades"
+        // Hard floor, enforced by AppKit itself on every frame-setting path (not just the ones this
+        // type calls directly) - see this type's own doc comment for why this is the fix, not the
+        // `NSHostingController`/`NSHostingView` timing race underneath it. Set BEFORE
+        // `contentViewController` below: that assignment itself immediately asks the not-yet-laid-out
+        // hosting view for a size and applies it synchronously (confirmed live - the window collapses
+        // to a ~0pt content size in that exact call, every time, before this method even returns), so
+        // the floor has to already be in place for AppKit to clamp that first attempt. Recovery from
+        // the collapse then depends on however many asynchronous SwiftUI layout passes happen to run
+        // before the window is considered "settled" - sometimes that lands back on 900x600, sometimes
+        // it stalls partway (592x84 reproduced live, 10/10 fresh launches). `contentMinSize` does not
+        // depend on that sequence completing correctly: every frame this window is ever given, on
+        // every path that sets one, is clamped to at least this size, so the collapse - partial or
+        // total - cannot produce a visible frame smaller than 900x600, regardless of which of those
+        // asynchronous passes has or hasn't run yet.
+        window.contentMinSize = NSSize(width: 900, height: 600)
         window.center()
         // Keeps the Swift NSWindow object alive across a close - see this type's own doc comment on
         // why that is exactly what "created once and reused" requires.

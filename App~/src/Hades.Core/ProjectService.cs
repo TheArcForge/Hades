@@ -134,6 +134,15 @@ public sealed record CharonStatus
     public string? ProjectPath { get; init; }
     public long? ProcessId { get; init; }
     public TimeSpan? ConnectionAge { get; init; }
+
+    /// <summary>The attached plugin's own self-reported version - hello-derived, same "populated
+    /// whenever Attached is true, regardless of Busy" rule as every other hello-derived field on
+    /// this record (see this type's own class doc comment). Spec #4 §6: "the plugin reports its
+    /// version on connect" - this is that report, surfaced live rather than re-derived from a file
+    /// scan of the project's installed plugin (see Editors.PluginVersionSkew's own class doc
+    /// comment for why the live value is preferred where callers compare it against
+    /// Editors.PluginInstaller.AppPluginVersion).</summary>
+    public string? PluginVersion { get; init; }
 }
 
 /// <summary>
@@ -766,6 +775,7 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
             ProjectPath = editor.Hello.ProjectPath,
             ProcessId = editor.Hello.ProcessId,
             ConnectionAge = DateTimeOffset.UtcNow - editor.ConnectedAtUtc,
+            PluginVersion = editor.Hello.PluginVersion,
         };
     }
 

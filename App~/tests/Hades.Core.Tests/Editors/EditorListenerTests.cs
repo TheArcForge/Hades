@@ -194,6 +194,78 @@ public sealed class EditorListenerTests : IDisposable
         Assert.Equal(4321, editor.Hello.ProcessId);
     }
 
+    // ---------------------------------------------------------------- version skew: degrade, never refuse (spec #4 §6)
+
+    [Theory]
+    [InlineData("1.1.0")] // one minor behind - spec #4 §6's own literal example
+    [InlineData("1.0.0")] // several minors behind
+    [InlineData("1.3.0")] // minor ahead - newer than "the app", same major
+    [InlineData("0.1.0")] // major behind
+    [InlineData("9.9.9")] // major ahead - "a plugin from the future"
+    [InlineData("")] // empty/unparseable - still a well-formed Hello (a non-empty ProjectGuid is
+                      // the only thing this layer requires - see HandleConnectionAsync)
+    public async Task MismatchedPluginVersion_StillConnectsAndRegisters_TheRefusalPathIsNotTaken(string pluginVersion)
+    {
+        // Spec #4 §6, verbatim: "a plugin one minor version behind still serves what it can...
+        // Silent refusal on version skew is how the current support burden started." This is the
+        // behaviour being bought, asserted explicitly and directly at the transport layer rather
+        // than inferred from the absence of a refusal code path: EditorListener never inspects
+        // Hello.PluginVersion at all (see HandleConnectionAsync - the only checks anywhere in the
+        // handshake are the token and a non-empty ProjectGuid), so every one of these - one minor
+        // behind, several minors behind, newer, a major version apart in either direction, even an
+        // empty/unparseable string - registers exactly the same as a perfectly matched version.
+        // Version-skew HANDLING (the warning, and offering an update) lives entirely above this
+        // layer, in ProjectsEndpoint/SummaryTools - see PluginVersionSkewTests and the
+        // plugin-version tests in ProjectsTests.cs/CharonStatusTests.cs for that half; this test
+        // proves only that the transport itself is version-blind by design, not merely by omission.
+        var registry = new EditorRegistry();
+        using var listener = new EditorListener(_tokenPath, registry);
+        listener.Start();
+        const string guid = "aaaabbbbccccddddeeeeffff00002222";
+
+        using var client = await HandshakeAsync(listener, MakeHello(guid, pluginVersion: pluginVersion));
+
+        Assert.True(await Eventually(() => registry.Get(guid) is not null),
+            $"a Hello reporting PluginVersion '{pluginVersion}' was refused at the transport layer - the refusal path must never be taken on version skew alone");
+        Assert.Equal(pluginVersion, registry.Get(guid)!.Hello.PluginVersion);
+    }
+
+    [Fact]
+    public async Task MismatchedPluginVersion_ConnectionStaysFullyFunctional_NotJustRegisteredButUsable()
+    {
+        // Registering is necessary but not sufficient proof of "serves what it can" - this drives
+        // an actual JSON-RPC round trip (the same lease.renew reconciliation wiring the tests
+        // below already use) over a connection whose reported PluginVersion is a major version
+        // behind the app, confirming the session is not merely present in the registry but live
+        // and answering requests, exactly as it would for a perfectly matched version.
+        var registry = new EditorRegistry();
+        var leases = new LeaseRegistry();
+        const string guid = "aaaabbbbccccddddeeeeffff00002222";
+        leases.RecordHeld(guid, "lease-1", DateTimeOffset.UtcNow.AddSeconds(30));
+
+        using var listener = new EditorListener(_tokenPath, registry, leases);
+        listener.Start();
+
+        using var client = await HandshakeAsync(listener, MakeHello(guid, pluginVersion: "0.1.0"));
+        Assert.True(await Eventually(() => registry.Get(guid) is not null));
+
+        var reader = new StreamReader(client.GetStream(), new UTF8Encoding(false));
+        var writer = new StreamWriter(client.GetStream(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
+
+        var line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(JsonRpcRequest.TryParse(line, out var request, out _));
+        Assert.Equal("lease.renew", request!.Method);
+
+        var result = JsonValue.NewObject();
+        result.SetProperty("success", JsonValue.Bool(true));
+        result.SetProperty("leaseId", JsonValue.String("lease-1"));
+        result.SetProperty("expiresAtUtcMs", JsonValue.Integer(DateTimeOffset.UtcNow.AddSeconds(45).ToUnixTimeMilliseconds()));
+        await writer.WriteLineAsync(MiniJson.Write(JsonRpcResponse.Success(request.Id!, result).ToJson()));
+
+        Assert.True(await Eventually(() => leases.Get(guid) is not null && registry.Get(guid) is not null),
+            "a version-mismatched connection must remain fully usable, not merely registered");
+    }
+
     [Fact]
     public async Task Disconnect_DeregistersTheEditor()
     {

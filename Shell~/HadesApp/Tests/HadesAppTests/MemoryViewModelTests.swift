@@ -366,6 +366,29 @@ struct MemoryViewModelTests {
         #expect(viewModel.selectedDocument == .notSelected)
     }
 
+    // MARK: - Defect: selectedDocument must not outlive the project selection that produced it - the
+    // same class of bug confirmed live in TracesViewModel.selectedTraceDetail (see that suite's own
+    // "Defect" section): a document read under one project must not keep rendering once the Picker
+    // reads a different one.
+
+    @Test("selectProject(_:) clears a previously selected document - a document opened under the old project must not keep showing once the Picker reads a different one")
+    func selectProjectClearsSelectedDocument() async {
+        let fetcher = FakeMemoryFetcher(
+            documentOutcome: .success(Self.realDocumentContent),
+            projectsScript: [.success(ProjectsResult(projects: [Self.projectAlpha, Self.projectBeta]))]
+        )
+        let viewModel = Self.makeViewModel(fetcher: fetcher)
+        await viewModel.refresh()  // defaults projectFilter to Alpha
+        await viewModel.selectDocument(name: Self.realDocumentContent.name)
+        #expect(viewModel.selectedDocument == .loaded(Self.realDocumentContent))
+
+        await viewModel.selectProject(Self.projectBeta.productGuid)
+
+        #expect(
+            viewModel.selectedDocument == .notSelected,
+            "switching projects must end an open document's lifetime, not carry it into the newly selected project")
+    }
+
     // MARK: - saveDocument: the confirmation gate is enforced here, not only in a SwiftUI dialog -
     // same discipline `ProjectsViewModel.removeProject(productGuid:confirmed:)` already holds to.
     // Unlike remove (which, task 4 discovered, deletes nothing at all today), a save always

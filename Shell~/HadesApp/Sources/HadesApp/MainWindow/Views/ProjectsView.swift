@@ -29,6 +29,15 @@ struct ProjectsView: View {
     var body: some View {
         NavigationSplitView {
             list
+                // Wider than SwiftUI's own default sidebar ideal, same fix Traces/Memory already
+                // made for their own sidebars (see `TracesView`'s own doc comment) - the default
+                // left the detail pane doing almost all the work at the window's own default size,
+                // most of it empty. Narrower than Traces/Memory's own 360/460/640 (chosen for a
+                // filter block + segmented picker + multi-line sequence patterns): a project row is
+                // only ever `name` + `path` on two short lines, so it does not need nearly as much
+                // room to read well. The divider stays user-draggable either way - this only changes
+                // the default.
+                .navigationSplitViewColumnWidth(min: 220, ideal: 300, max: 400)
         } detail: {
             if let selected {
                 ProjectDetailView(project: selected, viewModel: viewModel)
@@ -77,6 +86,14 @@ struct ProjectsView: View {
                         Text(project.path)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            // Truncate the HEAD, not the tail (SwiftUI's default): the leaf folder
+                            // at the end is the most identifying part of a path, and two projects
+                            // that only differ deep in a shared prefix (e.g. two /tmp/hades-e2e-...
+                            // scratch checkouts) are indistinguishable if the tail is what gets
+                            // dropped. `project.path` itself is untouched - this only changes which
+                            // end `Text` elides when the column is too narrow for the whole string.
+                            .lineLimit(1)
+                            .truncationMode(.head)
                     }
                 }
             }

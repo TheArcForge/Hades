@@ -52,8 +52,12 @@ struct TracesViewModelTests {
             "search_by_name needs a non-empty 'namePattern' \u{2014} the substring to look for, e.g. {\"namePattern\": \"PlayerController\"}. Add it and call again."
     )
 
+    /// `averageDurationMs` is `5.3`, not the raw `5.333333333333333` SQL's `AVG()` actually produces
+    /// for these three calls - `Hades.Server.Control.TracesEndpoint.GetSlowTools` now rounds to one
+    /// decimal place server-side before this ever reaches the wire (see `SlowToolRow.AverageDurationMs`'s
+    /// own doc comment), so a value with more precision than that is no longer a real response shape.
     static let realSlowTool = SlowToolRow(
-        tool: "propose_memory_update", callCount: 3, averageDurationMs: 5.333_333_333_333_333, maxDurationMs: 16
+        tool: "propose_memory_update", callCount: 3, averageDurationMs: 5.3, maxDurationMs: 16
     )
 
     static let realTraceDetail = TraceDetailResult(
@@ -468,5 +472,28 @@ struct TracesViewModelTests {
         viewModel.clearSelectedTrace()
 
         #expect(viewModel.selectedTraceDetail == .notSelected)
+    }
+
+    // MARK: - Defect: selectedTraceDetail must not outlive the project selection that produced it
+    // (found live - switching to a project with zero data still displayed the previous project's
+    // span, misattributing it).
+
+    @Test("selectProject(_:) clears a previously selected trace's detail - a call selected under the old project must not keep showing once the Picker reads a different one")
+    func selectProjectClearsSelectedTraceDetail() async {
+        let fetcher = FakeTracesFetcher(
+            detailOutcome: .success(Self.realTraceDetail),
+            projectsScript: [.success(ProjectsResult(projects: [Self.projectAlpha, Self.projectBeta]))]
+        )
+        let connections = FakeConnectionProvider([ControlConnection(port: 1, token: "t")], repeatLast: true)
+        let viewModel = TracesViewModel(discover: { await connections.provide() }, makeClient: { _ in fetcher })
+        await viewModel.refresh()  // defaults projectFilter to Alpha
+        await viewModel.selectTrace(traceId: Self.realTraceDetail.traceId)
+        #expect(viewModel.selectedTraceDetail == .loaded(Self.realTraceDetail))
+
+        await viewModel.selectProject(Self.projectBeta.productGuid)
+
+        #expect(
+            viewModel.selectedTraceDetail == .notSelected,
+            "switching projects must end a selected call's detail lifetime, not carry it into the newly selected project")
     }
 }

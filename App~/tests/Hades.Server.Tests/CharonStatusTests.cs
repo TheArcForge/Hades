@@ -60,12 +60,14 @@ public sealed class CharonStatusTests : IClassFixture<WebApplicationFactory<Prog
     static JsonElement Structured(JsonElement envelope) =>
         envelope.GetProperty("result").GetProperty("structuredContent");
 
-    static Hello MakeHello(long processId) => new()
+    const string RealAppPluginVersion = "1.2.0"; // Plugin~/Assets/Hades/Runtime/HadesBoot.cs's own PluginVersion constant - see ProjectsTests.cs's own identically-named constant for the same reasoning.
+
+    static Hello MakeHello(long processId, string pluginVersion = RealAppPluginVersion) => new()
     {
         ProjectGuid = ProjectGuid,
         ProjectPath = "/tmp/fake-unity-project",
         UnityVersion = "6000.3.2f1",
-        PluginVersion = "1.2.0",
+        PluginVersion = pluginVersion,
         ProcessId = processId,
     };
 
@@ -175,6 +177,65 @@ public sealed class CharonStatusTests : IClassFixture<WebApplicationFactory<Prog
         Assert.True(structured.GetProperty("connectionAgeSeconds").GetDouble() >= 0);
 
         Assert.Contains("6000.3.2f1", structured.GetProperty("detail").GetString());
+
+        // Plugin version matches this app - reported (hello-derived, same as unityVersion above),
+        // but no mismatch wording anywhere in detail.
+        Assert.Equal(RealAppPluginVersion, structured.GetProperty("pluginVersion").GetString());
+        Assert.DoesNotContain("does not match", structured.GetProperty("detail").GetString());
+    }
+
+    // ---------------------------------------------------------------- plugin version skew (spec #4 §6 - reported live, on connect)
+
+    [Fact]
+    public async Task EditorAttachedWithAnOlderPluginVersion_ReportsItLive_AndNamesTheGapInDetail()
+    {
+        var (reads, writes) = await ConnectAsFakeUnityAsync(MakeHello(processId: 9003, pluginVersion: "1.1.0"));
+        var responder = Task.Run(async () =>
+        {
+            var line = await reads.ReadLineAsync();
+            if (line is not null && JsonRpcRequest.TryParse(line, out var request, out _) && request is not null)
+            {
+                await writes.WriteLineAsync(MiniJson.Write(JsonRpcResponse.Success(request.Id!, JsonValue.Bool(true)).ToJson()));
+            }
+        });
+
+        var structured = Structured(await McpTestClient.CallTool(_factory, "hades_charon_status"));
+        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Still attached, not refused - degrade, never refuse (spec #4 §6). The connection and
+        // every other Charon fact are exactly as healthy as the matching-version case above.
+        Assert.True(structured.GetProperty("attached").GetBoolean());
+        Assert.Equal("1.1.0", structured.GetProperty("pluginVersion").GetString());
+
+        var detail = structured.GetProperty("detail").GetString()!;
+        Assert.Contains("v1.1.0", detail);
+        Assert.Contains($"v{RealAppPluginVersion}", detail);
+        Assert.Contains("does not match", detail);
+    }
+
+    [Fact]
+    public async Task EditorAttachedWithAMajorPluginVersionMismatch_DetailEscalatesTheWording_StillNotRefused()
+    {
+        var (reads, writes) = await ConnectAsFakeUnityAsync(MakeHello(processId: 9004, pluginVersion: "9.9.9"));
+        var responder = Task.Run(async () =>
+        {
+            var line = await reads.ReadLineAsync();
+            if (line is not null && JsonRpcRequest.TryParse(line, out var request, out _) && request is not null)
+            {
+                await writes.WriteLineAsync(MiniJson.Write(JsonRpcResponse.Success(request.Id!, JsonValue.Bool(true)).ToJson()));
+            }
+        });
+
+        var structured = Structured(await McpTestClient.CallTool(_factory, "hades_charon_status"));
+        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // The refusal path is not taken even at major skew - see this file's own class doc comment
+        // and EditorListenerTests' dedicated proof at the transport layer. Attached is still true.
+        Assert.True(structured.GetProperty("attached").GetBoolean());
+        Assert.Equal("9.9.9", structured.GetProperty("pluginVersion").GetString());
+
+        var detail = structured.GetProperty("detail").GetString()!;
+        Assert.Contains("major version", detail);
     }
 
     // ---------------------------------------------------------------- busy

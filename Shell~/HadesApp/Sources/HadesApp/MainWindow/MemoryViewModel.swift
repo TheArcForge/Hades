@@ -67,6 +67,8 @@ public final class MemoryViewModel {
     /// Populated only by `selectDocument(name:)`, never by `refresh()`: an open document is a fixed
     /// snapshot for as long as it is being read or edited, not something `refresh()` should silently
     /// overwrite out from under an in-progress edit the way it does for `documents`/`proposals`.
+    /// Cleared by `selectProject(_:)`, though - see that method's own doc comment for why a project
+    /// switch, unlike an ordinary tick, must end an open document's lifetime.
     public private(set) var selectedDocument: MemoryDocumentFetchState = .notSelected
 
     /// The most recent action's server-authored result text, verbatim - `ActionResult.message`, or
@@ -145,9 +147,15 @@ public final class MemoryViewModel {
     /// Sets `projectFilter` alone and immediately re-fetches, rather than waiting for the next tick -
     /// the project Picker's own selection. The Memory analogue of
     /// `TracesViewModel.selectProject(_:)`; see that method's own doc comment for the full reasoning
-    /// (identical here, minus Traces' extra tool/outcome/duration filters this type does not have).
+    /// (identical here, minus Traces' extra tool/outcome/duration filters this type does not have) -
+    /// INCLUDING clearing `selectedDocument` first, for the identical reason: a document read under
+    /// the old project must not keep rendering in the detail pane once the Picker reads a different
+    /// one (the same stale-selection defect confirmed live in Traces; `selectedDocument`, like
+    /// `selectedTraceDetail`, is otherwise touched only by its own select/clear methods, never by
+    /// `refresh()`).
     public func selectProject(_ productGuid: String) async {
         projectFilter = productGuid
+        clearSelectedDocument()
         await refresh()
     }
 

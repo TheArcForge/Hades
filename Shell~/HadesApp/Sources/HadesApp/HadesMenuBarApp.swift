@@ -100,6 +100,15 @@ private final class SettingsWindowController: NSObject, NSWindowDelegate {
     private let activationCoordinator: ActivationPolicyCoordinator
     private var window: NSWindow?
 
+    /// Whether THIS type currently has an outstanding `activationCoordinator.windowOpened()` call -
+    /// see `MainWindowScene.isWindowOpen`'s own doc comment for why this, not `window == nil`, is
+    /// the right gate: `show()` refreshes and refocuses an already-open Settings window on every
+    /// call (see this type's own doc comment on why), and without this flag that second call pushed
+    /// `.regular` again with only one eventual `windowWillClose(_:)` to undo it - the exact defect
+    /// `MainWindowScene` had, reproduced here too since both types used to call `windowOpened()`
+    /// unconditionally.
+    private var isWindowOpen = false
+
     init(viewModel: SettingsViewModel, activationCoordinator: ActivationPolicyCoordinator) {
         self.viewModel = viewModel
         self.activationCoordinator = activationCoordinator
@@ -111,7 +120,10 @@ private final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// from whenever the window was first created.
     @objc func show() {
         if let window {
-            activationCoordinator.windowOpened()
+            if !isWindowOpen {
+                isWindowOpen = true
+                activationCoordinator.windowOpened()
+            }
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             Task { await viewModel.refresh() }
@@ -131,6 +143,7 @@ private final class SettingsWindowController: NSObject, NSWindowDelegate {
         window.contentViewController = NSHostingController(rootView: SettingsView(viewModel: viewModel))
         self.window = window
 
+        isWindowOpen = true
         activationCoordinator.windowOpened()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
@@ -143,6 +156,9 @@ private final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// closed. Whether the Dock icon actually disappears now depends on whether the main window is
     /// ALSO closed - see `ActivationPolicyCoordinator`'s own doc comment.
     func windowWillClose(_ notification: Notification) {
-        activationCoordinator.windowClosed()
+        if isWindowOpen {
+            isWindowOpen = false
+            activationCoordinator.windowClosed()
+        }
     }
 }

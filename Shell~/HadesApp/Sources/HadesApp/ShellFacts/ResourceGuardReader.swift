@@ -9,10 +9,11 @@ import Foundation
 ///
 /// **Not a licence to compute**, per this plan's own explicit limit on the carve-out: this protocol
 /// hands back the two raw OS values and nothing else. It does not combine them, does not decide
-/// whether background work "should" pause, and does not turn `thermalState` into a sentence - see
-/// `SettingsView`'s own doc comment for the one picture-only (never text) decision it makes about
-/// `thermalState`, the same "an icon is the only display this type invents" contract
-/// `StatusIcon.symbolName(for state: OperationState)` already holds Control-API enums to.
+/// whether background work "should" pause, and does not itself turn `thermalState` into a display
+/// value - that mapping lives one file over, in `ThermalStateDisplay`, the one narrowly authorised
+/// exception to "Swift renders, .NET decides" in this whole app (see that type's own doc comment
+/// for the icon-only vs. text split and exactly why it is safe). This reader's own contract stays
+/// unchanged either way: `thermalState` below returns the OS's own enum value, unmapped.
 @MainActor
 public protocol ResourceGuardReading {
     /// `ProcessInfo.processInfo.isLowPowerModeEnabled`, read directly.

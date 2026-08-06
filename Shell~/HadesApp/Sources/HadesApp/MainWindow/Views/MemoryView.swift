@@ -39,13 +39,32 @@ struct MemoryView: View {
     var body: some View {
         NavigationSplitView {
             content
+                // Wider than SwiftUI's own default sidebar ideal - see `MemoryProposalRowView`'s own
+                // doc comment for the other half of the fix this pairs with (`.fixedSize()` on each
+                // action button label): the default column here was narrow enough that Accept/
+                // Dismiss's own labels truncated even before considering the rest of a proposal row's
+                // content. Same "mirrors `TracesView`'s own fix" shape - see that view's own comment.
+                .navigationSplitViewColumnWidth(min: 360, ideal: 460, max: 640)
         } detail: {
-            if listSelection == .documents, let selectedDocumentName {
-                MemoryDocumentView(name: selectedDocumentName, viewModel: viewModel)
-                    .id(selectedDocumentName)
-            } else {
-                ContentUnavailableView("Select a Document", systemImage: "doc.text")
-                    .foregroundStyle(.secondary)
+            switch listSelection {
+            case .documents:
+                if let selectedDocumentName {
+                    MemoryDocumentView(name: selectedDocumentName, viewModel: viewModel)
+                        .id(selectedDocumentName)
+                } else {
+                    ContentUnavailableView("Select a Document", systemImage: "doc.text")
+                        .foregroundStyle(.secondary)
+                }
+            case .proposals:
+                // Proposals has no drill-down detail of its own - see this type's own doc comment.
+                // "Select a Document" doesn't apply here (there is no document concept on this tab
+                // at all), so this pane gets its own placeholder instead of inheriting the Documents
+                // one just because both fall back to the same detail slot.
+                ContentUnavailableView(
+                    "No Detail View", systemImage: "tray",
+                    description: Text("Proposals show their full detail in the list. Accept, defer, or dismiss directly from a row.")
+                )
+                .foregroundStyle(.secondary)
             }
         }
         .onChange(of: selectedDocumentName) { _, newValue in
@@ -124,10 +143,16 @@ struct MemoryView: View {
     @ViewBuilder
     private var documentsList: some View {
         if viewModel.documents.isEmpty {
+            // `.frame(maxWidth/maxHeight: .infinity)` - same fix, same reason as `TracesView`'s
+            // own `sequencesList`/`failuresList`/`slowList` (see that type's own doc comment):
+            // without it, this empty state isn't greedy the way `List` below is, so the `Project`
+            // picker and the Documents/Proposals control above it visibly jump down whenever the
+            // selected project has no memory documents yet.
             ContentUnavailableView(
                 "No Memory Documents", systemImage: "doc.text.magnifyingglass",
                 description: Text("Authored memory documents will appear here once Hades has some.")
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List(viewModel.documents, id: \.name, selection: $selectedDocumentName) { document in
                 MemoryDocumentRowView(row: document)

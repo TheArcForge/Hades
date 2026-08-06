@@ -14,6 +14,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarController: MenuBarController!
     private var mainWindowScene: MainWindowScene!
 
+    /// Non-nil only while first-run onboarding is showing - see `applicationDidFinishLaunching`'s
+    /// own "the caller" doc comment for exactly when that is. Held here for the same reason
+    /// `mainWindowScene`/`menuBarController` are: an unretained `NSWindowDelegate` would deallocate
+    /// the instant this method returns, taking the window's delegate callbacks with it.
+    private var onboardingWindowController: OnboardingWindowController?
+
     /// Shared with `SettingsWindowController` - see `ActivationPolicyCoordinator`'s own doc comment
     /// for why one instance must be passed to both. Set once in `init(activationCoordinator:)`,
     /// wired into `MainWindowScene` below.
@@ -66,6 +72,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onQuit: { NSApp.terminate(nil) },
             onOpenHades: { mainWindowScene.show() }
         )
+
+        // THE CALLER for first-run onboarding (Plan 14 Task 6, spec #3 §3.6): the one and only place
+        // anything decides to show it, and the one and only place anything marks it done.
+        // `UserDefaultsOnboardingStore.hasCompletedOnboarding` is the sole gate - `false` on a fresh
+        // install (no key written yet) and on every launch until `OnboardingViewModel.advance()`
+        // moves past the last step and calls `markCompleted()` (see that method's own doc comment),
+        // after which this branch never runs again for this machine. Shares the SAME
+        // `projectsViewModel` instance the main window polls (constructed above, captured into
+        // `mainWindowViewModel.refreshSelectedSection` already) - a project added during onboarding
+        // is already there once the main window opens later; nothing is fetched twice.
+        let onboardingCompletionStore = UserDefaultsOnboardingStore()
+        if !onboardingCompletionStore.hasCompletedOnboarding {
+            let onboardingViewModel = OnboardingViewModel(
+                projectsViewModel: projectsViewModel, completionStore: onboardingCompletionStore)
+            let onboardingWindowController = OnboardingWindowController(
+                viewModel: onboardingViewModel, activationCoordinator: activationCoordinator)
+            self.onboardingWindowController = onboardingWindowController
+            onboardingWindowController.show()
+        }
 
         // Adopt-or-spawn happens off the main run loop's synchronous startup path so the status
         // item appears immediately (showing `.notRunning` - the correct, honest state - until this

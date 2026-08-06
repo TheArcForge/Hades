@@ -41,6 +41,15 @@ public sealed record CharonStatusResult
     /// <summary>Absent (see the MCP SDK's WhenWritingNull default) unless <see cref="Attached"/>
     /// is true — hello-derived, so present for both idle and busy.</summary>
     [JsonPropertyName("unityVersion")] public string? UnityVersion { get; init; }
+
+    /// <summary>The attached plugin's own self-reported version — hello-derived, same presence
+    /// rule as <see cref="UnityVersion"/>. Spec #4 §6: "the plugin reports its version on connect".
+    /// A mismatch against this app's own version is never silent: see <see cref="Detail"/>, which
+    /// names the gap plainly rather than swallowing it — but is never a reason this tool reports
+    /// <see cref="Attached"/> false either; see <see cref="Editors.PluginVersionSkew"/>'s own class
+    /// doc comment for why degrading, not refusing, is the whole point.</summary>
+    [JsonPropertyName("pluginVersion")] public string? PluginVersion { get; init; }
+
     [JsonPropertyName("projectPath")] public string? ProjectPath { get; init; }
     [JsonPropertyName("processId")] public long? ProcessId { get; init; }
     [JsonPropertyName("connectionAgeSeconds")] public double? ConnectionAgeSeconds { get; init; }
@@ -202,6 +211,7 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
             Attached = status.Attached,
             Busy = status.Busy,
             UnityVersion = status.UnityVersion,
+            PluginVersion = status.PluginVersion,
             ProjectPath = status.ProjectPath,
             ProcessId = status.ProcessId,
             ConnectionAgeSeconds = status.ConnectionAge?.TotalSeconds,
@@ -239,7 +249,40 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
         // A held lock is the one thing this tool is deliberately loud about, in every state above
         // — see this method's own reasoning in CharonStatus for why it is read regardless of
         // Attached.
-        return lease is null ? baseDetail : baseDetail + " " + DescribeLease(lease);
+        var withLease = lease is null ? baseDetail : baseDetail + " " + DescribeLease(lease);
+
+        // Plugin version skew (spec #4 §6, Plan 14 Task 5: "degrade, never refuse") is the other
+        // thing this tool is deliberately loud about — never a reason Attached reads false above,
+        // only ever an addition to Detail. Only meaningful once attached: nothing to compare
+        // against when nothing is connected.
+        var skew = status.Attached ? DescribePluginVersionSkew(status.PluginVersion) : null;
+        return skew is null ? withLease : withLease + " " + skew;
+    }
+
+    /// <summary>Names a live plugin/app version gap plainly — or returns null for Same/Unknown
+    /// (nothing to say; see <see cref="PluginVersionSkew"/>'s own doc comment for why an
+    /// unparseable version is treated as "nothing to compare", not a problem). Points at the SAME
+    /// remedy <see cref="ProjectsEndpoint"/>'s own "pluginVersionMismatch" warning does
+    /// (Install/Update Plugin) rather than implying this MCP surface can fix it itself — installing
+    /// the plugin is a Control-API action the Hades app's Projects view offers, not an MCP tool an
+    /// agent can call directly.</summary>
+    static string? DescribePluginVersionSkew(string? pluginVersion)
+    {
+        var appVersion = PluginInstaller.AppPluginVersion();
+
+        return PluginVersionComparison.Classify(pluginVersion, appVersion) switch
+        {
+            PluginVersionSkew.Minor =>
+                $"The attached plugin (v{pluginVersion}) does not match this app (v{appVersion}) — "
+                + "Editor-dependent tools may not work correctly until it is updated (Install/Update "
+                + "Plugin, in the Hades app's Projects view).",
+            PluginVersionSkew.Major =>
+                $"The attached plugin (v{pluginVersion}) is a different major version from this app "
+                + $"(v{appVersion}) — compatibility is not assured, and most Editor-dependent tools "
+                + "should be expected to fail until it is updated (Install/Update Plugin, in the "
+                + "Hades app's Projects view).",
+            _ => null,
+        };
     }
 
     static string DescribeLease(LeaseStatus lease)

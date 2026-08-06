@@ -158,6 +158,83 @@ public sealed class ProjectsResolveTests
         Assert.DoesNotContain(Assert.Single(result.Projects).Warnings, w => w.Code == "pluginVersionMismatch");
     }
 
+    // ---------------------------------------------------------------- warning: plugin version skew (spec #4 §6 - degrade, never refuse)
+
+    [Fact]
+    public void PluginOneMinorBehind_DegradesWithTheOrdinaryWarning_NotEscalated_TheSpecsOwnLiteralExample()
+    {
+        var result = ProjectsEndpoint.Resolve(
+            [Healthy() with { InstalledPluginVersion = "1.1.0", AppPluginVersion = "1.2.0" }], Now);
+
+        var warning = Assert.Single(Assert.Single(result.Projects).Warnings);
+        Assert.Equal("pluginVersionMismatch", warning.Code);
+        Assert.Equal(ControlSeverity.Warning, warning.Severity);
+        Assert.Equal(
+            "The installed Hades plugin (v1.1.0) does not match this app (v1.2.0). Editor-dependent tools may not work correctly until it is updated.",
+            warning.Message);
+        Assert.Equal("Use Install/Update Plugin for this project, then restart Unity if it is already running.", warning.Remedy);
+    }
+
+    [Fact]
+    public void PluginNewerThanApp_SameMajor_StillJustTheOrdinaryWarning_NotEscalatedMerelyForBeingNewer()
+    {
+        // Explicit decision (see the plan report): "newer than app" alone does not escalate -
+        // only a different MAJOR version does. A same-major newer plugin (e.g. a beta build
+        // ahead of this app's own bundled copy) degrades exactly like an older one.
+        var result = ProjectsEndpoint.Resolve(
+            [Healthy() with { InstalledPluginVersion = "1.3.0", AppPluginVersion = "1.2.0" }], Now);
+
+        var warning = Assert.Single(Assert.Single(result.Projects).Warnings);
+        Assert.Equal("pluginVersionMismatch", warning.Code);
+        Assert.Equal(ControlSeverity.Warning, warning.Severity);
+        Assert.Equal(
+            "The installed Hades plugin (v1.3.0) does not match this app (v1.2.0). Editor-dependent tools may not work correctly until it is updated.",
+            warning.Message);
+    }
+
+    [Fact]
+    public void PluginMajorVersionBehind_ProducesTheEscalatedWarning_WithTheExactLiteralMessage()
+    {
+        var result = ProjectsEndpoint.Resolve(
+            [Healthy() with { InstalledPluginVersion = "1.2.0", AppPluginVersion = "2.0.0" }], Now);
+
+        var warning = Assert.Single(Assert.Single(result.Projects).Warnings);
+        Assert.Equal("pluginVersionMismatch", warning.Code);
+        Assert.Equal(ControlSeverity.Warning, warning.Severity);
+        Assert.Equal(
+            "The installed Hades plugin (v1.2.0) is a different major version from this app (v2.0.0) — compatibility is not assured, and most Editor-dependent tools should be expected to fail until it is updated.",
+            warning.Message);
+        Assert.Equal("Use Install/Update Plugin for this project, then restart Unity if it is already running.", warning.Remedy);
+    }
+
+    [Fact]
+    public void PluginMajorVersionAhead_ThePluginFromTheFutureCase_AlsoProducesTheEscalatedWarning_NeverSilent()
+    {
+        // Spec #4 §6's own caution: "a plugin from the future may genuinely speak a protocol the
+        // app cannot" - the decision recorded here is that this STILL degrades rather than
+        // refusing the connection, but the warning says so plainly rather than using the same
+        // "may not work correctly" wording a same-major skew gets.
+        var result = ProjectsEndpoint.Resolve(
+            [Healthy() with { InstalledPluginVersion = "3.0.0", AppPluginVersion = "1.2.0" }], Now);
+
+        var warning = Assert.Single(Assert.Single(result.Projects).Warnings);
+        Assert.Equal("pluginVersionMismatch", warning.Code);
+        Assert.Equal(ControlSeverity.Warning, warning.Severity);
+        Assert.Equal(
+            "The installed Hades plugin (v3.0.0) is a different major version from this app (v1.2.0) — compatibility is not assured, and most Editor-dependent tools should be expected to fail until it is updated.",
+            warning.Message);
+        Assert.Equal("Use Install/Update Plugin for this project, then restart Unity if it is already running.", warning.Remedy);
+    }
+
+    [Fact]
+    public void UnparseablePluginVersion_ProducesNoMismatchWarning_NothingTrustworthyToCompare()
+    {
+        var result = ProjectsEndpoint.Resolve(
+            [Healthy() with { InstalledPluginVersion = "not-a-version", AppPluginVersion = "1.2.0" }], Now);
+
+        Assert.DoesNotContain(Assert.Single(result.Projects).Warnings, w => w.Code == "pluginVersionMismatch");
+    }
+
     // ---------------------------------------------------------------- warning: path missing
 
     [Fact]
@@ -371,12 +448,12 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         File.WriteAllText(Path.Combine(_projectRoot, "ProjectSettings", "ProjectVersion.txt"),
             $"m_EditorVersion: {version}\nm_EditorVersionWithRevision: {version} (0000000000)\n");
 
-    static Hello MakeHello(string unityVersion = "6000.3.2f1") => new()
+    static Hello MakeHello(string unityVersion = "6000.3.2f1", string pluginVersion = "1.2.0") => new()
     {
         ProjectGuid = ProjectGuid,
         ProjectPath = "/tmp/fake-unity-project",
         UnityVersion = unityVersion,
-        PluginVersion = "1.2.0",
+        PluginVersion = pluginVersion,
         ProcessId = 4321,
     };
 
@@ -385,7 +462,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
     /// registered into <see cref="_editorRegistry"/>, skipping EditorListener's token+hello wire
     /// handshake since this is testing <see cref="ProjectsEndpoint.BuildAsync"/>, not the
     /// handshake.</summary>
-    async Task<(StreamReader UnityReads, StreamWriter UnityWrites)> RegisterFakeEditorAsync(string unityVersion = "6000.3.2f1")
+    async Task<(StreamReader UnityReads, StreamWriter UnityWrites)> RegisterFakeEditorAsync(string unityVersion = "6000.3.2f1", string pluginVersion = "1.2.0")
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -398,7 +475,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         _toDispose.Add(client);
         _toDispose.Add(server);
 
-        var session = new EditorSession(server.GetStream(), MakeHello(unityVersion));
+        var session = new EditorSession(server.GetStream(), MakeHello(unityVersion, pluginVersion));
         _toDispose.Add(session);
         session.Start();
 
@@ -519,6 +596,66 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow);
 
         Assert.DoesNotContain(Assert.Single(result.Projects).Warnings, w => w.Code == "pluginVersionMismatch");
+    }
+
+    // ---------------------------------------------------------------- warning: plugin version - live Hello wins over the file scan
+
+    [Fact]
+    public async Task PluginVersionMismatch_LiveHelloWinsOverAFileThatNowMatches_AfterInstallWhileAttached()
+    {
+        // The exact staleness gap this task closes: installPlugin just wrote the APP's version to
+        // disk (simulated directly here via WriteInstalledPlugin), but the already-attached Editor
+        // is still running the OLD build until Unity restarts (InstallPluginAsync's own
+        // NeedsRestart=true case - see that method's doc comment). A file-scan-only comparison
+        // would wrongly read "matches" the instant the new bytes hit disk; the live Hello - what
+        // is actually loaded right now - must keep the warning alive until the Editor actually
+        // reconnects with a matching version.
+        _projects.AdoptAndIndex(_projectRoot);
+        WriteInstalledPlugin(RealAppPluginVersion); // file now matches - simulates a just-completed install
+        var (reads, writes) = await RegisterFakeEditorAsync(pluginVersion: "1.0.0"); // still the old build, pre-restart
+        var responder = RespondToNextProbeAsync(reads, writes);
+
+        var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow);
+        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var warning = Assert.Single(Assert.Single(result.Projects).Warnings, w => w.Code == "pluginVersionMismatch");
+        Assert.Equal(
+            $"The installed Hades plugin (v1.0.0) does not match this app (v{RealAppPluginVersion}). Editor-dependent tools may not work correctly until it is updated.",
+            warning.Message);
+    }
+
+    [Fact]
+    public async Task PluginVersionMatches_LiveHelloConfirmsIt_OverridingAStaleFileThatWouldDisagree()
+    {
+        // The mirror case: the file on disk happens to read as a different (stale) version, but
+        // the live, connected Editor's own Hello - what is actually running right now - matches
+        // the app. No warning: live truth wins over a stale file in either direction, not just
+        // the "install just happened" one above.
+        _projects.AdoptAndIndex(_projectRoot);
+        WriteInstalledPlugin("1.0.0"); // stale/wrong file reading
+        var (reads, writes) = await RegisterFakeEditorAsync(pluginVersion: RealAppPluginVersion); // actually running the current version
+        var responder = RespondToNextProbeAsync(reads, writes);
+
+        var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow);
+        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.DoesNotContain(Assert.Single(result.Projects).Warnings, w => w.Code == "pluginVersionMismatch");
+    }
+
+    [Fact]
+    public async Task PluginVersionMajorMismatch_RealAttachedEditor_TriggersTheEscalatedWarning()
+    {
+        _projects.AdoptAndIndex(_projectRoot); // never wrote Assets/Hades/ at all - live Hello alone is enough to compare
+        var (reads, writes) = await RegisterFakeEditorAsync(pluginVersion: "9.9.9");
+        var responder = RespondToNextProbeAsync(reads, writes);
+
+        var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow);
+        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var warning = Assert.Single(Assert.Single(result.Projects).Warnings, w => w.Code == "pluginVersionMismatch");
+        Assert.Equal(
+            $"The installed Hades plugin (v9.9.9) is a different major version from this app (v{RealAppPluginVersion}) — compatibility is not assured, and most Editor-dependent tools should be expected to fail until it is updated.",
+            warning.Message);
     }
 
     // ---------------------------------------------------------------- warning: path missing (real fixture)

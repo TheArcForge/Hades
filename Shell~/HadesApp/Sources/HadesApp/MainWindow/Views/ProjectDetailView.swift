@@ -66,8 +66,24 @@ struct ProjectDetailView: View {
     /// ever preemptively disabled. `Task { await ... }` is the standard SwiftUI shape for calling
     /// an `async` view-model method from a synchronous `Button` action - none of these five awaits
     /// its own completion before returning control to the button tap.
+    ///
+    /// **A vertical stack of full-width-ish buttons, not a single `HStack` row - reflow, not
+    /// `.fixedSize()`.** Memory's own action row (`MemoryProposalRowView`) fixed truncation with
+    /// `.fixedSize()` alone, which works there because three short labels ("Accept"/"Defer"/
+    /// "Dismiss…") always fit one row once they stop shrinking. Five buttons, one of them
+    /// "Install/Update Plugin", do not fit one row at every detail-pane width this app's own
+    /// resizable divider allows (proved live: widening the list column narrows this pane enough
+    /// that `.fixedSize()` alone would just push buttons past the pane's own edge instead of
+    /// shrinking their labels - trading silent text truncation for silent layout overflow, not
+    /// actually fixing anything). A `LazyVGrid` with adaptive columns was tried first, to pack
+    /// several short buttons per row when there's room; it never actually multi-columned in this
+    /// spot (proved live, twice, at the plenty-wide default) for reasons that resisted a clean
+    /// diagnosis in the time this warranted, so this stays a single column - a plain, boring
+    /// layout, but a correct one: every label stays fully readable at any pane width, which is
+    /// the actual defect, and this fills more of the detail pane's own otherwise-empty space
+    /// than a cramped grid would anyway.
     private var actions: some View {
-        HStack {
+        VStack(alignment: .leading, spacing: 8) {
             Button("Rebuild") {
                 Task { await viewModel.rebuildProject(productGuid: project.productGuid) }
             }

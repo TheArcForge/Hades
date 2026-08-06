@@ -40,6 +40,8 @@ public final class TracesViewModel {
     /// The currently selected call's span detail - see `TraceDetailFetchState`'s own doc comment.
     /// Populated only by `selectTrace(traceId:)`, never by `refresh()`: a selected call is a fixed
     /// historical record, not something that needs re-polling every tick the way `sequences` does.
+    /// Cleared by `selectProject(_:)`, though - see that method's own doc comment for why a project
+    /// switch, unlike an ordinary tick, must end a selected detail's lifetime.
     public private(set) var selectedTraceDetail: TraceDetailFetchState = .notSelected
 
     /// Every known project, from `GET /control/projects` - populates this view's own project Picker
@@ -196,8 +198,16 @@ public final class TracesViewModel {
     /// server resolves by id OR name and reports its own "unknown project" error either way, the
     /// same "Swift never re-derives an error the server already owns" discipline `selectTrace`/
     /// `selectDocument` hold to for their own `.server` failures.
+    ///
+    /// **Clears `selectedTraceDetail` first.** A selected call's span detail is scoped to the
+    /// project it was fetched from - carrying it across a project switch would keep showing one
+    /// project's trace while the Picker now reads another, misattributing it (confirmed live:
+    /// switching to a project with zero data still displayed the previous project's span).
+    /// `refresh()` itself never touches `selectedTraceDetail` (see that property's own doc comment) -
+    /// only a deliberate project change ends its lifetime, not a routine tick.
     public func selectProject(_ productGuid: String) async {
         projectFilter = productGuid
+        clearSelectedTrace()
         await refresh()
     }
 

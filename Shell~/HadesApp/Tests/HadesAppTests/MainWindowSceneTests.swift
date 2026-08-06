@@ -92,6 +92,29 @@ struct MainWindowSceneTests {
     }
 
     @Test(
+        "show() called again while the window is already open (e.g. \"Open Hades\" clicked twice) must NOT re-increment the coordinator - it is a refocus, not a second open, so one close is still enough to revert to accessory"
+    )
+    func reopeningAnAlreadyOpenWindowDoesNotDoubleIncrementTheCoordinator() {
+        var policies: [NSApplication.ActivationPolicy] = []
+        let viewModel = MainWindowViewModel(supervisor: FakeCoreSupervisor(state: .notStarted))
+        let scene = MainWindowScene(
+            viewModel: viewModel,
+            makeWindow: { NSWindow() },
+            focusWindow: { _ in },
+            activationCoordinator: ActivationPolicyCoordinator(setActivationPolicy: { policies.append($0) })
+        )
+
+        scene.show()  // first open
+        scene.show()  // "Open Hades" clicked again while already open - a refocus, not a new open
+        #expect(policies == [.regular], "reopening an already-visible window must not push .regular a second time")
+
+        scene.windowWillClose(Notification(name: NSWindow.willCloseNotification))
+        #expect(
+            policies == [.regular, .accessory],
+            "only one window was ever actually opened, so one close must be enough to revert")
+    }
+
+    @Test(
         "closing the main window while Settings (sharing the SAME coordinator) is still open does NOT revert to accessory - the Task 2 edge case Task 7 fixes"
     )
     func activationPolicyStaysRegularWhileASharedWindowIsStillOpen() {

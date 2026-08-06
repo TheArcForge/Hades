@@ -73,6 +73,13 @@ struct TracesView: View {
     var body: some View {
         NavigationSplitView {
             content
+                // Wider than SwiftUI's own default sidebar ideal - see `TraceSequenceRowView`'s own
+                // doc comment for the layout half of the sequence-legibility fix this pairs with:
+                // wrapping alone still means a long `pattern` needs many lines at a narrow width,
+                // and this is the one column-width knob Task 5 left at the default. A wider default
+                // here means fewer wrapped lines per sequence at the window's own default size,
+                // without the user ever dragging the divider - spec #3 §3.3's own bar.
+                .navigationSplitViewColumnWidth(min: 360, ideal: 460, max: 640)
         } detail: {
             TraceDetailView(state: viewModel.selectedTraceDetail)
         }
@@ -172,10 +179,17 @@ struct TracesView: View {
     @ViewBuilder
     private var sequencesList: some View {
         if viewModel.sequences.isEmpty {
+            // `.frame(maxWidth/maxHeight: .infinity)` - without it, this view's own ideal size is
+            // just its icon+title+description, so the `VStack` in `content` above sizes to fit
+            // (filters + divider + picker + this) instead of filling the column, and the whole
+            // block ends up vertically centered in the leftover space - the filters visibly jump
+            // down from where they sit when `List` (which IS greedy) is showing instead. Matches
+            // `List`'s own greedy sizing so switching tabs never moves the filters above it.
             ContentUnavailableView(
                 "No Sequences Yet", systemImage: "point.3.connected.trianglepath.dotted",
                 description: Text("Tool calls will appear here, grouped into sequences, once tracing records some.")
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List {
                 if viewModel.sequencesTruncated {
@@ -204,7 +218,9 @@ struct TracesView: View {
     @ViewBuilder
     private var failuresList: some View {
         if viewModel.failures.isEmpty {
+            // See `sequencesList`'s own comment on this modifier - same fix, same reason.
             ContentUnavailableView("No Failures", systemImage: "checkmark.circle")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List(viewModel.failures, id: \.traceId, selection: $selectedTraceId) { failure in
                 VStack(alignment: .leading, spacing: 2) {
@@ -230,7 +246,9 @@ struct TracesView: View {
     @ViewBuilder
     private var slowList: some View {
         if viewModel.slowTools.isEmpty {
+            // See `sequencesList`'s own comment on this modifier - same fix, same reason.
             ContentUnavailableView("No Data Yet", systemImage: "gauge")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List(viewModel.slowTools, id: \.tool) { row in
                 VStack(alignment: .leading, spacing: 2) {

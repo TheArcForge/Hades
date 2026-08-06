@@ -15,7 +15,16 @@ import SwiftUI
 /// `viewModel.settings`, printed verbatim: `mcpPort.message` already states the conflict AND its
 /// actionable remedy in one core-authored sentence (see that field's own doc comment on
 /// `Hades.Server.Control.McpPortSetting`) - this view never re-derives "in use" from `inUse` itself
-/// or paraphrases the message.
+/// or paraphrases the message. Both read-only rows carry the same `.opacity(0.5)` dimming cue,
+/// applied directly to each row rather than trusted to `.disabled(true)` alone - see the Low Power
+/// Mode `Toggle`'s own comment for why.
+///
+/// **One further, narrower exception lives inside the Resource Guards section.** Thermal state's
+/// icon is a picture-only decision this view makes itself (`thermalStateSymbolName`, below); the
+/// word next to it comes from `ThermalStateDisplay.text(for:)` in `ShellFacts/`, the one place in
+/// this entire app explicitly authorised to map an enum to display text in Swift - see that type's
+/// own doc comment for exactly why `ProcessInfo.ThermalState`, and only that enum, may cross
+/// "Swift renders, .NET decides".
 ///
 /// **Unity Hub discovery opt-in and update channel are not rendered here.** Both remain a real API
 /// gap, unchanged from Plan 11's own decision (Hub discovery is "its own piece of work" with no
@@ -58,24 +67,44 @@ struct SettingsView: View {
                 // A read-only OS fact rendered via the system's own Toggle chrome - no Swift-authored
                 // "On"/"Off" text, and no action: this is not something the user sets HERE, it is
                 // whatever macOS itself currently reports.
+                //
+                // **`.opacity`, not `.disabled` alone.** Confirmed live: `.disabled(true)` by itself
+                // left this toggle pixel-for-pixel identical to the interactive "Launch Hades at
+                // Login" toggle above it - correct in the accessibility tree (`enabled=false`) but no
+                // cue a sighted user could see before clicking it. The dimming is a rendering-only
+                // decision about how an already-disabled control is drawn, never a change to the
+                // value itself or a new derived string, so it stays inside this row's own carve-out.
                 Toggle("Low Power Mode", isOn: .constant(viewModel.isLowPowerModeEnabled))
                     .disabled(true)
+                    .opacity(0.5)
+                // Thermal State now pairs the icon with its own display word - a narrow, explicitly
+                // authorised exception to this row's own carve-out (see this view's own class doc
+                // comment, and `ThermalStateDisplay`'s own doc comment in
+                // `ShellFacts/ThermalStateDisplay.swift`, for exactly why `ProcessInfo.ThermalState`,
+                // and only that enum, may cross "Swift renders, .NET decides"). `.opacity(0.5)`
+                // matches Low Power Mode directly above: the same read-only OS fact, rendered via a
+                // non-interactive control, gets the same dimming cue for the same reason - see that
+                // Toggle's own comment.
                 LabeledContent("Thermal State") {
-                    Image(systemName: thermalStateSymbolName)
+                    Label(ThermalStateDisplay.text(for: viewModel.thermalState), systemImage: thermalStateSymbolName)
                 }
+                .opacity(0.5)
             }
         }
         .formStyle(.grouped)
         .frame(minWidth: 420, minHeight: 340)
     }
 
-    /// The one picture-only decision this view makes about `ProcessInfo.ThermalState` - an
-    /// exhaustive, fixed-at-compile-time switch, never a text label ("Fair", "Hot", ...) - the same
-    /// "an icon is the only display this type invents" contract
-    /// `StatusIcon.symbolName(for state: OperationState)` already holds every Control-API enum to,
-    /// applied here to the one Swift-owned OS enum in this whole app. `@unknown default` because a
-    /// future OS could add a case this build does not recognise - the same "never crash on an
-    /// unrecognised value" discipline `ControlEnum.unknownFallback` holds server-resolved enums to.
+    /// The picture-only decision this view makes about `ProcessInfo.ThermalState` - an exhaustive,
+    /// fixed-at-compile-time switch, never a text label itself - the same "an icon is the only
+    /// display this type invents" contract `StatusIcon.symbolName(for state: OperationState)`
+    /// already holds every Control-API enum to, applied here to the one Swift-owned OS enum in this
+    /// whole app. `@unknown default` because a future OS could add a case this build does not
+    /// recognise - the same "never crash on an unrecognised value" discipline
+    /// `ControlEnum.unknownFallback` holds server-resolved enums to. The word sitting next to this
+    /// icon in the Resource Guards row comes from `ThermalStateDisplay.text(for:)` instead
+    /// (`ShellFacts/ThermalStateDisplay.swift`) - a separate, narrowly authorised exception to
+    /// spec #3 §1; this property's own job stays picture-only.
     private var thermalStateSymbolName: String {
         switch viewModel.thermalState {
         case .nominal: return "thermometer.low"

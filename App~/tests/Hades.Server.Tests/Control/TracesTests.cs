@@ -520,6 +520,37 @@ public sealed class TracesEndpointHttpTests : IDisposable
     }
 
     [Fact]
+    public async Task SlowTools_AverageDurationMs_IsRoundedToOneDecimalPlace_NeverAManyDigitDouble()
+    {
+        // Spec #3 §1: "Swift renders, .NET decides" - AVG(total_duration_ms) is a genuine SQL
+        // average and does not divide evenly for these three durations (56/3 =
+        // 18.666666666666668 raw), the exact shape that reached the shell as a 14-decimal-place
+        // double before this fix (TracesView prints averageDurationMs verbatim via plain string
+        // interpolation, so whatever precision reaches the wire is exactly what a user sees).
+        using (var store = TraceStore.Open(_projects.Paths.TracesDb(ProjectGuid)))
+        {
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            RecordCall(store, "propose_memory_update", now, now + 18, ok: true);
+            RecordCall(store, "propose_memory_update", now, now + 18, ok: true);
+            RecordCall(store, "propose_memory_update", now, now + 20, ok: true);
+        }
+
+        using var listener = new ControlListener(ConnectionFilePath, projects: _projects);
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Get, $"/control/traces/slow?project={ProjectGuid}", listener.Token));
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var tool = Assert.Single(body.GetProperty("tools").EnumerateArray());
+        // The raw JSON token itself, not a tolerance-based double comparison - this is what a
+        // client actually receives and, per spec #1, must be able to render with no formatting
+        // decision of its own. 18.666666666666668 rounds to 18.7.
+        Assert.Equal("18.7", tool.GetProperty("averageDurationMs").GetRawText());
+    }
+
+    [Fact]
     public async Task Failures_RealTraceStoreData_IncludesTheErrorMessage_ActionableNotOpaque()
     {
         using (var store = TraceStore.Open(_projects.Paths.TracesDb(ProjectGuid)))

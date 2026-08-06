@@ -149,6 +149,15 @@ public sealed class EditorListener : IDisposable
                 return;
             }
 
+            // Hello.PluginVersion is deliberately never inspected here - not an oversight. Spec #4
+            // §6: "degrades rather than refuses... silent refusal on version skew is how the
+            // current support burden started." A well-formed Hello with a non-empty ProjectGuid
+            // registers regardless of what it reports for PluginVersion - one minor behind, a
+            // major version apart in either direction, even empty/unparseable. Version-skew
+            // handling (the warning, and offering an in-place update of Assets/Hades/) happens
+            // entirely above this transport layer, in ProjectsEndpoint/SummaryTools - see
+            // Editors.PluginVersionSkew's own class doc comment, and EditorListenerTests'
+            // dedicated proof that the refusal path is not taken.
             Register(client, stream, hello);
         }
         catch (Exception e) when (e is IOException or ObjectDisposedException or SocketException or OperationCanceledException)

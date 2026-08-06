@@ -121,7 +121,20 @@ public sealed record SlowToolRow
 {
     [JsonPropertyName("tool")] public required string Tool { get; init; }
     [JsonPropertyName("callCount")] public required int CallCount { get; init; }
+
+    /// <summary>A genuine SQL <c>AVG(total_duration_ms)</c> (see <see cref="TraceStore.SlowestTools"/>)
+    /// - a raw double from that query can carry a full 17 significant digits (e.g.
+    /// <c>57.99339207048458</c>) whenever the underlying durations do not divide evenly, which a
+    /// shell rendering it verbatim would print exactly as received. Rounded to one decimal place
+    /// here (see <see cref="TracesEndpoint.GetSlowTools"/>) so the value that reaches the wire is
+    /// already fit to display - spec #1's "Swift renders, .NET decides" - rather than a shell that
+    /// may not format numbers having to choose a precision itself. One decimal, not zero: these
+    /// durations are typically single- to low-double-digit milliseconds, where a nearby pair (e.g.
+    /// 5.3 vs 5.7) is exactly the signal this Slow tab exists to surface, and rounding away the
+    /// only fractional digit would erase it. <see cref="MaxDurationMs"/> alongside it needs no such
+    /// treatment - it is a single sample's own already-whole-millisecond value, never an average.</summary>
     [JsonPropertyName("averageDurationMs")] public required double AverageDurationMs { get; init; }
+
     [JsonPropertyName("maxDurationMs")] public required long MaxDurationMs { get; init; }
 }
 
@@ -267,7 +280,7 @@ public static class TracesEndpoint
             {
                 Tool = s.ToolName,
                 CallCount = s.CallCount,
-                AverageDurationMs = s.AverageDurationMs,
+                AverageDurationMs = Math.Round(s.AverageDurationMs, 1),
                 MaxDurationMs = s.MaxDurationMs,
             }).ToList(),
         });
