@@ -68,7 +68,35 @@ namespace Hades.Tools
         internal static JsonValue CreatePrefab(ReloadGate gate, JsonValue @params) =>
             LeaseScope.Run(gate, "prefab.create", () => DoCreate(@params));
 
-        /// <summary>Lease-free core - see this class's own doc comment ("Plan 10 Task 2").</summary>
+        /// <summary>Lease-free core - see this class's own doc comment ("Plan 10 Task 2").
+        ///
+        /// docs/backlog/mutation-tool-defects.md's Defect 3: this used to call
+        /// PrefabUtility.SaveAsPrefabAsset - Unity's DISCONNECTED save - which left the
+        /// 'gameObjectPath' GameObject as a plain, unconnected object in the scene. The obvious way
+        /// to build a nested prefab - create a leaf, reparent it under a new root, create the parent
+        /// from that root - then silently produced a flattened, disconnected copy (no PrefabInstance
+        /// block, no m_SourcePrefab) instead of a real nested instance, with every step reporting
+        /// success and nothing warning. <see cref="DoCreateVariant"/> already got this right for
+        /// variants (SaveAsPrefabAssetAndConnect); this now follows the identical pattern.
+        ///
+        /// The connect side effect is real, not cosmetic, and is exactly what a caller means by
+        /// "create a prefab from this object": 'go' itself becomes a connected Prefab instance in
+        /// the scene - per Unity's own documented behaviour for this overload, "the original object
+        /// remains in the scene but becomes linked to the newly created Prefab Asset" (it is not
+        /// destroyed/replaced with a new instance, so an existing reference to 'go' stays valid).
+        ///
+        /// InteractionMode.AutomatedAction, not UserAction - matching DoCreateVariant exactly, for
+        /// two reasons specific to this call site: (1) prefab.* is class 2, deliberately outside
+        /// Unity's interactive Undo model (see CommandTable's MutatingMethods doc comment), and
+        /// prefab.create is not a MutatingMethods entry, so - unlike a class-1 mutation - nothing
+        /// pre-increments its Undo group before this runs. Recording the connect step under
+        /// UserAction would land it in whatever group happens to already be current (possibly a
+        /// stale group left by an unrelated prior call), exactly the cross-call group-bleeding
+        /// Task 7's Defect 3 fixed once already for class 1 (see CommandTableUndoGroupingTests) -
+        /// AutomatedAction sidesteps this by recording nothing here, the same tradeoff
+        /// DoCreateVariant already made for its own (temporary, destroyed-immediately) instance.
+        /// (2) AutomatedAction never shows a confirmation dialog; UserAction can, which would hang
+        /// a headless/batchmode Editor with nobody able to click it.</summary>
         internal static JsonValue DoCreate(JsonValue @params)
         {
             var goPath = JsonParams.RequireString(@params, "gameObjectPath", "prefab.create");
@@ -78,7 +106,7 @@ namespace Hades.Tools
 
             AssetFolders.EnsureExists(AssetFolders.DirectoryName(assetPath));
 
-            var prefab = PrefabUtility.SaveAsPrefabAsset(go, assetPath, out var success);
+            var prefab = PrefabUtility.SaveAsPrefabAssetAndConnect(go, assetPath, InteractionMode.AutomatedAction, out var success);
             if (!success || prefab == null)
             {
                 throw new ArgumentException(
@@ -241,12 +269,14 @@ namespace Hades.Tools
             {
                 result.SetProperty("note", JsonValue.String(
                     "'unappliedProperties' lists only this prefab instance's own root-level 'default override' "
-                    + "properties (its name and/or Transform position/rotation) - Unity NEVER writes these back "
-                    + "to a prefab asset via any apply API, regardless of caller, so this is expected and not a "
-                    + "sign anything went wrong with this call. If you specifically need to change the prefab "
+                    + "properties (its name and/or Transform position/rotation) - for a base prefab, Unity does "
+                    + "not write these back via any apply API, so this is expected and not a sign anything went "
+                    + "wrong with this call. (Observed to behave differently for Prefab Variants, where a root "
+                    + "position change has reached the variant's own modification list on disk - this "
+                    + "restriction is not confirmed universal.) If you specifically need to change the prefab "
                     + "asset's own default name, position, or rotation, edit the prefab asset directly instead "
-                    + "(prefab_open_editing + prefab_edit_property + prefab_save_editing), rather than moving an "
-                    + "instance in a scene and applying it."));
+                    + "(prefab_apply with one or more 'editProperty' operations), rather than moving an instance "
+                    + "in a scene and applying it."));
             }
 
             return result;
@@ -395,7 +425,9 @@ namespace Hades.Tools
                 if (_editingRoot != null)
                 {
                     throw new InvalidOperationException(
-                        "A prefab is already open for editing: '" + _editingPrefabPath + "'. Call prefab_save_editing first.");
+                        "A prefab is already open for editing: '" + _editingPrefabPath + "'. Finish that session "
+                        + "first, or use prefab_apply with one or more 'editProperty' operations instead, which "
+                        + "needs no open/close session at all.");
                 }
 
                 if (AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath) == null)
@@ -420,7 +452,9 @@ namespace Hades.Tools
             return LeaseScope.Run(gate, "prefab.save_editing", () =>
             {
                 if (_editingRoot == null)
-                    throw new InvalidOperationException("No prefab is currently open for editing. Call prefab_open_editing first.");
+                    throw new InvalidOperationException(
+                        "No prefab is currently open for editing. Use prefab_apply with one or more "
+                        + "'editProperty' operations instead, which needs no open/close session at all.");
 
                 var path = _editingPrefabPath;
                 try
@@ -530,8 +564,8 @@ namespace Hades.Tools
                 var holder = gate.CurrentLeaseId;
                 throw new InvalidOperationException(
                     "'" + operationName + "' needs Unity's reload lock, but it is currently held by lease '" + holder
-                    + "' (likely an in-progress BeginScriptEditing session). Call lease_release or wait for it to "
-                    + "finish, then retry.");
+                    + "' (likely an in-progress script_editing_session). Call script_editing_session with "
+                    + "action 'end', or wait for it to finish, then retry.");
             }
 
             try

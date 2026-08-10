@@ -76,4 +76,5 @@ struct StatusIconTests {
         #expect(StatusIcon.symbolName(for: content) == StatusIcon.symbolName(for: .leaseHeld))
         #expect(StatusIcon.symbolName(for: content) == "lock.circle.fill")
     }
+
 }

@@ -25,9 +25,9 @@ Do NOT activate for single-player AI behavior, local input handling, or physics-
 Before making recommendations:
 
 1. **Detect the networking framework already in use:**
-   - Call `find_components_using_pattern("NetworkObject")` — presence indicates Netcode for GameObjects
-   - Call `find_components_using_pattern("NetworkBehaviour")` — used by both NGO and Mirror; cross-reference with next check
-   - Call `find_components_using_pattern("NetworkIdentity")` — Mirror-specific; confirms Mirror if found
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "NetworkObject", edgeTargetKind: "Class")` — presence indicates Netcode for GameObjects
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "NetworkBehaviour", edgeTargetKind: "Class")` — used by both NGO and Mirror; cross-reference with next check
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "NetworkIdentity", edgeTargetKind: "Class")` — Mirror-specific; confirms Mirror if found
    - Call `search_by_name("*Network*")` to surface any network-related scripts, managers, or config assets
 
 2. **Check documented decisions in memory:**
@@ -660,5 +660,5 @@ instance.Spawn();
 
 - Related skills: `hades:unity-architect`, `hades:component-design`, `hades:unity-performance`
 - Review skill: `hades:unity-reviewer`
-- Hades MCP tools: `find_components_using_pattern`, `search_by_name`, `recall_memory`, `propose_memory_update`
+- Hades MCP tools: `graph_query`, `search_by_name`, `recall_memory`, `propose_memory_update`
 - Unity docs: [Netcode for GameObjects](https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.0/manual/index.html), [NetworkVariable](https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.0/api/Unity.Netcode.NetworkVariable-1.html), [Unity Gaming Services Lobby](https://docs.unity.com/lobby/en-us/manual/unity-lobby-service)

@@ -25,12 +25,12 @@ Before making recommendations, gather project-specific context so advice is cali
 
 1. **Understand the project scale and render pipeline:**
    - Call `get_project_summary()` — reveals render pipeline (URP/HDRP/Built-in), platform target, scene count, and asset volumes. A mobile URP project requires very different advice than a PC HDRP project.
-   - Call `analyze_render_pipeline()` — shows current rendering setup, active features, SRP Batcher status, and any custom passes that affect draw call counts.
+   - Call `project_settings(section: "renderPipeline")` — confirms which pipeline is active and its pipeline asset path. Hades has no tool that reports SRP Batcher status, active rendering features, or custom passes — check those directly in Project Settings > Graphics or the Frame Debugger.
 
 2. **Find hot-path candidates:**
-   - Call `find_components_using_pattern("Update")` — lists MonoBehaviours with Update methods. Every entry is a hot-path candidate. Large counts on mobile are an immediate concern.
-   - Call `find_components_using_pattern("FixedUpdate")` — physics-side hot paths.
-   - Call `find_components_using_pattern("LateUpdate")` — camera/IK hot paths.
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "Update", edgeTargetKind: "Class")` — lists components referencing a script whose name matches "Update". Every entry is a hot-path candidate. Large counts on mobile are an immediate concern.
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "FixedUpdate", edgeTargetKind: "Class")` — physics-side hot paths.
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "LateUpdate", edgeTargetKind: "Class")` — camera/IK hot paths.
 
 3. **Check documented performance targets:**
    - Call `recall_memory("performance optimization budget")` — retrieves any frame budgets, platform targets, or optimization decisions already recorded by the team.
@@ -38,8 +38,8 @@ Before making recommendations, gather project-specific context so advice is cali
 
 4. **Adapt recommendations based on findings:**
    - If `get_project_summary()` shows mobile target → apply mobile budgets and pooling thresholds.
-   - If `analyze_render_pipeline()` shows SRP Batcher already enabled → skip enabling advice, focus on shader compatibility instead.
-   - If `find_components_using_pattern("Update")` returns > 50 components → staggered update pattern is mandatory, not optional.
+   - If SRP Batcher is already enabled (check Project Settings > Graphics — Hades has no tool that reports this) → skip enabling advice, focus on shader compatibility instead.
+   - If `graph_query(edgeKind: "references", edgeTargetNamePattern: "Update", edgeTargetKind: "Class")` returns > 50 components → staggered update pattern is mandatory, not optional.
 
 ## Decision Framework
 
@@ -717,8 +717,8 @@ private void Update()
 - Related skills: `hades:unity-architect` (condensed performance section, architecture trade-offs), `hades:unity-reviewer` (catches performance anti-patterns during code review)
 - Hades MCP tools used in this skill:
   - `get_project_summary` — render pipeline, platform, asset scale
-  - `analyze_render_pipeline` — active rendering features, SRP Batcher status
-  - `find_components_using_pattern` — hot-path MonoBehaviour discovery
+  - `project_settings` (section: "renderPipeline") — confirms which pipeline is active; Hades has no tool for SRP Batcher status or active rendering features
+  - `graph_query` — hot-path MonoBehaviour discovery (edgeKind: "references", edgeTargetNamePattern, edgeTargetKind: "Class")
   - `recall_memory` — documented performance targets and decisions
   - `propose_memory_update` — record new performance decisions for the team
 - Unity docs: [Unity Profiler](https://docs.unity3d.com/6000.0/Documentation/Manual/Profiler.html), [Frame Debugger](https://docs.unity3d.com/6000.0/Documentation/Manual/frame-debugger-window.html), [Memory Profiler](https://docs.unity3d.com/Packages/com.unity.memoryprofiler@latest), [SRP Batcher](https://docs.unity3d.com/6000.0/Documentation/Manual/SRPBatcher.html), [GPU Instancing](https://docs.unity3d.com/6000.0/Documentation/Manual/GPUInstancing.html), [Physics.RaycastNonAlloc](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/Physics.RaycastNonAlloc.html)

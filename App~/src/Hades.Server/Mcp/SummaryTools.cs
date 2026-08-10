@@ -59,7 +59,11 @@ public sealed record CharonStatusResult
     /// a believed-held lease survives a disconnect until the next reconnect reconciles it (see
     /// <see cref="Editors.LeaseRegistry.ReconcileAsync"/>), so a stale "still held" belief is
     /// reported here rather than hidden just because nobody is attached to ask right now — a held
-    /// reload lock must never be silent.</summary>
+    /// reload lock must never be silent. The other direction is covered too: this reads false once
+    /// the believed lease's own reported TTL has passed, even with the Editor still attached and no
+    /// lease.release ever called — see <see cref="Editors.LeaseRegistry.Get"/>'s self-expiry, which
+    /// this property reads through unchanged. Without that, this field would keep reading true for
+    /// a lock the plugin's own TTL watchdog had already released, silently, minutes ago.</summary>
     [JsonPropertyName("leaseHeld")] public required bool LeaseHeld { get; init; }
     [JsonPropertyName("leaseId")] public string? LeaseId { get; init; }
     [JsonPropertyName("leaseHeldForSeconds")] public double? LeaseHeldForSeconds { get; init; }

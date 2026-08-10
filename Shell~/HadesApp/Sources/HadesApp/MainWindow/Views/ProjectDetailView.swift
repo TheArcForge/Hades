@@ -25,6 +25,7 @@ import SwiftUI
 struct ProjectDetailView: View {
     let project: ProjectRow
     let viewModel: ProjectsViewModel
+    let migrationCleanupViewModel: MigrationCleanupViewModel
     @State private var isConfirmingRemove = false
 
     var body: some View {
@@ -45,9 +46,47 @@ struct ProjectDetailView: View {
                     Divider()
                     warnings
                 }
+                migrationCleanup
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // Loads (and reloads, on a project switch - `.task(id:)` cancels the previous task and
+        // restarts whenever `id` changes) this ONE project's own offered v1.2 cleanup state -
+        // never polled, the same "user-initiated, once per project shown" shape
+        // `MemoryViewModel.selectDocument(name:)` already establishes. See
+        // `MigrationCleanupViewModel.loadProjectState(productGuid:)`'s own doc comment.
+        .task(id: project.productGuid) {
+            await migrationCleanupViewModel.loadProjectState(productGuid: project.productGuid)
+        }
+    }
+
+    /// The three `{productGuid}`-scoped `V12Cleanup` actions, each independently offered only when
+    /// `MigrationCleanupViewModel`'s own detection-gated dictionary carries an entry for THIS
+    /// project - "the detection result drives what is offered: do not offer to clean a file that is
+    /// not there." Renders nothing at all (not even the "v1.2 Cleanup" heading) when none of the
+    /// three apply, the ordinary case for any project that was never on v1.2.
+    @ViewBuilder
+    private var migrationCleanup: some View {
+        let claudeMd = migrationCleanupViewModel.claudeMdState[project.productGuid]
+        let manifest = migrationCleanupViewModel.manifestState[project.productGuid]
+        let mcpConfig = migrationCleanupViewModel.mcpConfigState[project.productGuid]
+
+        if claudeMd != nil || manifest != nil || mcpConfig != nil {
+            Divider()
+            VStack(alignment: .leading, spacing: 12) {
+                Text("v1.2 Cleanup")
+                    .font(.headline)
+                if let claudeMd {
+                    MigrationCleanClaudeMdRow(productGuid: project.productGuid, result: claudeMd, viewModel: migrationCleanupViewModel)
+                }
+                if let manifest {
+                    MigrationCleanManifestRow(productGuid: project.productGuid, result: manifest, viewModel: migrationCleanupViewModel)
+                }
+                if let mcpConfig {
+                    MigrationCleanMcpConfigRow(productGuid: project.productGuid, result: mcpConfig, viewModel: migrationCleanupViewModel)
+                }
+            }
         }
     }
 

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Hades.Core;
+using Hades.Core.Graph;
 using Hades.Core.Storage;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,6 +26,7 @@ public class QueryToolsTests : IClassFixture<WebApplicationFactory<Program>>, ID
     readonly string _projectRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
 
     const string Header = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n";
+    const string ProjectGuid = "aaaabbbbccccddddeeeeffff00001111";
     const string ScriptGuid = "aaaa1111aaaa1111aaaa1111aaaa1111";
     const string OrphanGuid = "cccc3333cccc3333cccc3333cccc3333";
     const string PrefabGuid = "bbbb2222bbbb2222bbbb2222bbbb2222";
@@ -41,7 +43,7 @@ public class QueryToolsTests : IClassFixture<WebApplicationFactory<Program>>, ID
     {
         Directory.CreateDirectory(Path.Combine(_projectRoot, "ProjectSettings"));
         File.WriteAllText(Path.Combine(_projectRoot, "ProjectSettings", "ProjectSettings.asset"),
-            "  productGUID: aaaabbbbccccddddeeeeffff00001111\n");
+            $"  productGUID: {ProjectGuid}\n");
 
         Write("Assets/Scripts/PlayerController.cs",
             "using UnityEngine;\npublic class PlayerController : MonoBehaviour { }", ScriptGuid);
@@ -104,6 +106,37 @@ public class QueryToolsTests : IClassFixture<WebApplicationFactory<Program>>, ID
 
         var hit = Assert.Single(structured.GetProperty("results").EnumerateArray());
         Assert.Equal("PlayerController", hit.GetProperty("name").GetString());
+    }
+
+    // ---------------------------------------------------------------- defect 2: truncated lies at limit=500
+    //
+    // docs/backlog/graph-correctness-defects.md defect 2 / Plan 15 Task 1. graph_query asks for
+    // limit+1 rows to detect truncation honestly (see the "limit + 1" comment in GraphQuery
+    // below), but GraphDatabase.QueryGraph's own internal ceiling used to be exactly graph_query's
+    // own documented maximum (500), so the +1 sentinel row was silently clamped away at exactly
+    // that limit. 600 real graph nodes are seeded directly into this test's already-adopted
+    // project's graph database - bypassing the (unrelated, already-proven-correct) Roslyn indexer,
+    // since this defect is pure limit/clamp arithmetic, not an indexing question.
+
+    [Fact]
+    public async Task GraphQuery_AtTheDocumentedMaxLimit_ReportsTruncatedHonestlyWhenMoreThan500RealMatchesExist()
+    {
+        var paths = _factory.Services.GetRequiredService<AppPaths>();
+        using (var db = GraphDatabase.Open(paths.GraphDb(ProjectGuid)))
+        {
+            db.UpsertNodes(Enumerable.Range(0, 600)
+                .Select(i => new GraphNode { Kind = "Class", Name = $"Bulk{i}", Path = $"Assets/Bulk/Bulk{i}.cs", FileId = 0 })
+                .ToList());
+        }
+
+        var structured = Structured(await McpTestClient.CallTool(_factory, "graph_query",
+            new { pathPrefix = "Assets/Bulk", limit = 500 }));
+
+        // totalReturned must never exceed the caller's own requested limit - the sentinel is for
+        // detection, not delivery.
+        Assert.Equal(500, structured.GetProperty("totalReturned").GetInt32());
+        Assert.True(structured.GetProperty("truncated").GetBoolean(),
+            "600 real matches exist but only 500 were requested - truncated must be true");
     }
 
     // ---------------------------------------------------------------- the 6 absorbed searches, enumerated
@@ -584,6 +617,13 @@ public class QueryToolsTests : IClassFixture<WebApplicationFactory<Program>>, ID
 
     public void Dispose()
     {
+        // See EditorToolTestBase.Dispose's own comment: _factory is a fresh per-test
+        // WebApplicationFactory (WithWebHostBuilder above) whose own background services
+        // (EditorListener's live accept loop, ControlListener's, ObservationService's periodic
+        // sweep) keep running, and can still be touching _appRoot/_projectRoot, until the host
+        // itself is disposed - which must happen before the recursive delete below, not after.
+        _factory.Dispose();
+
         foreach (var dir in new[] { _appRoot, _projectRoot })
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
     }

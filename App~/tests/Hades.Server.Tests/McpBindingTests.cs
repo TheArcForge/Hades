@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using Hades.Server.Control;
 using Hades.Server.Mcp;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
@@ -97,6 +98,32 @@ public sealed class McpBindingResolveBoundPortTests
 /// </summary>
 public sealed class McpBindingRealBindTests
 {
+    /// <summary>Proves the app's own real bind reaches port 7823 when nothing else holds it -
+    /// SKIPPING, not failing, when something already does. Port 7823 is Hades' fixed, documented
+    /// MCP port (see this class's own doc comment); it is deterministically held whenever the real
+    /// app is running, which is the app's entire INTENDED state (launches at login, stays up) -
+    /// see docs/backlog/dotnet-tests-write-to-real-app-data.md item 2 for the full history. A real
+    /// bind is this test's whole reason to exist (<see cref="McpBinding.ResolveBindUrl"/> already
+    /// has its own pure, socket-free tests in <see cref="McpBindingResolveTests"/> above - this
+    /// class's unique value is proving that string actually reaches a live Kestrel bind), so there
+    /// is no way to prove that without attempting a real one. Skipping on exactly the collision a
+    /// healthy running app produces - rather than failing `dotnet test` deterministically for
+    /// every developer who has Hades open, which trains people to ignore a red suite - preserves
+    /// the real assertion for the cases that actually exercise it: CI, and a fresh checkout or a
+    /// machine where nothing is running yet.
+    ///
+    /// <para><b>Why an early return, not xUnit's own dynamic-skip API.</b> xUnit v2.9+ has a real
+    /// mechanism for exactly this (<c>throw Xunit.Sdk.SkipException.ForSkip(reason)</c>) - tried
+    /// first, and reverted: verified empirically against this project's actual pinned versions
+    /// (xunit.extensibility.core/assert 2.9.3, but xunit.runner.visualstudio 3.1.4 - a v3-era
+    /// adapter) that the resulting run is reported as FAILED, with the literal
+    /// <c>$XunitDynamicSkip$</c> marker token leaking into the console error message instead of
+    /// being recognized and translated to a Skipped result. That is the exact failure mode this
+    /// fix exists to remove, so shipping it would be worse than not trying. An early return with a
+    /// loud <see cref="Console.WriteLine(string)"/> - the same pattern every
+    /// <c>RealProject*SmokeTest.cs</c> in this directory already uses for "not exercised on this
+    /// run" - reports a genuine, verified-working Passed rather than a false Failed, and the
+    /// console line makes clear it did not actually exercise the bind.</para></summary>
     [Fact]
     public async Task NoExplicitAspNetCoreUrls_TheRealAppActuallyBindsPort7823()
     {
@@ -104,7 +131,21 @@ public sealed class McpBindingRealBindTests
         builder.WebHost.UseUrls(McpBinding.ResolveBindUrl(null));
         await using var app = builder.Build();
 
-        app.Start();
+        try
+        {
+            app.Start();
+        }
+        catch (IOException ex) when (ex.InnerException is AddressInUseException)
+        {
+            // Same exception shape McpBinding.Run itself matches (see that method's own doc
+            // comment) - Kestrel wraps the real bind failure in an IOException.
+            Console.WriteLine("[McpBindingRealBindTests] SKIPPED the real bind assertion: port 7823 " +
+                "is already in use - most likely the real Hades app is running, which is its normal, " +
+                "healthy state. Quit Hades (or run this on a machine/CI job where nothing is using " +
+                "7823) to actually exercise this test.");
+            return;
+        }
+
         try
         {
             var addresses = app.Services.GetRequiredService<IServer>()

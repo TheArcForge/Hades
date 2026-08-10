@@ -100,6 +100,12 @@ public class ProjectHandleTests : IClassFixture<WebApplicationFactory<Program>>,
 
     public void Dispose()
     {
+        // See EditorToolTestBase.Dispose's own comment: _factory is a fresh per-test
+        // WebApplicationFactory whose own background services can still be touching these
+        // directories until the host itself is disposed - which must happen before the
+        // recursive delete below.
+        _factory.Dispose();
+
         foreach (var dir in _projectRoots.Append(_appRoot))
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
     }

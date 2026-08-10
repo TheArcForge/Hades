@@ -218,23 +218,57 @@ public sealed class V12CleanupTests : IDisposable
     }
 
     [Fact]
-    public void CleanClaudeMd_NestedMarkers_RefusesEvenThoughDetectorReportsMarked()
+    public void CleanClaudeMd_NestedMarkers_DetectorReportsUnmarked_RefusesViaTheOrdinaryUnmarkedPath()
     {
-        // Two START occurrences and two END occurrences, overlapping: the detector's simple
-        // first-start/first-end pairing (see V12Detector.ReadClaudeMd) resolves this to a
-        // syntactically valid Shape.Marked block - but there is a SECOND start marker embedded
-        // inside it and a second end marker later in the file. Trusting the pairing blindly here
-        // would guess which pair is "the" block; cleanup must refuse instead.
+        // Two START occurrences and two END occurrences, overlapping: which pair is "the" block
+        // is genuinely ambiguous. V12Detector.ReadClaudeMd now agrees with this class's own
+        // multiplicity guard below and reports Unmarked rather than guessing - see
+        // V12DetectorTests.Detect_ClaudeMd_NestedOrDuplicateMarkers_FallsBackToUnmarkedRatherThanGuessing.
+        // Cleanup therefore refuses via the ordinary Unmarked branch here; the test right after
+        // this one proves the internal recount still independently catches the same shape if it
+        // were ever handed a stale Marked state instead (defense in depth stays, per this class's
+        // own doc comment, regardless of the detector now being honest).
         var content = "Notes\n\n" + Start + "\nInner A\n" + Start + "\nInner B\n" + End + "\nInner C\n" + End + "\nFinal\n";
         WriteClaudeMd(content);
 
         var state = DetectClaudeMd();
-        Assert.Equal(ClaudeMdShape.Marked, state.Shape); // documents the detector's actual behavior here
+        Assert.Equal(ClaudeMdShape.Unmarked, state.Shape); // the fix under test: no longer a false Marked
 
         var before = Snapshot(ClaudeMdPath);
         var result = V12Cleanup.CleanClaudeMd(_projectRoot, state, proceed: true);
 
         Assert.False(result.Removed);
+        AssertUnchanged(ClaudeMdPath, before);
+    }
+
+    [Fact]
+    public void CleanClaudeMd_StaleMarkedStateOverNestedMarkers_InternalGuardStillRefuses()
+    {
+        // Defense in depth: even if a caller hands CleanClaudeMd a Shape.Marked state for content
+        // that actually has multiple START/END markers - computed before the file changed, say,
+        // or some future detector regressing on this exact case - the multiplicity recount inside
+        // the Marked branch below must independently catch it and refuse, never trusting the
+        // passed-in Shape blindly. This is the guard the task that found this class's own
+        // multiplicity check insisted must stay regardless of whether V12Detector is honest.
+        var content = "Notes\n\n" + Start + "\nInner A\n" + Start + "\nInner B\n" + End + "\nInner C\n" + End + "\nFinal\n";
+        WriteClaudeMd(content);
+
+        // A Shape.Marked state pointing at the first START/END pair - exactly what the detector
+        // used to hand back for this content (see the test above) before it was fixed to agree
+        // with this guard.
+        var firstStart = content.IndexOf(Start, StringComparison.Ordinal);
+        var firstEnd = content.IndexOf(End, StringComparison.Ordinal);
+        var staleState = new ClaudeMdState
+        {
+            Shape = ClaudeMdShape.Marked,
+            MarkedBlock = new ClaudeMdMarkedBlock { Start = firstStart, End = firstEnd + End.Length },
+        };
+        var before = Snapshot(ClaudeMdPath);
+
+        var result = V12Cleanup.CleanClaudeMd(_projectRoot, staleState, proceed: true);
+
+        Assert.False(result.Removed);
+        Assert.Contains("more than one", result.Message, StringComparison.OrdinalIgnoreCase);
         AssertUnchanged(ClaudeMdPath, before);
     }
 
@@ -250,6 +284,48 @@ public sealed class V12CleanupTests : IDisposable
 
         Assert.False(result.Removed);
         AssertUnchanged(ClaudeMdPath, before);
+    }
+
+    // ---- the pre-action gap: a caller building a confirmation prompt needs to know whether
+    // content will remain BEFORE agreeing, not just learn it from the result after acting ----
+
+    [Fact]
+    public void CleanClaudeMd_UnmarkedPrefixThenMarkedBlock_NoGoAhead_ReportsRemainingContentTrue()
+    {
+        // Same hybrid shape as CleanClaudeMd_UnmarkedPrefixThenMarkedBlock_RemovesBlockButReportsRemainingContent
+        // above, but with proceed:false. RemainingContentOutsideBlock is a pure fact about the
+        // file's current content and the already-detected block offsets - it does not depend on
+        // whether a write is about to happen - so a dry run must report it exactly as accurately
+        // as an actual removal does. Before this fix, the no-go-ahead path never computed it at
+        // all and always reported false, regardless of the file's real shape.
+        const string unmarkedPrefix =
+            "# Hades — Agent Guidelines\n\n" +
+            "This is a Unity project with Hades installed. Old template revision, no markers.\n";
+        const string markedBlock =
+            "This is a Unity project with Hades installed. Newer template revision, with markers.\n";
+        WriteClaudeMd(unmarkedPrefix + Start + "\n" + markedBlock + End + "\n");
+        var before = Snapshot(ClaudeMdPath);
+
+        var result = V12Cleanup.CleanClaudeMd(_projectRoot, DetectClaudeMd(), proceed: false);
+
+        Assert.False(result.Removed);
+        Assert.True(result.RemainingContentOutsideBlock);
+        Assert.Contains("outside", result.Message, StringComparison.OrdinalIgnoreCase);
+        AssertUnchanged(ClaudeMdPath, before);
+    }
+
+    [Fact]
+    public void CleanClaudeMd_BlockIsEntireFile_NoGoAhead_RemainingContentIsFalse()
+    {
+        // The negative case, proven with the same rigor: a dry run must not OVER-report either -
+        // when the block genuinely is the whole file, RemainingContentOutsideBlock stays false
+        // before an action just as it does after one.
+        WriteClaudeMd(Start + "\nblock\n" + End);
+
+        var result = V12Cleanup.CleanClaudeMd(_projectRoot, DetectClaudeMd(), proceed: false);
+
+        Assert.False(result.Removed);
+        Assert.False(result.RemainingContentOutsideBlock);
     }
 
     // ---- defensive: a stale/mismatched state must never cause deleting the wrong bytes ----
@@ -626,6 +702,73 @@ public sealed class V12CleanupTests : IDisposable
 
         Assert.False(result.Removed);
         AssertUnchanged(path, before);
+    }
+
+    // ---- OccurrencesFound: this file has no companion detector (it is global, not per-project -
+    // see this class's own doc comment), so a dry run's OccurrencesFound is the ONLY way a caller
+    // can tell "there is a hades entry to offer cleaning up" apart from "there is nothing here",
+    // mirroring ManifestCleanupResult.OccurrencesFound exactly ----
+
+    [Fact]
+    public void CleanClaudeDesktopConfig_NoGoAhead_ReportsOccurrencesFoundWithoutRemoving()
+    {
+        var path = WriteClaudeDesktopConfig("""{ "mcpServers": { "hades": { "command": "node" } } }""");
+
+        var result = V12Cleanup.CleanClaudeDesktopConfig(path, proceed: false);
+
+        Assert.False(result.Removed);
+        Assert.Equal(1, result.OccurrencesFound);
+    }
+
+    [Fact]
+    public void CleanClaudeDesktopConfig_NoHadesKey_OccurrencesFoundIsZero()
+    {
+        var path = WriteClaudeDesktopConfig("""
+            {
+              "mcpServers": {
+                "other-server": {
+                  "command": "npx"
+                }
+              }
+            }
+            """);
+
+        var result = V12Cleanup.CleanClaudeDesktopConfig(path, proceed: true);
+
+        Assert.False(result.Removed);
+        Assert.Equal(0, result.OccurrencesFound);
+    }
+
+    [Fact]
+    public void CleanClaudeDesktopConfig_NoFileAtPath_OccurrencesFoundIsZero()
+    {
+        var path = Path.Combine(_claudeDesktopScratchDir, "claude_desktop_config.json");
+
+        var result = V12Cleanup.CleanClaudeDesktopConfig(path, proceed: true);
+
+        Assert.Equal(0, result.OccurrencesFound);
+    }
+
+    [Fact]
+    public void CleanClaudeDesktopConfig_MalformedJson_OccurrencesFoundIsZero()
+    {
+        var path = WriteClaudeDesktopConfig("{ not valid json ");
+
+        var result = V12Cleanup.CleanClaudeDesktopConfig(path, proceed: true);
+
+        Assert.False(result.Removed);
+        Assert.Equal(0, result.OccurrencesFound);
+    }
+
+    [Fact]
+    public void CleanClaudeDesktopConfig_Removed_OccurrencesFoundReflectsWhatWasRemoved()
+    {
+        var path = WriteClaudeDesktopConfig("""{ "mcpServers": { "hades": { "command": "node" } } }""");
+
+        var result = V12Cleanup.CleanClaudeDesktopConfig(path, proceed: true);
+
+        Assert.True(result.Removed);
+        Assert.Equal(1, result.OccurrencesFound);
     }
 
     [Fact]

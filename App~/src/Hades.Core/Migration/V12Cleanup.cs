@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Hades.Core.Mcp;
 
 namespace Hades.Core.Migration;
 
@@ -56,6 +57,16 @@ public sealed record ClaudeDesktopConfigCleanupResult
     /// <summary>Always populated, regardless of outcome: this file is global and per-user, not
     /// per-project - the confirmation must say so plainly rather than implying project scope.</summary>
     public required string ScopeWarning { get; init; }
+
+    /// <summary>How many "hades" entries were found under <c>mcpServers</c> - always 0 or 1 in
+    /// practice (JSON object keys are unique), but typed as a count for exact symmetry with
+    /// <see cref="ManifestCleanupResult.OccurrencesFound"/>, which the same underlying
+    /// <see cref="FindJsonSpans"/> scan already powers. Populated on every path, including a
+    /// missing file, malformed JSON, and a not-yet-confirmed (<c>proceed: false</c>) call - unlike
+    /// every other target here, this file has no companion <see cref="V12Detector"/> scan (it is global, not
+    /// per-project - see this class's own remarks), so this field is a caller's ONLY way to learn
+    /// whether there is anything here worth offering to clean up at all.</summary>
+    public required int OccurrencesFound { get; init; }
 }
 
 /// <summary>
@@ -101,15 +112,6 @@ public static class V12Cleanup
     /// use under their <c>mcpServers</c> map - confirmed against the reference project's real,
     /// live copies of both files.</summary>
     public const string McpServerKey = "hades";
-
-    /// <summary>Matches <c>Hades.Server.Control.SettingsEndpoint.McpPort</c> (7823). Duplicated
-    /// here, deliberately, rather than referenced: <c>Hades.Core</c> is headless by design (see
-    /// that project's own <c>EnsureHeadless</c> build guard) and cannot reference
-    /// <c>Hades.Server</c>, which depends on ASP.NET Core - and the dependency already runs the
-    /// other way (Server references Core), so there is no direction in which a shared reference
-    /// could work without restructuring both projects. Keep this in sync if that constant ever
-    /// changes.</summary>
-    public const int McpPort = 7823;
 
     /// <summary>Where Claude Desktop keeps its config on this machine. A pure path computation -
     /// never reads or creates anything. Mirrors v1.2's own
@@ -215,23 +217,36 @@ public static class V12Cleanup
             };
         }
 
+        // Computed BEFORE the proceed check, deliberately: this is a pure read of content already
+        // in hand (no write happens here), so it costs nothing to make available on a dry run too.
+        // Before this fix, RemainingContentOutsideBlock was only ever computed in the Removed=true
+        // branch below - meaning the one fact a caller needs BEFORE agreeing (stale unmarked
+        // content, like the ~60 lines ahead of the marked block in the reference project's own
+        // CLAUDE.md, will survive) was unavailable until after the file had already been changed.
+        var remainder = content.Remove(block.Start, block.End - block.Start);
+        var remainingOutside = !string.IsNullOrWhiteSpace(remainder);
+
         if (!proceed)
         {
             return new ClaudeMdCleanupResult
             {
                 Removed = false,
-                Message = "Found a well-formed HADES:START/END block; not removed (no go-ahead).",
+                Message = remainingOutside
+                    ? "Found a well-formed HADES:START/END block, with other content outside it that will remain untouched; not removed yet (no go-ahead)."
+                    : "Found a well-formed HADES:START/END block; not removed (no go-ahead).",
+                RemainingContentOutsideBlock = remainingOutside,
             };
         }
 
-        var remainder = content.Remove(block.Start, block.End - block.Start);
         AtomicWriteUtf8Text(path, remainder, hadBom);
 
         return new ClaudeMdCleanupResult
         {
             Removed = true,
-            Message = "Removed the HADES:START/END block. Every other byte in the file is untouched.",
-            RemainingContentOutsideBlock = !string.IsNullOrWhiteSpace(remainder),
+            Message = remainingOutside
+                ? "Removed the HADES:START/END block. Other content outside the block remains in the file, untouched."
+                : "Removed the HADES:START/END block. Every other byte in the file is untouched.",
+            RemainingContentOutsideBlock = remainingOutside,
         };
     }
 
@@ -266,7 +281,7 @@ public static class V12Cleanup
     public static ManifestCleanupResult CleanManifest(string projectRoot, bool proceed)
     {
         var portWarning = $"If v1.2's package entry stays in Packages/manifest.json while the app is also " +
-            $"running, both will try to bind port {McpPort} and conflict.";
+            $"running, both will try to bind port {McpDefaults.Port} and conflict.";
 
         var path = Path.Combine(projectRoot, "Packages", "manifest.json");
         if (!File.Exists(path))
@@ -371,7 +386,7 @@ public static class V12Cleanup
 
         if (!File.Exists(configPath))
         {
-            return new ClaudeDesktopConfigCleanupResult { Removed = false, Message = "No claude_desktop_config.json at the given path.", ScopeWarning = scopeWarning };
+            return new ClaudeDesktopConfigCleanupResult { Removed = false, Message = "No claude_desktop_config.json at the given path.", ScopeWarning = scopeWarning, OccurrencesFound = 0 };
         }
 
         var raw = File.ReadAllBytes(configPath);
@@ -384,17 +399,17 @@ public static class V12Cleanup
         }
         catch (JsonException)
         {
-            return new ClaudeDesktopConfigCleanupResult { Removed = false, Message = "claude_desktop_config.json is not valid JSON; refusing to modify it.", ScopeWarning = scopeWarning };
+            return new ClaudeDesktopConfigCleanupResult { Removed = false, Message = "claude_desktop_config.json is not valid JSON; refusing to modify it.", ScopeWarning = scopeWarning, OccurrencesFound = 0 };
         }
 
         if (spans.Count == 0)
         {
-            return new ClaudeDesktopConfigCleanupResult { Removed = false, Message = "No 'hades' entry found under mcpServers in claude_desktop_config.json.", ScopeWarning = scopeWarning };
+            return new ClaudeDesktopConfigCleanupResult { Removed = false, Message = "No 'hades' entry found under mcpServers in claude_desktop_config.json.", ScopeWarning = scopeWarning, OccurrencesFound = 0 };
         }
 
         if (!proceed)
         {
-            return new ClaudeDesktopConfigCleanupResult { Removed = false, Message = "Found the 'hades' entry; not removed (no go-ahead).", ScopeWarning = scopeWarning };
+            return new ClaudeDesktopConfigCleanupResult { Removed = false, Message = "Found the 'hades' entry; not removed (no go-ahead).", ScopeWarning = scopeWarning, OccurrencesFound = spans.Count };
         }
 
         var newBody = RemoveJsonEntries(body, spans);
@@ -405,6 +420,7 @@ public static class V12Cleanup
             Removed = true,
             Message = "Removed the 'hades' entry from claude_desktop_config.json. Every other server entry is untouched.",
             ScopeWarning = scopeWarning,
+            OccurrencesFound = spans.Count,
         };
     }
 

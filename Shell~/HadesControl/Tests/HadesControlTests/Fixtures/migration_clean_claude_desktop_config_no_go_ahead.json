@@ -1,0 +1,6 @@
+{
+  "removed": false,
+  "message": "Found the 'hades' entry; not removed (no go-ahead).",
+  "scopeWarning": "This changes claude_desktop_config.json globally for Claude Desktop on this machine, not just this project - any other MCP server entries are left untouched.",
+  "occurrencesFound": 1
+}

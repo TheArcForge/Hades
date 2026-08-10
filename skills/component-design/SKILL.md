@@ -23,9 +23,9 @@ Do NOT activate for questions about scene structure, data modeling, or prefab hi
 Before making recommendations:
 
 1. **Check existing patterns in the graph:**
-   - Call `find_components_using_pattern("MonoBehaviour")` to understand component density and naming conventions already in the project
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "MonoBehaviour", edgeTargetKind: "Class")` to understand component density and naming conventions already in the project
    - Call `search_by_name("*Manager*")` to detect existing manager patterns and whether the project uses service-locator style aggregators
-   - Call `find_prefabs_with_component("<ComponentName>")` on the focal component to find how it is already used across prefabs
+   - Call `graph_query(edgeKind: "references", edgeTargetPath: "<path/to/Component.cs>")` on the focal component to find how it is already used across prefabs
 
 2. **Check team decisions in memory:**
    - Call `recall_memory("component design patterns communication")` to find documented communication conventions
@@ -500,5 +500,5 @@ public float Speed => _speed;
 
 - Related skills: `hades:unity-architect`, `hades:data-modeling`, `hades:prefab-architecture`
 - Review skill: `hades:unity-reviewer`
-- Hades MCP tools: `find_components_using_pattern`, `find_prefabs_with_component`, `search_by_name`, `recall_memory`, `propose_memory_update`
+- Hades MCP tools: `graph_query`, `search_by_name`, `recall_memory`, `propose_memory_update`
 - Unity docs: [MonoBehaviour lifecycle](https://docs.unity3d.com/6000.0/Documentation/Manual/ExecutionOrder.html), [RequireComponent](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/RequireComponent.html), [ScriptableObject Events](https://docs.unity3d.com/6000.0/Documentation/Manual/class-ScriptableObject.html)

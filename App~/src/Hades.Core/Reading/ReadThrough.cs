@@ -151,12 +151,35 @@ public static class ReadThrough
     /// Transform's, never the GameObject's own. Rejecting it and requiring the GameObject's own
     /// fileId instead would break the exact chain this tool exists for - "call prefab_get_contents,
     /// then feed a node's fileId to component_get_all".
+    ///
+    /// <para>
+    /// A nested or variant prefab instance's local override anchor - a <c>stripped</c> GameObject,
+    /// standing in for one object inside the instantiated prefab that had a component added to it
+    /// directly - is ALSO accepted, whether reached via its own fileId or (see
+    /// <see cref="BuildHierarchy"/>'s doc comment) the fileId <see cref="GetHierarchy"/> reports for
+    /// its "PrefabInstance"-kind node. Unlike an ordinary GameObject, it carries no <c>m_Component</c>
+    /// list of its own - confirmed against the real project_aurora corpus
+    /// (Assets/_ResourcesStatic/Buildings/BedroomWithChestAndTable.prefab) - so its components are
+    /// found by scanning every OTHER object in the file for one whose own <c>m_GameObject</c> names
+    /// it, the mirror image of the ordinary lookup below. Entirely same-file: nothing here opens the
+    /// source prefab the instance is of.
+    /// </para>
+    /// <para>
+    /// A <c>stripped</c> TRANSFORM placeholder, by contrast, never owns components (a Transform
+    /// never does, stripped or not) and is rejected with an explanation, not silently resolved into
+    /// a sibling stripped GameObject - the two can stand for entirely different, unrelated objects
+    /// inside the instantiated prefab (a child needing a reparent anchor, versus the prefab's own
+    /// root needing a new-component anchor, say), discoverable as "the same target" only by reading
+    /// the source prefab, which read-through does not do. See <see cref="BuildHierarchy"/>'s own doc
+    /// comment for why each still gets its own, independently-narrowable node either way.
+    /// </para>
     /// </summary>
     /// <exception cref="ArgumentException">
     /// The path escapes the project's scan roots, no object with <paramref name="gameObjectFileId"/>
-    /// exists in the file, or it exists but is not a GameObject or its Transform (for example, a
-    /// component's own fileId, or a nested/variant prefab instance's placeholder - resolving into a
-    /// DIFFERENT file's GameObjects is cross-file work this deliberately does not do).
+    /// exists in the file, or it exists but is not a GameObject, a stripped GameObject placeholder,
+    /// or a Transform/RectTransform resolvable to one of those two (for example, a component's own
+    /// fileId, a stripped TRANSFORM placeholder, or a non-stripped Transform with no m_GameObject at
+    /// all - genuinely anomalous, unlike a stripped one).
     /// </exception>
     public static IReadOnlyList<ComponentSummary> GetComponents(
         string projectRoot, string relativePath, long gameObjectFileId)
@@ -172,8 +195,7 @@ public static class ReadThrough
             throw new ArgumentException(
                 $"GameObject fileID {gameObjectFileId} was not found in '{relativePath}'. It may "
                 + "belong to a different file, or the file may have changed since it was last "
-                + "inspected - call prefab_get_contents or scene_get_hierarchy again to get "
-                + "current fileIds.",
+                + "inspected - call inspect_asset with just 'path' again to get current fileIds.",
                 nameof(gameObjectFileId));
         }
 
@@ -181,15 +203,38 @@ public static class ReadThrough
         if (node.TypeName is "Transform" or "RectTransform")
         {
             var gameObjectRef = node.References.FirstOrDefault(r => r.PropertyPath == "m_GameObject");
-            if (gameObjectRef is null || !byFileId.TryGetValue(gameObjectRef.FileId, out var owner))
+            if (gameObjectRef is not null && byFileId.TryGetValue(gameObjectRef.FileId, out var owner))
+            {
+                gameObject = owner;
+            }
+            else if (node.IsStripped)
+            {
+                // A nested or variant prefab instance's local placeholder Transform. Unity never
+                // serialises an m_GameObject on a stripped object - that is normal, not a sign of
+                // corruption or hand-editing (see this method's own doc comment) - and a Transform
+                // never owns components directly regardless, stripped or not. If this instance DOES
+                // have locally-overridden components, they belong to a separate stripped GameObject
+                // placeholder, which is its own independently-narrowable "PrefabInstance" node (see
+                // BuildHierarchy's own doc comment for why the two are never merged).
+                throw new ArgumentException(
+                    $"FileID {gameObjectFileId} in '{relativePath}' is a nested or variant prefab "
+                    + "instance's local placeholder Transform, not a GameObject. Unity strips its "
+                    + "m_GameObject field by design for a placeholder like this - the file is not "
+                    + "corrupted or hand-edited, and a Transform never owns components directly "
+                    + "either way. If this instance has locally-overridden components, they belong "
+                    + "to a different placeholder inspect_asset's structure result reports as its "
+                    + "own separate \"PrefabInstance\" node - call inspect_asset with just 'path' "
+                    + "to see every node in this file, or trace_dependencies for the complete "
+                    + "dependency picture.",
+                    nameof(gameObjectFileId));
+            }
+            else
             {
                 throw new ArgumentException(
                     $"FileID {gameObjectFileId} in '{relativePath}' is a {node.TypeName} with no "
                     + "resolvable GameObject - the file may be corrupted or hand-edited.",
                     nameof(gameObjectFileId));
             }
-
-            gameObject = owner;
         }
         else if (node.TypeName == "GameObject")
         {
@@ -199,12 +244,45 @@ public static class ReadThrough
         {
             throw new ArgumentException(
                 $"FileID {gameObjectFileId} in '{relativePath}' is a {node.TypeName}, not a "
-                + "GameObject. component_get_all needs a GameObject's fileId, exactly as "
-                + "prefab_get_contents / scene_get_hierarchy report it.",
+                + "GameObject. inspect_asset's 'target' needs a GameObject's fileId, exactly as "
+                + "the whole-file structure result reports it.",
                 nameof(gameObjectFileId));
         }
 
         var components = new List<ComponentSummary>();
+
+        if (gameObject.IsStripped)
+        {
+            // A stripped GameObject - a nested or variant prefab instance's local placeholder for
+            // an object that had a component added to it directly - carries no m_Component list of
+            // its own (confirmed against the real project_aurora corpus: Unity omits it entirely
+            // from a stripped document, unlike an ordinary GameObject). Every locally-overridden
+            // component instead names ITS owner via the component's OWN m_GameObject reference,
+            // exactly as an ordinary component does, so the search below runs in the opposite
+            // direction: instead of asking the GameObject "what do you own", every object in the
+            // file is asked "do you point at this GameObject". Correct and complete without reading
+            // any other file, since both halves of that link - the added component, and its
+            // m_GameObject reference - are serialised locally, in THIS file, by Unity itself.
+            foreach (var candidate in objects)
+            {
+                if (candidate.FileId == gameObject.FileId) continue;
+
+                var ownerRef = candidate.References.FirstOrDefault(r => r.PropertyPath == "m_GameObject");
+                if (ownerRef is null || ownerRef.FileId != gameObject.FileId) continue;
+
+                components.Add(new ComponentSummary
+                {
+                    FileId = candidate.FileId,
+                    Kind = candidate.TypeName,
+                    ScriptGuid = candidate.TypeName == "MonoBehaviour"
+                        ? candidate.References.FirstOrDefault(r => r.PropertyPath == "m_Script")?.Guid
+                        : null,
+                });
+            }
+
+            return components;
+        }
+
         foreach (var reference in gameObject.References)
         {
             if (reference.PropertyPath != "m_Component.component") continue;
@@ -277,7 +355,7 @@ public static class ReadThrough
         throw new ArgumentException(
             $"Component fileID {fileId} was not found in '{relativePath}'. It may belong to a "
             + "different file, or the file may have changed since it was last inspected - call "
-            + "component_get_all again to get current fileIds.",
+            + "inspect_asset with 'target' again to get current fileIds.",
             nameof(fileId));
     }
 
@@ -298,8 +376,9 @@ public static class ReadThrough
         if (!File.Exists(absolutePath))
         {
             throw new FileNotFoundException(
-                $"'{relativePath}' is not on disk. Check the path with search_by_name or asset_find "
-                + "- it must be project-relative (\"Assets/...\" or \"Packages/...\"), not absolute.",
+                $"'{relativePath}' is not on disk. Check the path with search_by_name (for a "
+                + "script) or graph_query's 'fileType' filter (for any asset) - it must be "
+                + "project-relative (\"Assets/...\" or \"Packages/...\"), not absolute.",
                 absolutePath);
         }
 
@@ -1086,22 +1165,38 @@ public static class ReadThrough
     /// order.
     ///
     /// A nested or variant prefab instance gets a placeholder node rather than being resolved
-    /// into the base prefab, which would be cross-file work read-through does not do. Two shapes
-    /// of placeholder occur, both real in the Hades-Unity-Client corpus:
+    /// into the base prefab, which would be cross-file work read-through does not do. Three
+    /// shapes of placeholder occur:
     ///   - a <c>stripped</c> Transform, linked to its owning PrefabInstance by the Transform's
     ///     own <c>m_PrefabInstance</c> reference (a nested instance under a local GameObject -
-    ///     e.g. Assets/Prefabs/NestTest/Wrapper.prefab);
-    ///   - a PrefabInstance with no local stripped Transform at all, for a pure prefab variant -
+    ///     e.g. Assets/Prefabs/NestTest/Wrapper.prefab in the Hades-Unity-Client corpus);
+    ///   - a <c>stripped</c> GameObject, likewise linked by its own <c>m_PrefabInstance</c>
+    ///     reference, for an object inside the instantiated prefab that had a component added to
+    ///     it directly - confirmed against the real project_aurora corpus
+    ///     (Assets/_ResourcesStatic/Buildings/BedroomWithChestAndTable.prefab, Plan 15 Task 2).
+    ///     Unlike the Transform case, this one is NEVER folded into an already-existing node: a
+    ///     sibling stripped Transform belonging to the SAME PrefabInstance can - and, in that real
+    ///     file, does - stand for a COMPLETELY DIFFERENT, unrelated object inside the instantiated
+    ///     prefab (there, a child needing a reparent anchor, versus the prefab's own root needing
+    ///     a new-component anchor). Telling those apart as "the same override target" is only
+    ///     possible by reading the source prefab, which read-through does not do - so each
+    ///     stripped GameObject unconditionally gets its own node instead, positioned the same way
+    ///     as the "leftover PrefabInstance" case below (via the owning PrefabInstance's own
+    ///     <c>m_TransformParent</c>), and <see cref="ReadThrough.GetComponents"/> is what actually
+    ///     resolves ITS real, locally-overridden components - see that method's own doc comment;
+    ///   - a PrefabInstance with no local stripped placeholder at all, for a pure prefab variant -
     ///     the entire file is that one document (e.g. Assets/Prefabs/SmokeTestCube_Variant.prefab,
-    ///     and 3 of the 9 Demo/Prefabs entries). Its own <c>m_TransformParent</c> supplies the
-    ///     parent link (null means it is the file's own root).
+    ///     and 3 of the 9 Demo/Prefabs entries in Hades-Unity-Client). Its own
+    ///     <c>m_TransformParent</c> supplies the parent link (null means it is the file's own
+    ///     root). A pure variant that ALSO has a component added directly to its root gets the
+    ///     stripped-GameObject shape above INSTEAD of this one - see <c>claimedInstances</c> below.
     /// <c>m_Children</c> is NOT a usable signal here: Unity writes each entry as a bare flow
     /// mapping directly under the sequence, with no key in front of it, and UnityYamlReader's
     /// reference detection only fires for a flow mapping that follows a key - so, unlike
     /// <c>m_Father</c>, <c>m_Children</c> entries are never extracted as references at all
     /// (confirmed empirically before writing this). <c>m_PrefabInstance</c> is what fills the gap
-    /// for the one case that would otherwise leave a node unreachable: a stripped Transform never
-    /// carries its own <c>m_Father</c>.
+    /// for the cases that would otherwise leave a node unreachable: neither a stripped Transform
+    /// nor a stripped GameObject carries its own <c>m_Father</c>.
     /// </summary>
     static AssetHierarchy BuildHierarchy(string relativePath, IReadOnlyList<UnityObject> objects)
     {
@@ -1118,8 +1213,9 @@ public static class ReadThrough
         var orderedIds = new List<long>();
         var parentOf = new Dictionary<long, long>();
 
-        // A PrefabInstance already represented by a local stripped placeholder must not ALSO get
-        // a synthetic node below - the placeholder IS its node.
+        // A PrefabInstance already represented by a local stripped placeholder (Transform OR
+        // GameObject - see this method's own doc comment) must not ALSO get a synthetic
+        // "leftover" node below - the placeholder IS its node.
         var claimedInstances = new HashSet<long>();
 
         foreach (var obj in objects)
@@ -1158,8 +1254,33 @@ public static class ReadThrough
             if (fatherRef is not null) parentOf[obj.FileId] = fatherRef.FileId;
         }
 
-        // Anything left over is a PrefabInstance nothing local claimed - a pure variant root, or
-        // (defensively) a nested instance Unity happened not to give a stripped placeholder.
+        // A stripped GameObject anchors a component added directly to a nested-or-variant
+        // instance's object that otherwise has no local representation at all - unlike a stripped
+        // Transform, nothing else in this walk ever visits one (the loop above only follows a
+        // NON-stripped Transform's own m_GameObject reference), so every stripped GameObject
+        // unconditionally gets its own node here. See this method's own doc comment for why it is
+        // never folded into a sibling stripped Transform's node instead. Components stays [] like
+        // every other placeholder; inspect_asset's 'target' narrowing (ReadThrough.GetComponents)
+        // is what actually surfaces its real, locally-overridden components.
+        foreach (var obj in objects)
+        {
+            if (obj.TypeName != "GameObject" || !obj.IsStripped) continue;
+
+            var instanceRef = obj.References.FirstOrDefault(r => r.PropertyPath == "m_PrefabInstance");
+            var owner = instanceRef is not null && instances.TryGetValue(instanceRef.FileId, out var found)
+                ? found : null;
+            if (owner is not null) claimedInstances.Add(owner.FileId);
+
+            AddNode(obj.FileId, "PrefabInstance", name: null,
+                sourcePrefabGuid: owner?.SourcePrefab.Guid ?? obj.CorrespondingSourceObject?.Guid,
+                components: []);
+
+            if (owner?.TransformParent?.FileId is { } ownerParentId) parentOf[obj.FileId] = ownerParentId;
+        }
+
+        // Anything left over is a PrefabInstance nothing local claimed - a pure variant root with
+        // no local overrides at all, or (defensively) a nested instance Unity happened not to give
+        // a stripped placeholder.
         foreach (var (fileId, instance) in instances)
         {
             if (claimedInstances.Contains(fileId)) continue;

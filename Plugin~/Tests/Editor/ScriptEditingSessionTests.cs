@@ -158,10 +158,42 @@ namespace Hades.Tests.Editor
             }
         }
 
+        [Test]
+        public void BeginScriptEditing_WhileADifferentLeaseIsHeld_ThrowsActionableError_DoesNotStealIt()
+        {
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                Assert.IsTrue(gate.Acquire("someone-else", TimeSpan.FromMinutes(5)));
+
+                var ex = Assert.Throws<InvalidOperationException>(() =>
+                    CommandTable.Dispatch(gate, Request("project.begin_script_editing", JsonValue.NewObject())));
+                StringAssert.Contains("someone-else", ex.Message);
+
+                // Same defect as PrefabCommandsTests' AnyClass2Call_WhileADifferentLeaseIsHeld... -
+                // this used to say "Call EndScriptEditing (or lease_release)": EndScriptEditing was
+                // renamed (not just consolidated) to script_editing_session, and lease_release was
+                // never a real MCP tool name at all (the actual wire method, "lease.release", is an
+                // internal plugin<->app RPC, never something an agent calls directly).
+                StringAssert.Contains("script_editing_session", ex.Message);
+                StringAssert.DoesNotContain("EndScriptEditing", ex.Message);
+                StringAssert.DoesNotContain("lease_release", ex.Message);
+                LiveMcpToolNames.AssertMessageNamesOnlyLiveTools(ex.Message);
+
+                // The other session's lease must be completely untouched.
+                Assert.IsTrue(gate.IsHeld);
+                Assert.AreEqual("someone-else", gate.CurrentLeaseId);
+                Assert.AreEqual(1, fake.LockCalls, "the failed Begin must never itself call Lock");
+                Assert.AreEqual(0, fake.UnlockCalls, "the failed Begin must never release a lease it never held");
+
+                gate.Release("someone-else");
+            }
+        }
+
         // ---------------------------------------------------------------- project.end_script_editing
 
         [Test]
-        public void EndScriptEditing_ReleasesLease_ThenTriggersRecompile_OrderProven()
+        public void EndScriptEditing_ReleasesLease_ThenRefreshesAssets_ThenTriggersRecompile_OrderProven()
         {
             var order = new List<string>();
             using var pump = new MainThreadPump();
@@ -169,8 +201,10 @@ namespace Hades.Tests.Editor
 
             CommandTable.Dispatch(gate, Request("project.begin_script_editing", JsonValue.NewObject()));
 
-            var original = ProjectCommands.TriggerRecompile;
+            var originalTrigger = ProjectCommands.TriggerRecompile;
+            var originalRefresh = ProjectCommands.RefreshAssets;
             ProjectCommands.TriggerRecompile = () => order.Add("recompile");
+            ProjectCommands.RefreshAssets = () => order.Add("refresh");
             JsonValue result;
             try
             {
@@ -178,14 +212,18 @@ namespace Hades.Tests.Editor
             }
             finally
             {
-                ProjectCommands.TriggerRecompile = original;
+                ProjectCommands.TriggerRecompile = originalTrigger;
+                ProjectCommands.RefreshAssets = originalRefresh;
             }
 
             Assert.IsTrue(BoolProp(result, "released"));
             Assert.IsTrue(BoolProp(result, "requested"));
-            CollectionAssert.AreEqual(new[] { "lock", "unlock", "recompile" }, order,
-                "release must happen strictly BEFORE the recompile trigger - never fight its own lock, exactly as "
-                + "project.recompile_scripts already proves for class 2, mirrored here for class 3's Begin/End pair");
+            CollectionAssert.AreEqual(new[] { "lock", "unlock", "refresh", "recompile" }, order,
+                "release must happen strictly BEFORE refresh, which must happen strictly BEFORE the recompile "
+                + "trigger - never fight its own lock, exactly as project.recompile_scripts already proves for "
+                + "class 2, mirrored here for class 3's Begin/End pair. Refresh-before-recompile is "
+                + "mutation-tool-defects.md #1's fix: a brand-new .cs file written during this session has no "
+                + ".meta yet, so it must be imported (refresh) before compilation of it is requested (recompile).");
             Assert.IsFalse(gate.IsHeld);
         }
 
@@ -195,9 +233,12 @@ namespace Hades.Tests.Editor
             var (gate, fake, pump) = NoopGateParts();
             using (pump) using (gate)
             {
-                var original = ProjectCommands.TriggerRecompile;
+                var originalTrigger = ProjectCommands.TriggerRecompile;
+                var originalRefresh = ProjectCommands.RefreshAssets;
                 var recompileCalls = 0;
+                var refreshCalls = 0;
                 ProjectCommands.TriggerRecompile = () => recompileCalls++;
+                ProjectCommands.RefreshAssets = () => refreshCalls++;
                 JsonValue result;
                 try
                 {
@@ -205,12 +246,16 @@ namespace Hades.Tests.Editor
                 }
                 finally
                 {
-                    ProjectCommands.TriggerRecompile = original;
+                    ProjectCommands.TriggerRecompile = originalTrigger;
+                    ProjectCommands.RefreshAssets = originalRefresh;
                 }
 
                 Assert.IsFalse(BoolProp(result, "released"), "nothing was held, so nothing was actually released");
                 Assert.IsTrue(BoolProp(result, "requested"), "still asks Unity to recompile - the old package's End always did this too");
                 Assert.AreEqual(1, recompileCalls);
+                Assert.AreEqual(1, refreshCalls,
+                    "refresh must run unconditionally, even when nothing was actually held - a caller cannot know "
+                    + "in advance whether an unmatched End follows a session that wrote a new file or not");
 
                 // The exact bug this whole plan exists to make impossible: the old EndScriptEditing
                 // called UnlockReloadAssemblies() UNCONDITIONALLY "in case auto-lock is still

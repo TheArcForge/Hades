@@ -30,6 +30,7 @@ import SwiftUI
 public final class MainWindowScene: NSObject, NSWindowDelegate {
     private let viewModel: MainWindowViewModel
     private let projectsViewModel: ProjectsViewModel
+    private let migrationCleanupViewModel: MigrationCleanupViewModel
     private let tracesViewModel: TracesViewModel
     private let memoryViewModel: MemoryViewModel
     private let makeWindow: @MainActor () -> NSWindow
@@ -64,6 +65,7 @@ public final class MainWindowScene: NSObject, NSWindowDelegate {
     public init(
         viewModel: MainWindowViewModel,
         projectsViewModel: ProjectsViewModel = ProjectsViewModel(),
+        migrationCleanupViewModel: MigrationCleanupViewModel = MigrationCleanupViewModel(),
         tracesViewModel: TracesViewModel = TracesViewModel(),
         memoryViewModel: MemoryViewModel = MemoryViewModel(),
         makeWindow: (@MainActor () -> NSWindow)? = nil,
@@ -72,13 +74,14 @@ public final class MainWindowScene: NSObject, NSWindowDelegate {
     ) {
         self.viewModel = viewModel
         self.projectsViewModel = projectsViewModel
+        self.migrationCleanupViewModel = migrationCleanupViewModel
         self.tracesViewModel = tracesViewModel
         self.memoryViewModel = memoryViewModel
         self.makeWindow =
             makeWindow ?? {
                 MainWindowScene.makeDefaultWindow(
-                    viewModel: viewModel, projectsViewModel: projectsViewModel, tracesViewModel: tracesViewModel,
-                    memoryViewModel: memoryViewModel)
+                    viewModel: viewModel, projectsViewModel: projectsViewModel, migrationCleanupViewModel: migrationCleanupViewModel,
+                    tracesViewModel: tracesViewModel, memoryViewModel: memoryViewModel)
             }
         self.focusWindow = focusWindow
         self.activationCoordinator = activationCoordinator
@@ -126,8 +129,8 @@ public final class MainWindowScene: NSObject, NSWindowDelegate {
     // MARK: - Real defaults (composition-root path only; never exercised by tests, which inject fakes)
 
     private static func makeDefaultWindow(
-        viewModel: MainWindowViewModel, projectsViewModel: ProjectsViewModel, tracesViewModel: TracesViewModel,
-        memoryViewModel: MemoryViewModel
+        viewModel: MainWindowViewModel, projectsViewModel: ProjectsViewModel, migrationCleanupViewModel: MigrationCleanupViewModel,
+        tracesViewModel: TracesViewModel, memoryViewModel: MemoryViewModel
     ) -> NSWindow {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
@@ -157,8 +160,8 @@ public final class MainWindowScene: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.contentViewController = NSHostingController(
             rootView: MainWindowContentView(
-                viewModel: viewModel, projectsViewModel: projectsViewModel, tracesViewModel: tracesViewModel,
-                memoryViewModel: memoryViewModel)
+                viewModel: viewModel, projectsViewModel: projectsViewModel, migrationCleanupViewModel: migrationCleanupViewModel,
+                tracesViewModel: tracesViewModel, memoryViewModel: memoryViewModel)
         )
         return window
     }
@@ -178,6 +181,7 @@ public final class MainWindowScene: NSObject, NSWindowDelegate {
 private struct MainWindowContentView: View {
     let viewModel: MainWindowViewModel
     let projectsViewModel: ProjectsViewModel
+    let migrationCleanupViewModel: MigrationCleanupViewModel
     let tracesViewModel: TracesViewModel
     let memoryViewModel: MemoryViewModel
 
@@ -189,7 +193,7 @@ private struct MainWindowContentView: View {
         } detail: {
             switch viewModel.selectedSection {
             case .projects:
-                ProjectsView(viewModel: projectsViewModel)
+                ProjectsView(viewModel: projectsViewModel, migrationCleanupViewModel: migrationCleanupViewModel)
             case .traces:
                 TracesView(viewModel: tracesViewModel)
             case .memory:

@@ -735,6 +735,210 @@ actor FakeClaudeCodeVerifying: ClaudeCodeVerifying {
     }
 }
 
+/// A scriptable stand-in for `ControlClient` conforming to `ControlMigrationFetching` - what
+/// `LiveMigrationOfferingTests` uses to prove `LiveMigrationOffering`'s own logic (resolving a
+/// path to a productGuid via `projects()`, then calling the right migration route) without a real
+/// `URLSession` round trip, and what `MigrationCleanupViewModelTests`/`SettingsViewModelTests` use
+/// to prove the per-item cleanup UI's own contract. Each migration action is a single fixed outcome
+/// plus a call count and the last-seen argument(s) - the same simpler shape `FakeProjectsFetcher`'s
+/// own six actions use (see that type's own doc comment): nothing here needs a multi-call script,
+/// since every consumer calls each endpoint at most once per its own method invocation. Every new
+/// initializer parameter added for the four cleanup routes defaults to `.failure(.staleToken)`, so
+/// every existing `FakeMigrationFetcher(projectsOutcome:...)` call site (`LiveMigrationOfferingTests`)
+/// keeps compiling and passing unchanged - the same additive-parameter convention this file already
+/// uses throughout (see `FakeProjectsFetcher`'s own doc comment).
+actor FakeMigrationFetcher: ControlMigrationFetching {
+    enum ProjectsOutcome {
+        case success(ProjectsResult)
+        case failure(ControlClientError)
+    }
+
+    enum DetectOutcome {
+        case success(MigrationDetectionResult)
+        case failure(ControlClientError)
+    }
+
+    enum MemoryImportOutcome {
+        case success(MigrationMemoryImportResult)
+        case failure(ControlClientError)
+    }
+
+    enum TracesImportOutcome {
+        case success(MigrationTracesImportResult)
+        case failure(ControlClientError)
+    }
+
+    enum ClaudeMdCleanupOutcome {
+        case success(MigrationClaudeMdCleanupResult)
+        case failure(ControlClientError)
+    }
+
+    enum ManifestCleanupOutcome {
+        case success(MigrationManifestCleanupResult)
+        case failure(ControlClientError)
+    }
+
+    enum McpConfigCleanupOutcome {
+        case success(MigrationMcpConfigCleanupResult)
+        case failure(ControlClientError)
+    }
+
+    enum ClaudeDesktopConfigCleanupOutcome {
+        case success(MigrationClaudeDesktopConfigCleanupResult)
+        case failure(ControlClientError)
+    }
+
+    private var projectsOutcome: ProjectsOutcome
+    private(set) var projectsCallCount = 0
+
+    private var detectOutcome: DetectOutcome
+    private(set) var detectCallCount = 0
+    private(set) var lastDetectedProductGuid: String?
+
+    private var importMemoryOutcome: MemoryImportOutcome
+    private(set) var importMemoryCallCount = 0
+    private(set) var lastImportMemoryProductGuid: String?
+
+    private var importTracesOutcome: TracesImportOutcome
+    private(set) var importTracesCallCount = 0
+    private(set) var lastImportTracesProductGuid: String?
+
+    private var cleanClaudeMdOutcome: ClaudeMdCleanupOutcome
+    private(set) var cleanClaudeMdCallCount = 0
+    private(set) var lastCleanClaudeMdProductGuid: String?
+    private(set) var lastCleanClaudeMdProceed: Bool?
+
+    private var cleanManifestOutcome: ManifestCleanupOutcome
+    private(set) var cleanManifestCallCount = 0
+    private(set) var lastCleanManifestProductGuid: String?
+    private(set) var lastCleanManifestProceed: Bool?
+
+    private var cleanMcpConfigOutcome: McpConfigCleanupOutcome
+    private(set) var cleanMcpConfigCallCount = 0
+    private(set) var lastCleanMcpConfigProductGuid: String?
+    private(set) var lastCleanMcpConfigProceed: Bool?
+
+    private var cleanClaudeDesktopConfigOutcome: ClaudeDesktopConfigCleanupOutcome
+    private(set) var cleanClaudeDesktopConfigCallCount = 0
+    private(set) var lastCleanClaudeDesktopConfigProceed: Bool?
+
+    init(
+        projectsOutcome: ProjectsOutcome,
+        detectOutcome: DetectOutcome = .failure(.staleToken),
+        importMemoryOutcome: MemoryImportOutcome = .failure(.staleToken),
+        importTracesOutcome: TracesImportOutcome = .failure(.staleToken),
+        cleanClaudeMdOutcome: ClaudeMdCleanupOutcome = .failure(.staleToken),
+        cleanManifestOutcome: ManifestCleanupOutcome = .failure(.staleToken),
+        cleanMcpConfigOutcome: McpConfigCleanupOutcome = .failure(.staleToken),
+        cleanClaudeDesktopConfigOutcome: ClaudeDesktopConfigCleanupOutcome = .failure(.staleToken)
+    ) {
+        self.projectsOutcome = projectsOutcome
+        self.detectOutcome = detectOutcome
+        self.importMemoryOutcome = importMemoryOutcome
+        self.importTracesOutcome = importTracesOutcome
+        self.cleanClaudeMdOutcome = cleanClaudeMdOutcome
+        self.cleanManifestOutcome = cleanManifestOutcome
+        self.cleanMcpConfigOutcome = cleanMcpConfigOutcome
+        self.cleanClaudeDesktopConfigOutcome = cleanClaudeDesktopConfigOutcome
+    }
+
+    func projects() async throws(ControlClientError) -> ProjectsResult {
+        projectsCallCount += 1
+        switch projectsOutcome {
+        case .success(let result): return result
+        case .failure(let error): throw error
+        }
+    }
+
+    func migrationDetect(productGuid: String) async throws(ControlClientError) -> MigrationDetectionResult {
+        detectCallCount += 1
+        lastDetectedProductGuid = productGuid
+        switch detectOutcome {
+        case .success(let result): return result
+        case .failure(let error): throw error
+        }
+    }
+
+    func migrationImportMemory(productGuid: String) async throws(ControlClientError) -> MigrationMemoryImportResult {
+        importMemoryCallCount += 1
+        lastImportMemoryProductGuid = productGuid
+        switch importMemoryOutcome {
+        case .success(let result): return result
+        case .failure(let error): throw error
+        }
+    }
+
+    func migrationImportTraces(productGuid: String) async throws(ControlClientError) -> MigrationTracesImportResult {
+        importTracesCallCount += 1
+        lastImportTracesProductGuid = productGuid
+        switch importTracesOutcome {
+        case .success(let result): return result
+        case .failure(let error): throw error
+        }
+    }
+
+    func migrationCleanClaudeMd(productGuid: String, proceed: Bool) async throws(ControlClientError) -> MigrationClaudeMdCleanupResult {
+        cleanClaudeMdCallCount += 1
+        lastCleanClaudeMdProductGuid = productGuid
+        lastCleanClaudeMdProceed = proceed
+        switch cleanClaudeMdOutcome {
+        case .success(let result): return result
+        case .failure(let error): throw error
+        }
+    }
+
+    /// See `FakeProjectsFetcher.setRebuildOutcome(_:)`'s own doc comment for why this exists: lets a
+    /// test change the outcome mid-run (e.g. a proceed:false preview followed by a proceed:true
+    /// confirm that returns a different result).
+    func setCleanClaudeMdOutcome(_ outcome: ClaudeMdCleanupOutcome) {
+        cleanClaudeMdOutcome = outcome
+    }
+
+    func migrationCleanManifest(productGuid: String, proceed: Bool) async throws(ControlClientError) -> MigrationManifestCleanupResult {
+        cleanManifestCallCount += 1
+        lastCleanManifestProductGuid = productGuid
+        lastCleanManifestProceed = proceed
+        switch cleanManifestOutcome {
+        case .success(let result): return result
+        case .failure(let error): throw error
+        }
+    }
+
+    /// See `setCleanClaudeMdOutcome(_:)`'s own doc comment.
+    func setCleanManifestOutcome(_ outcome: ManifestCleanupOutcome) {
+        cleanManifestOutcome = outcome
+    }
+
+    func migrationCleanMcpConfig(productGuid: String, proceed: Bool) async throws(ControlClientError) -> MigrationMcpConfigCleanupResult {
+        cleanMcpConfigCallCount += 1
+        lastCleanMcpConfigProductGuid = productGuid
+        lastCleanMcpConfigProceed = proceed
+        switch cleanMcpConfigOutcome {
+        case .success(let result): return result
+        case .failure(let error): throw error
+        }
+    }
+
+    /// See `setCleanClaudeMdOutcome(_:)`'s own doc comment.
+    func setCleanMcpConfigOutcome(_ outcome: McpConfigCleanupOutcome) {
+        cleanMcpConfigOutcome = outcome
+    }
+
+    func migrationCleanClaudeDesktopConfig(proceed: Bool) async throws(ControlClientError) -> MigrationClaudeDesktopConfigCleanupResult {
+        cleanClaudeDesktopConfigCallCount += 1
+        lastCleanClaudeDesktopConfigProceed = proceed
+        switch cleanClaudeDesktopConfigOutcome {
+        case .success(let result): return result
+        case .failure(let error): throw error
+        }
+    }
+
+    /// See `setCleanClaudeMdOutcome(_:)`'s own doc comment.
+    func setCleanClaudeDesktopConfigOutcome(_ outcome: ClaudeDesktopConfigCleanupOutcome) {
+        cleanClaudeDesktopConfigOutcome = outcome
+    }
+}
+
 /// A scriptable stand-in for `MigrationOffering` - see that protocol's own doc comment for why
 /// production never constructs a real conformance at all (the control API has no migration endpoint
 /// yet). Exists purely to prove `OnboardingViewModel`'s offered-never-silently-performed contract

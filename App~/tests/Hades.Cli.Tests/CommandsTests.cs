@@ -115,7 +115,13 @@ public sealed class CommandsTests : IDisposable
         // server sent", which this proves without asserting on the server's own time math (already
         // pinned exactly, with an injected clock, by SummaryResolveTests).
         Assert.Matches(@"heldForSeconds:\s+\d+", text);
-        Assert.Contains("expiresInSeconds:  30", text);
+        // Same clock-derived risk as heldForSeconds above, guarded the same way: SummaryEndpoint.BuildLease
+        // computes this as Math.Round((lease.ExpiresAtUtc - now).TotalSeconds), so real wall-clock time
+        // spent on the HTTP round trip can round the true remaining time down from 30 to 29 under load -
+        // this is not pinned to the exact literal for the same reason heldForSeconds isn't. Matters more
+        // now that LeaseRegistry self-expires (Get/All evict once now >= ExpiresAtUtc): expiry is no
+        // longer inert here, just still comfortably within the 30s TTL for a fast in-process test.
+        Assert.Matches(@"expiresInSeconds:\s+\d+", text);
         // Not attached (no fake editor registered), so per SummaryEndpoint.BuildLease, releasable
         // mirrors Attached - must print exactly "False", not a truthy-looking placeholder.
         Assert.Contains("releasable:        False", text);

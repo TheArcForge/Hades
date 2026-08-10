@@ -224,6 +224,132 @@ struct ControlClientTests {
         let decoded = try JSONDecoder().decode(SentBody.self, from: sentBody)
         #expect(decoded.content == "hello")
     }
+
+    // MARK: - Plan 14 Task 10: /control/migration/* - the missing caller
+
+    @Test("migrationDetect GETs /control/migration/<productGuid>/detect")
+    func migrationDetectGetsCorrectPath() async throws {
+        MockURLProtocol.handler = { _ in .init(status: 200, body: try! Fixtures.data("migration_detect_v12")) }
+        defer { MockURLProtocol.handler = nil }
+
+        let client = ControlClient(connection: Self.connection, session: MockURLProtocol.makeSession())
+        let result = try await client.migrationDetect(productGuid: "15c012f27331e49229cef25e74537816")
+
+        #expect(result.isV12Project == true)
+        #expect(MockURLProtocol.lastRequest?.httpMethod == "GET")
+        #expect(MockURLProtocol.lastRequest?.url?.path == "/control/migration/15c012f27331e49229cef25e74537816/detect")
+    }
+
+    @Test("migrationImportMemory POSTs to /control/migration/<productGuid>/importMemory with no body")
+    func migrationImportMemoryPosts() async throws {
+        MockURLProtocol.handler = { _ in .init(status: 200, body: try! Fixtures.data("migration_import_memory")) }
+        defer { MockURLProtocol.handler = nil }
+
+        let client = ControlClient(connection: Self.connection, session: MockURLProtocol.makeSession())
+        let result = try await client.migrationImportMemory(productGuid: "abc123")
+
+        #expect(result.skipped.count == 3)
+        #expect(MockURLProtocol.lastRequest?.httpMethod == "POST")
+        #expect(MockURLProtocol.lastRequest?.url?.path == "/control/migration/abc123/importMemory")
+        #expect(MockURLProtocol.lastRequestBody == nil || MockURLProtocol.lastRequestBody?.isEmpty == true)
+    }
+
+    @Test("migrationImportTraces POSTs to /control/migration/<productGuid>/importTraces")
+    func migrationImportTracesPosts() async throws {
+        MockURLProtocol.handler = { _ in .init(status: 200, body: try! Fixtures.data("migration_import_traces")) }
+        defer { MockURLProtocol.handler = nil }
+
+        let client = ControlClient(connection: Self.connection, session: MockURLProtocol.makeSession())
+        let result = try await client.migrationImportTraces(productGuid: "abc123")
+
+        #expect(result.imported == true)
+        #expect(MockURLProtocol.lastRequest?.url?.path == "/control/migration/abc123/importTraces")
+    }
+
+    @Test("migrationCleanClaudeMd sends {proceed:true} as the JSON body - the wire-level twin of V12Cleanup's required, no-default proceed parameter")
+    func migrationCleanClaudeMdSendsProceedInBody() async throws {
+        MockURLProtocol.handler = { _ in .init(status: 200, body: try! Fixtures.data("migration_clean_claude_md_removed_with_remaining_content")) }
+        defer { MockURLProtocol.handler = nil }
+
+        let client = ControlClient(connection: Self.connection, session: MockURLProtocol.makeSession())
+        let result = try await client.migrationCleanClaudeMd(productGuid: "abc123", proceed: true)
+
+        #expect(result.removed == true)
+        #expect(result.remainingContentOutsideBlock == true)
+        #expect(MockURLProtocol.lastRequest?.httpMethod == "POST")
+        #expect(MockURLProtocol.lastRequest?.url?.path == "/control/migration/abc123/cleanClaudeMd")
+
+        struct SentBody: Decodable { let proceed: Bool }
+        let sentBody = try #require(MockURLProtocol.lastRequestBody)
+        #expect(try JSONDecoder().decode(SentBody.self, from: sentBody).proceed == true)
+    }
+
+    @Test("migrationCleanManifest sends proceed:false and decodes occurrencesFound/portConflictWarning even when nothing was removed")
+    func migrationCleanManifestNoGoAhead() async throws {
+        MockURLProtocol.handler = { _ in .init(status: 200, body: try! Fixtures.data("migration_clean_manifest_no_go_ahead")) }
+        defer { MockURLProtocol.handler = nil }
+
+        let client = ControlClient(connection: Self.connection, session: MockURLProtocol.makeSession())
+        let result = try await client.migrationCleanManifest(productGuid: "abc123", proceed: false)
+
+        #expect(result.removed == false)
+        #expect(result.occurrencesFound == 1)
+        #expect(MockURLProtocol.lastRequest?.url?.path == "/control/migration/abc123/cleanManifest")
+
+        struct SentBody: Decodable { let proceed: Bool }
+        let sentBody = try #require(MockURLProtocol.lastRequestBody)
+        #expect(try JSONDecoder().decode(SentBody.self, from: sentBody).proceed == false)
+    }
+
+    @Test("migrationCleanMcpConfig POSTs to /control/migration/<productGuid>/cleanMcpConfig")
+    func migrationCleanMcpConfigPosts() async throws {
+        MockURLProtocol.handler = { _ in .init(status: 200, body: try! Fixtures.data("migration_clean_mcp_config_removed")) }
+        defer { MockURLProtocol.handler = nil }
+
+        let client = ControlClient(connection: Self.connection, session: MockURLProtocol.makeSession())
+        let result = try await client.migrationCleanMcpConfig(productGuid: "abc123", proceed: true)
+
+        #expect(result.removed == true)
+        #expect(MockURLProtocol.lastRequest?.url?.path == "/control/migration/abc123/cleanMcpConfig")
+    }
+
+    @Test("migrationCleanClaudeDesktopConfig POSTs to the GLOBAL route - no productGuid anywhere in the path")
+    func migrationCleanClaudeDesktopConfigPostsToGlobalRoute() async throws {
+        MockURLProtocol.handler = { _ in .init(status: 200, body: try! Fixtures.data("migration_clean_claude_desktop_config_removed")) }
+        defer { MockURLProtocol.handler = nil }
+
+        let client = ControlClient(connection: Self.connection, session: MockURLProtocol.makeSession())
+        let result = try await client.migrationCleanClaudeDesktopConfig(proceed: true)
+
+        #expect(result.removed == true)
+        #expect(result.scopeWarning.localizedCaseInsensitiveContains("global"))
+        #expect(MockURLProtocol.lastRequest?.httpMethod == "POST")
+        #expect(MockURLProtocol.lastRequest?.url?.path == "/control/migration/claudeDesktopConfig/clean")
+
+        struct SentBody: Decodable { let proceed: Bool }
+        let sentBody = try #require(MockURLProtocol.lastRequestBody)
+        #expect(try JSONDecoder().decode(SentBody.self, from: sentBody).proceed == true)
+    }
+
+    @Test("an unknown productGuid maps migrationDetect's 404 to .server with the real message")
+    func migrationDetectUnknownProjectMapsToServerError() async throws {
+        MockURLProtocol.handler = { _ in .init(status: 404, body: try! Fixtures.data("migration_detect_unknown_project_404")) }
+        defer { MockURLProtocol.handler = nil }
+
+        let client = ControlClient(connection: Self.connection, session: MockURLProtocol.makeSession())
+
+        do {
+            _ = try await client.migrationDetect(productGuid: "not-a-real-guid")
+            Issue.record("expected migrationDetect to throw")
+        } catch let error {
+            guard case .server(let status, let message) = error else {
+                Issue.record("expected .server, got \(error)")
+                return
+            }
+            #expect(status == 404)
+            #expect(message == "Unknown project 'not-a-real-guid'.")
+        }
+    }
 }
 
 /// Parses a request's query string into a `[name: value]` dictionary for assertions above - a

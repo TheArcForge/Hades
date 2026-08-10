@@ -268,6 +268,13 @@ namespace Hades.Tests.Editor
 
             StringAssert.Contains("Ghost", ex.Message);
             StringAssert.Contains("ExistingRoot", ex.Message);
+
+            // Defect 5 (docs/backlog/mutation-tool-defects.md): this used to say "Call
+            // scene_get_hierarchy to see the full tree" - scene_get_hierarchy does not exist
+            // post-consolidation (folded into inspect_asset).
+            StringAssert.Contains("inspect_asset", ex.Message);
+            StringAssert.DoesNotContain("scene_get_hierarchy", ex.Message);
+            LiveMcpToolNames.AssertMessageNamesOnlyLiveTools(ex.Message);
         }
 
         [Test]

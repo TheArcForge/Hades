@@ -296,6 +296,26 @@ public sealed class V12DetectorTests : IDisposable
         Assert.Null(result.ClaudeMd.MarkedBlock);
     }
 
+    [Theory]
+    [InlineData("Notes\n\n<!-- HADES:START -->\nInner A\n<!-- HADES:START -->\nInner B\n<!-- HADES:END -->\nInner C\n<!-- HADES:END -->\nFinal\n")]
+    [InlineData("<!-- HADES:START -->\nfirst block\n<!-- HADES:END -->\n\n<!-- HADES:START -->\nsecond block\n<!-- HADES:END -->\n")]
+    public void Detect_ClaudeMd_NestedOrDuplicateMarkers_FallsBackToUnmarkedRatherThanGuessing(string content)
+    {
+        // A second START or END anywhere in the file - nested inside the first pair (first
+        // InlineData) or a second, separate well-formed pair later in the file (second InlineData)
+        // - makes which pair is "the" block genuinely ambiguous. V12Detector.ReadClaudeMd used to
+        // pair the FIRST start with the FIRST end and call that Shape.Marked regardless, which is
+        // exactly the shape V12Cleanup's own multiplicity guard (CountOccurrences(...) != 1)
+        // already refuses to act on - see V12CleanupTests' own coverage of this file's first
+        // InlineData. The detector must not report Marked for a file no consumer should act on.
+        WriteClaudeMd(content);
+
+        var result = V12Detector.Detect(_projectRoot);
+
+        Assert.Equal(ClaudeMdShape.Unmarked, result.ClaudeMd.Shape);
+        Assert.Null(result.ClaudeMd.MarkedBlock);
+    }
+
     // ---- memory document count ----
 
     [Fact]

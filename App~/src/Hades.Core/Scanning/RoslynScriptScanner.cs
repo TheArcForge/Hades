@@ -12,12 +12,27 @@ namespace Hades.Core.Scanning;
 /// </summary>
 public static class RoslynScriptScanner
 {
-    public static IReadOnlyList<ScriptType> ScanFile(string projectRelativePath, string absolutePath) =>
-        ScanText(projectRelativePath, File.ReadAllText(absolutePath));
+    public static IReadOnlyList<ScriptType> ScanFile(string projectRelativePath, string absolutePath,
+        IEnumerable<string>? defines = null) =>
+        ScanText(projectRelativePath, File.ReadAllText(absolutePath), defines);
 
-    public static IReadOnlyList<ScriptType> ScanText(string projectRelativePath, string source)
+    /// <summary>
+    /// <paramref name="defines"/> is every preprocessor symbol <c>#if</c> should treat as true —
+    /// with no options at all, <see cref="CSharpSyntaxTree.ParseText(string, CSharpParseOptions?,
+    /// string, System.Text.Encoding?, System.Threading.CancellationToken)"/> evaluates every
+    /// <c>#if</c> as false and silently drops the guarded declarations from the tree, which is
+    /// the Plan 15 Task 3 defect this parameter fixes. This method is deliberately just the
+    /// mechanism ("parse with exactly these symbols"); which symbols a project actually compiles
+    /// with is policy decided by <see cref="Hades.Core.Projects.ProjectDefines"/>, not here — a
+    /// caller that passes nothing (every existing call site before this fix, and any test that
+    /// does not care about conditional compilation) gets the same "nothing defined" behaviour the
+    /// scanner always had.
+    /// </summary>
+    public static IReadOnlyList<ScriptType> ScanText(string projectRelativePath, string source,
+        IEnumerable<string>? defines = null)
     {
-        var tree = CSharpSyntaxTree.ParseText(source);
+        var options = new CSharpParseOptions(preprocessorSymbols: defines ?? []);
+        var tree = CSharpSyntaxTree.ParseText(source, options);
         var root = tree.GetRoot();
         var results = new List<ScriptType>();
 

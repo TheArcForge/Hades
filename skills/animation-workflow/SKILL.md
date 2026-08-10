@@ -26,7 +26,7 @@ Before creating or modifying any animation asset:
 1. **Inventory existing animation assets:**
    - Call `search_by_name("*.controller")` to find all Animator Controllers — avoid creating a duplicate for a character that already has one
    - Call `search_by_name("*.anim")` to see which animation clips are already imported and available
-   - Call `find_components_using_pattern("Animator")` to identify which GameObjects/prefabs have an Animator component — this surfaces the characters and props that need controllers wired up
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "Animator", edgeTargetKind: "Class")` to identify which GameObjects/prefabs have an Animator component — this surfaces the characters and props that need controllers wired up
    - Call `recall_memory("animation workflow conventions")` to surface documented team conventions (layer naming, parameter naming, state naming, root motion policy)
 
 2. **Adapt work based on findings:**
@@ -492,12 +492,12 @@ public static class ValidateAvatarSetup
 
 ### Alternative: Direct MCP Tool Calls
 
-If you prefer tool calls over scripting, these editor-action tools are available:
-- `animation_create_controller` — create an AnimatorController asset
-- `animation_edit_controller` — modify controller layers, states, transitions, and parameters
-- `animation_assign_controller` — assign a controller to an Animator component
-- `animation_assign_clip` — assign an AnimationClip to a state
-- `animation_get_controller` — inspect controller structure (layers, states, parameters)
+If you prefer tool calls over scripting, `animation_apply` is the batch tool for animation operations — one call takes an ordered list of operations (`createController`, `editController`, `assignController`, `assignClip`) and applies them in a single Undo group.
+- `animation_apply` `createController` — create an AnimatorController asset
+- `animation_apply` `editController` — modify controller layers, states, transitions, and parameters
+- `animation_apply` `assignController` — assign a controller to an Animator component
+- `animation_apply` `assignClip` — assign an AnimationClip to a state
+- `inspect_asset` — inspect controller structure (layers, states, parameters) without editing
 
 Choose tools for quick one-off operations. Choose C# scripting (AnimatorController API) for reusable Editor tools or complex batch operations.
 
@@ -589,5 +589,5 @@ Choose tools for quick one-off operations. Choose C# scripting (AnimatorControll
 
 - Architecture decisions before animating: `hades:unity-architect`, `hades:component-design`
 - Scene and prefab setup: `hades:scene-authoring`, `hades:prefab-workflow`
-- Hades MCP tools used in this skill: `search_by_name`, `find_components_using_pattern`, `recall_memory`, `propose_memory_update`, `animation_create_controller`, `animation_edit_controller`, `animation_assign_controller`, `animation_assign_clip`, `animation_get_controller`
+- Hades MCP tools used in this skill: `search_by_name`, `graph_query`, `recall_memory`, `propose_memory_update`, `animation_apply`, `inspect_asset`
 - Unity docs: [Animator Controller](https://docs.unity3d.com/6000.0/Documentation/Manual/class-AnimatorController.html), [Blend Trees](https://docs.unity3d.com/6000.0/Documentation/Manual/class-BlendTree.html), [Animation Events](https://docs.unity3d.com/6000.0/Documentation/Manual/animeditor-AnimationEvents.html), [Avatar](https://docs.unity3d.com/6000.0/Documentation/Manual/ConfiguringtheAvatar.html), [AnimatorControllerLayer](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/AnimatorControllerLayer.html)

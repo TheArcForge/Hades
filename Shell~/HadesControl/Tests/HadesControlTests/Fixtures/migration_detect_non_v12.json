@@ -1,0 +1,16 @@
+{
+  "projectRoot": "/Users/mike/Projects/SomeOtherUnityProject",
+  "isV12Project": false,
+  "manifestEntry": {
+    "present": false
+  },
+  "hasMemory": false,
+  "memoryDocumentCount": 0,
+  "hasTraces": false,
+  "hasGraph": false,
+  "hasGeneratedMcpConfig": false,
+  "claudeMd": {
+    "shape": "absent"
+  },
+  "hasUnityPlugin": false
+}

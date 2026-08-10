@@ -343,6 +343,24 @@ public class ReadThroughTests : IDisposable
         Assert.Contains("Legacy.prefab", ex.Message);
     }
 
+    // ---------------------------------------------------------------- GetAssetInfo
+
+    [Fact]
+    public void GetAssetInfo_AMissingFileNamesToolsThatActuallyExistOnTheCurrentSurface()
+    {
+        var ex = Assert.Throws<FileNotFoundException>(
+            () => ReadThrough.GetAssetInfo(_projectRoot, "Assets/Missing.png"));
+
+        Assert.Contains("Missing.png", ex.Message);
+
+        // Regression test for the dead-tool-name cleanup: this used to point at the now-deleted
+        // asset_find. search_by_name alone is not an honest replacement here - it now only
+        // searches C# types - so the general-asset case has to name graph_query's fileType filter
+        // instead (asset_find's real replacement).
+        Assert.Contains("search_by_name (for a script) or graph_query's 'fileType' filter (for any asset)", ex.Message);
+        Assert.DoesNotContain("asset_find", ex.Message);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_projectRoot)) Directory.Delete(_projectRoot, recursive: true);

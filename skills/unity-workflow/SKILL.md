@@ -34,7 +34,7 @@ Before doing anything, understand the scope.
 get_project_summary()          — overall structure: scenes, assemblies, major systems
 get_scene_summary("<scene>")   — current scene hierarchy and component counts
 search_by_name("<keyword>")    — find existing scripts, prefabs, or assets by name
-find_components_using_pattern("<pattern>")  — find where a pattern is already in use
+graph_query(edgeKind: "references", edgeTargetNamePattern: "<pattern>", edgeTargetKind: "Class")  — find where a pattern is already in use
 ```
 
 **Use memory to find prior decisions:**
@@ -128,10 +128,10 @@ propose_memory_update("<domain>", "<what was decided and why>")
 - Presenting a design and immediately starting implementation before the user responds — skips the approval gate.
 - Using `grep -r "ClassName"` to find references instead of `find_references_to` — the graph knows about both asset references and C# code-level references (fields, parameters, constructors, casts, inheritance).
 - Using `find . -name "*.cs"` to locate scripts instead of `search_by_name` — the graph indexes every script, type, and method with their relationships.
-- Reading `.unity` or `.prefab` files as YAML instead of using `get_scene_summary`, `scene_get_hierarchy`, or `prefab_get_contents` — the graph provides parsed, structured data.
+- Reading `.unity` or `.prefab` files as YAML instead of using `get_scene_summary` or `inspect_asset` — the graph provides parsed, structured data.
 
 ## Cross-References
 
 **Skills:** `hades:unity-architect` — architecture decision frameworks. `hades:scene-authoring` — scene construction workflows. `hades:prefab-workflow` — prefab creation and editing. `hades:animation-workflow` — animation controller setup. `hades:unity-reviewer` — code review for Unity anti-patterns.
 
-**Hades MCP Tools:** `get_project_summary`, `get_scene_summary`, `search_by_name` (supports `path_prefix`, `match_mode`), `find_references_to` (asset + C# code references), `trace_dependencies`, `recall_memory`, `propose_memory_update`, `find_components_using_pattern`, `project_get_console_log`, `project_run_tests`, `BeginScriptEditing` / `EndScriptEditing`.
+**Hades MCP Tools:** `get_project_summary`, `get_scene_summary`, `search_by_name` (namePattern substring + optional declaration `kind` filter — no path or exact-match option), `find_references_to` (asset + C# code references), `trace_dependencies`, `recall_memory`, `propose_memory_update`, `graph_query`, `project_get_console_log`, `project_run_tests`, `script_editing_session` (action: `begin`/`end`).

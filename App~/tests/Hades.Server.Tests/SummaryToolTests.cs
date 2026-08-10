@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Hades.Core;
+using Hades.Core.Graph;
+using Hades.Core.Observation;
 using Hades.Core.Storage;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
@@ -153,6 +155,30 @@ public class SummaryToolTests : IClassFixture<WebApplicationFactory<Program>>, I
         Assert.Contains("since", text, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task GetRecentlyChanged_AtTheDocumentedMaxLimit_ReportsTruncatedHonestlyWhenMoreThan500RealMatchesExist()
+    {
+        // docs/backlog/graph-correctness-defects.md defect 2 / Plan 15 Task 1. get_recently_changed
+        // shares GraphDatabase.RecentlyChanged's limit+1-against-a-shared-clamp shape with
+        // graph_query - GraphDatabase.cs:527 is literally the line the defect doc cites - so it is
+        // suspect at its own documented maximum (500) for the identical reason. 600 real file_state
+        // rows are seeded directly, bypassing the indexer entirely since this is pure limit/clamp
+        // arithmetic, not an indexing question.
+        var paths = _factory.Services.GetRequiredService<AppPaths>();
+        using (var db = GraphDatabase.Open(paths.GraphDb(ProjectGuid)))
+        {
+            db.UpsertFileState(Enumerable.Range(0, 600)
+                .Select(i => new FileState { Path = $"Assets/Bulk/Bulk{i}.cs", MTimeUtcMs = i, Size = 1 })
+                .ToList());
+        }
+
+        var structured = Structured(await McpTestClient.CallTool(_factory, "get_recently_changed", new { limit = 500 }));
+
+        Assert.Equal(500, structured.GetProperty("totalReturned").GetInt32());
+        Assert.True(structured.GetProperty("truncated").GetBoolean(),
+            "600 real file_state rows exist but only 500 were requested - truncated must be true");
+    }
+
     // ---------------------------------------------------------------- hades_rebuild_graph
 
     [Fact]
@@ -219,6 +245,12 @@ public class SummaryToolTests : IClassFixture<WebApplicationFactory<Program>>, I
 
     public void Dispose()
     {
+        // See EditorToolTestBase.Dispose's own comment: _factory is a fresh per-test
+        // WebApplicationFactory whose own background services can still be touching
+        // _appRoot/_projectRoot until the host itself is disposed - which must happen before
+        // the recursive delete below.
+        _factory.Dispose();
+
         foreach (var dir in new[] { _appRoot, _projectRoot })
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
     }

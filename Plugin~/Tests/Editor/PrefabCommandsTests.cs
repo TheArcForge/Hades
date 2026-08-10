@@ -149,6 +149,151 @@ namespace Hades.Tests.Editor
             }
         }
 
+        /// <summary>docs/backlog/mutation-tool-defects.md's Defect 3, root-caused: prefab.create
+        /// used to call PrefabUtility.SaveAsPrefabAsset - Unity's DISCONNECTED save - which left the
+        /// source GameObject a plain, unconnected object even though the call reported success. The
+        /// fix (DoCreate now calls SaveAsPrefabAssetAndConnect, matching DoCreateVariant's existing
+        /// pattern) is proven here the same way a caller's NEXT call would observe it - via
+        /// PrefabUtility's own connection-status API - not by trusting prefab.create's JSON result,
+        /// which says nothing about the scene object's connection state either way.</summary>
+        [Test]
+        public void CreatePrefab_ConnectsSceneGameObjectToNewAsset_VerifiedViaPrefabUtility_LeaseCleanlyReleased()
+        {
+            var go = new GameObject("ConnectWidget");
+            go.AddComponent<BoxCollider>();
+            var assetPath = ScratchDir + "/ConnectWidget.prefab";
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject()
+                    .SetProperty("gameObjectPath", JsonValue.String("ConnectWidget"))
+                    .SetProperty("assetPath", JsonValue.String(assetPath));
+                CommandTable.Dispatch(gate, Request("prefab.create", @params));
+
+                var stillThere = GameObject.Find("ConnectWidget");
+                Assert.IsNotNull(stillThere, "the same-named GameObject must still be resolvable in the scene");
+                Assert.AreSame(go, stillThere,
+                    "the ORIGINAL GameObject reference must still be the one in the scene - Unity's own docs promise "
+                    + "this overload does not destroy/replace it, only connects it");
+                Assert.IsTrue(PrefabUtility.IsPartOfPrefabInstance(go), "the source GameObject must become a connected prefab instance, not stay a plain object");
+                Assert.AreEqual(assetPath, PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(go));
+
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
+        /// <summary>The actual repro from docs/backlog/mutation-tool-defects.md's Defect 3: create a
+        /// leaf prefab from a GameObject, reparent that now-connected GameObject under a new root,
+        /// then create a prefab from the root. Before the fix this silently produced a flattened,
+        /// disconnected copy of Leaf (no PrefabInstance block, no m_SourcePrefab), with both calls
+        /// reporting success. Checked against the raw .prefab YAML on disk - the only thing that can
+        /// actually show a prefab is genuinely nested (see this method's own assertions) - not
+        /// against either call's own response.</summary>
+        [Test]
+        public void CreatePrefab_LeafThenReparentThenCreateParent_ProducesGenuineNestedPrefabInstance_VerifiedOnDisk()
+        {
+            var leaf = new GameObject("Leaf");
+            leaf.AddComponent<BoxCollider>();
+            var leafPath = ScratchDir + "/Leaf.prefab";
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                CommandTable.Dispatch(gate, Request("prefab.create", JsonValue.NewObject()
+                    .SetProperty("gameObjectPath", JsonValue.String("Leaf"))
+                    .SetProperty("assetPath", JsonValue.String(leafPath))));
+                var leafGuid = AssetDatabase.AssetPathToGUID(leafPath);
+                Assert.IsNotEmpty(leafGuid);
+
+                var root = new GameObject("Outer");
+                Undo.RegisterCreatedObjectUndo(root, "test setup - not part of the behaviour under test");
+                leaf.transform.SetParent(root.transform);
+
+                var outerPath = ScratchDir + "/Outer.prefab";
+                CommandTable.Dispatch(gate, Request("prefab.create", JsonValue.NewObject()
+                    .SetProperty("gameObjectPath", JsonValue.String("Outer"))
+                    .SetProperty("assetPath", JsonValue.String(outerPath))));
+
+                var fileText = File.ReadAllText(AbsolutePath(outerPath));
+
+                // A genuine nested instance: a PrefabInstance document whose m_SourcePrefab points
+                // at Leaf's own GUID. The flattened-copy bug produced neither - Leaf's hierarchy was
+                // duplicated inline instead, with no reference back to Leaf.prefab at all.
+                StringAssert.Contains("PrefabInstance:", fileText);
+                StringAssert.Contains("m_SourcePrefab", fileText);
+                StringAssert.Contains("guid: " + leafGuid, fileText);
+
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
+        /// <summary>The documented workaround (docs/backlog/mutation-tool-defects.md's Defect 3)
+        /// must keep working unchanged now that 'create' itself also connects: instantiate the leaf
+        /// as a child FIRST (InstantiatePrefab already connected, even before this fix), then create
+        /// the parent from that hierarchy. A regression guard, not new behaviour - this already
+        /// worked before DoCreate changed.</summary>
+        [Test]
+        public void CreatePrefab_InstantiateChildFirstThenCreateParent_StillProducesNestedPrefabInstance_VerifiedOnDisk()
+        {
+            var leafSource = new GameObject("Leaf2");
+            var leafPath = ScratchDir + "/Leaf2.prefab";
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                CommandTable.Dispatch(gate, Request("prefab.create", JsonValue.NewObject()
+                    .SetProperty("gameObjectPath", JsonValue.String("Leaf2"))
+                    .SetProperty("assetPath", JsonValue.String(leafPath))));
+                var leafGuid = AssetDatabase.AssetPathToGUID(leafPath);
+
+                var root = new GameObject("Outer2");
+                Undo.RegisterCreatedObjectUndo(root, "test setup - not part of the behaviour under test");
+
+                CommandTable.Dispatch(gate, Request("prefab.instantiate", JsonValue.NewObject()
+                    .SetProperty("prefabPath", JsonValue.String(leafPath))
+                    .SetProperty("parent", JsonValue.String("Outer2"))));
+
+                var outerPath = ScratchDir + "/Outer2.prefab";
+                CommandTable.Dispatch(gate, Request("prefab.create", JsonValue.NewObject()
+                    .SetProperty("gameObjectPath", JsonValue.String("Outer2"))
+                    .SetProperty("assetPath", JsonValue.String(outerPath))));
+
+                var fileText = File.ReadAllText(AbsolutePath(outerPath));
+                StringAssert.Contains("PrefabInstance:", fileText);
+                StringAssert.Contains("guid: " + leafGuid, fileText);
+
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
+        /// <summary>DoCreate's own doc comment: the connect step deliberately uses
+        /// InteractionMode.AutomatedAction, so it registers no Undo entry of its own (matching
+        /// DoCreateVariant). This proves that choice does not corrupt the GameObject's EARLIER,
+        /// already-registered creation - Undo.PerformUndo after prefab.create must still cleanly
+        /// remove the GameObject, not throw and not leave a half-reverted mess, even though the
+        /// object was connected to a prefab in between.</summary>
+        [Test]
+        public void CreatePrefab_DoesNotCorruptPriorUndoRegistration_UndoStillCleanlyRevertsTheEarlierMutation()
+        {
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                CommandTable.Dispatch(gate, Request("scene.create_gameobject",
+                    JsonValue.NewObject().SetProperty("name", JsonValue.String("UndoTarget"))));
+
+                CommandTable.Dispatch(gate, Request("prefab.create", JsonValue.NewObject()
+                    .SetProperty("gameObjectPath", JsonValue.String("UndoTarget"))
+                    .SetProperty("assetPath", JsonValue.String(ScratchDir + "/UndoTarget.prefab"))));
+
+                Assert.DoesNotThrow(() => Undo.PerformUndo());
+                Assert.IsNull(GameObject.Find("UndoTarget"),
+                    "undoing the GameObject's creation must still remove it even though it was later connected to a prefab");
+
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
         // ------------------------------------------------------------------------- prefab.instantiate
 
         [Test]
@@ -296,6 +441,17 @@ namespace Hades.Tests.Editor
                 StringAssert.Contains("expected", note.AsString());
                 StringAssert.DoesNotContain("NOT the known", note.AsString());
 
+                // Defect 5 (docs/backlog/mutation-tool-defects.md): this note used to point at
+                // prefab_open_editing/prefab_edit_property/prefab_save_editing, none of which exist
+                // post-consolidation. Defect 6: it also used to claim the restriction holds
+                // "regardless of caller", contradicted by a Prefab Variant E2E finding.
+                StringAssert.Contains("prefab_apply", note.AsString());
+                StringAssert.DoesNotContain("prefab_open_editing", note.AsString());
+                StringAssert.DoesNotContain("prefab_edit_property", note.AsString());
+                StringAssert.DoesNotContain("prefab_save_editing", note.AsString());
+                StringAssert.DoesNotContain("regardless of caller", note.AsString());
+                LiveMcpToolNames.AssertMessageNamesOnlyLiveTools(note.AsString());
+
                 var fileText = File.ReadAllText(AbsolutePath(prefabPath));
                 StringAssert.Contains("{x: 0, y: 0, z: 0}", fileText); // the root's position on disk never moved
 
@@ -349,6 +505,7 @@ namespace Hades.Tests.Editor
                 Assert.IsTrue(result.TryGetProperty("note", out var note) && note.Kind == JsonValueKind.String);
                 StringAssert.Contains("expected", note.AsString());
                 StringAssert.DoesNotContain("NOT the known", note.AsString());
+                LiveMcpToolNames.AssertMessageNamesOnlyLiveTools(note.AsString());
 
                 // Verified on disk, not by trusting the response - the whole point of this defect.
                 var fileText = File.ReadAllText(AbsolutePath(prefabPath));
@@ -493,6 +650,12 @@ namespace Hades.Tests.Editor
                 var ex = Assert.Throws<InvalidOperationException>(() => CommandTable.Dispatch(gate, Request("prefab.open_editing", @params)));
                 StringAssert.Contains(prefabPath, ex.Message);
 
+                // Defect 5 (docs/backlog/mutation-tool-defects.md): used to say "Call
+                // prefab_save_editing first", a tool the 103->32 consolidation already removed.
+                StringAssert.Contains("prefab_apply", ex.Message);
+                StringAssert.DoesNotContain("prefab_save_editing", ex.Message);
+                LiveMcpToolNames.AssertMessageNamesOnlyLiveTools(ex.Message);
+
                 AssertLeaseCleanlyReleased(fake, gate);
 
                 CommandTable.Dispatch(gate, Request("prefab.save_editing", JsonValue.NewObject()));
@@ -506,7 +669,13 @@ namespace Hades.Tests.Editor
             using (pump) using (gate)
             {
                 var ex = Assert.Throws<InvalidOperationException>(() => CommandTable.Dispatch(gate, Request("prefab.save_editing", JsonValue.NewObject())));
-                StringAssert.Contains("prefab_open_editing", ex.Message);
+
+                // Defect 5 (docs/backlog/mutation-tool-defects.md): this used to say "Call
+                // prefab_open_editing first" - prefab_open_editing does not exist post-consolidation
+                // (folded into prefab_apply's 'editProperty' op, which needs no open session at all).
+                StringAssert.Contains("prefab_apply", ex.Message);
+                StringAssert.DoesNotContain("prefab_open_editing", ex.Message);
+                LiveMcpToolNames.AssertMessageNamesOnlyLiveTools(ex.Message);
 
                 AssertLeaseCleanlyReleased(fake, gate);
             }
@@ -620,6 +789,16 @@ namespace Hades.Tests.Editor
 
                 var ex = Assert.Throws<InvalidOperationException>(() => CommandTable.Dispatch(gate, Request("prefab.create", @params)));
                 StringAssert.Contains("someone-elses-session", ex.Message);
+
+                // Defect 5 (docs/backlog/mutation-tool-defects.md): this used to say "likely an
+                // in-progress BeginScriptEditing session... Call lease_release" - BeginScriptEditing
+                // was renamed (not just consolidated) to script_editing_session, and lease_release was
+                // never a real MCP tool name at all (the actual wire method, "lease.release", is an
+                // internal plugin<->app RPC, never something an agent calls directly).
+                StringAssert.Contains("script_editing_session", ex.Message);
+                StringAssert.DoesNotContain("BeginScriptEditing", ex.Message);
+                StringAssert.DoesNotContain("lease_release", ex.Message);
+                LiveMcpToolNames.AssertMessageNamesOnlyLiveTools(ex.Message);
 
                 // The other session's lease must be completely untouched.
                 Assert.IsTrue(gate.IsHeld);

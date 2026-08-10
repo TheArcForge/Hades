@@ -249,6 +249,63 @@ public struct ControlClient: Sendable {
         return try await post("/control/memory/proposals/defer", query: query)
     }
 
+    // MARK: - Migration (Plan 14 Task 10) - the missing caller
+    //
+    // Mirrors App~/src/Hades.Server/Control/MigrationEndpoint.cs field for field and route for
+    // route - that file's own class doc comment is the design reference. Detection and import
+    // need no confirmation of any kind (safe/non-destructive by construction); every cleanup
+    // route takes its own `proceed`, with no default here either - matching `V12Cleanup`'s own
+    // required, no-default parameter and this package's own `MigrationCleanupRequest` shape.
+
+    /// `GET /control/migration/{productGuid}/detect` - read-only, safe to call at any time.
+    public func migrationDetect(productGuid: String) async throws(ControlClientError) -> MigrationDetectionResult {
+        try await get("/control/migration/\(encodedPathSegment(productGuid))/detect")
+    }
+
+    /// `POST /control/migration/{productGuid}/importMemory`. No request body: memory import is
+    /// mandatory-safe (never overwrites, never touches the source), so there is nothing to
+    /// confirm - see `MigrationEndpoint.ImportMemory`'s own doc comment.
+    public func migrationImportMemory(productGuid: String) async throws(ControlClientError) -> MigrationMemoryImportResult {
+        try await post("/control/migration/\(encodedPathSegment(productGuid))/importMemory")
+    }
+
+    /// `POST /control/migration/{productGuid}/importTraces`. No request body - same reasoning as
+    /// `migrationImportMemory(productGuid:)`.
+    public func migrationImportTraces(productGuid: String) async throws(ControlClientError) -> MigrationTracesImportResult {
+        try await post("/control/migration/\(encodedPathSegment(productGuid))/importTraces")
+    }
+
+    /// `POST /control/migration/{productGuid}/cleanClaudeMd`. `proceed` has no default - a caller
+    /// must decide explicitly every time, matching `V12Cleanup.CleanClaudeMd`'s own contract.
+    public func migrationCleanClaudeMd(productGuid: String, proceed: Bool) async throws(ControlClientError) -> MigrationClaudeMdCleanupResult {
+        try await post(
+            "/control/migration/\(encodedPathSegment(productGuid))/cleanClaudeMd",
+            body: MigrationCleanupRequest(proceed: proceed))
+    }
+
+    /// `POST /control/migration/{productGuid}/cleanManifest`.
+    public func migrationCleanManifest(productGuid: String, proceed: Bool) async throws(ControlClientError) -> MigrationManifestCleanupResult {
+        try await post(
+            "/control/migration/\(encodedPathSegment(productGuid))/cleanManifest",
+            body: MigrationCleanupRequest(proceed: proceed))
+    }
+
+    /// `POST /control/migration/{productGuid}/cleanMcpConfig`.
+    public func migrationCleanMcpConfig(productGuid: String, proceed: Bool) async throws(ControlClientError) -> MigrationMcpConfigCleanupResult {
+        try await post(
+            "/control/migration/\(encodedPathSegment(productGuid))/cleanMcpConfig",
+            body: MigrationCleanupRequest(proceed: proceed))
+    }
+
+    /// `POST /control/migration/claudeDesktopConfig/clean` - deliberately carries no productGuid
+    /// anywhere in its path or body. `claude_desktop_config.json` is global and per-user, not
+    /// per-project (spec #4 §5); this signature has no `productGuid` parameter to pass even by
+    /// mistake. See `MigrationEndpoint.CleanClaudeDesktopConfig`'s own doc comment for how the
+    /// core resolves the real file path itself, never from anything this client sends.
+    public func migrationCleanClaudeDesktopConfig(proceed: Bool) async throws(ControlClientError) -> MigrationClaudeDesktopConfigCleanupResult {
+        try await post("/control/migration/claudeDesktopConfig/clean", body: MigrationCleanupRequest(proceed: proceed))
+    }
+
     // MARK: - Request plumbing
 
     private func get<Response: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws(ControlClientError) -> Response {

@@ -25,7 +25,7 @@ Do NOT activate for URP questions — redirect to `hades:unity-shaders-urp`. Do 
 Before making recommendations:
 
 1. **Confirm the render pipeline:**
-   - Call `analyze_render_pipeline()` — CRITICAL first step. If the result indicates URP, stop and redirect to `hades:unity-shaders-urp`. If Built-in, warn the user and note the migration path.
+   - Call `project_settings(section: "renderPipeline")` — CRITICAL first step. If the result indicates URP, stop and redirect to `hades:unity-shaders-urp`. If Built-in, warn the user and note the migration path.
    - Confirm the `HDRenderPipelineAsset` is assigned in Project Settings > Graphics.
 
 2. **Understand existing shader assets:**
@@ -565,6 +565,6 @@ public class LODMaterialSwapper : MonoBehaviour
 ## Cross-References
 
 - Related skills: `hades:unity-performance`, `hades:unity-vfx`
-- Hades MCP tools used here: `analyze_render_pipeline`, `search_by_name`, `recall_memory`, `propose_memory_update`
+- Hades MCP tools used here: `project_settings` (section: "renderPipeline"), `search_by_name`, `recall_memory`, `propose_memory_update`
 - If pipeline is URP → `hades:unity-shaders-urp`
 - Unity docs: [HDRP Material reference](https://docs.unity3d.com/Packages/com.unity.render-pipelines.high-definition@17.0/manual/Material-Types.html), [Custom Pass framework](https://docs.unity3d.com/Packages/com.unity.render-pipelines.high-definition@17.0/manual/Custom-Pass.html), [Volume system](https://docs.unity3d.com/Packages/com.unity.render-pipelines.high-definition@17.0/manual/Volumes.html), [Ray tracing overview](https://docs.unity3d.com/Packages/com.unity.render-pipelines.high-definition@17.0/manual/Ray-Tracing-Getting-Started.html)

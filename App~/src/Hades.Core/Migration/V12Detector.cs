@@ -34,14 +34,18 @@ public enum ClaudeMdShape
     /// <summary>No CLAUDE.md at all. Ordinary, not an error.</summary>
     Absent,
 
-    /// <summary>Contains a well-formed &lt;!-- HADES:START --&gt; / &lt;!-- HADES:END --&gt;
-    /// pair. Only the block between them is Hades' - everything outside it, marked or not, is
-    /// left alone by cleanup regardless of how it reads.</summary>
+    /// <summary>Contains EXACTLY ONE well-formed &lt;!-- HADES:START --&gt; / &lt;!-- HADES:END --&gt;
+    /// pair - no second START or END anywhere else in the file. Only the block between them is
+    /// Hades' - everything outside it, marked or not, is left alone by cleanup regardless of how
+    /// it reads.</summary>
     Marked,
 
-    /// <summary>Exists, but has no well-formed marker pair. Covers BOTH a file Hades wrote
-    /// wholesale before markers existed and a file the user wrote themselves with no Hades
-    /// involvement at all - see <see cref="V12Detector"/>'s remarks.</summary>
+    /// <summary>Exists, but has no single well-formed marker pair. Covers a file Hades wrote
+    /// wholesale before markers existed, a file the user wrote themselves with no Hades
+    /// involvement at all - see <see cref="V12Detector"/>'s remarks on why those two are not told
+    /// apart - AND a file with a second START or END anywhere (nested or a separate extra pair),
+    /// where which pair is "the" block is genuinely ambiguous: never guessed at, folded in here
+    /// with the same "ask, never assume" answer every other Unmarked case already gets.</summary>
     Unmarked,
 }
 
@@ -268,7 +272,18 @@ public static class V12Detector
         var start = content.IndexOf(StartMarker, StringComparison.Ordinal);
         var end = content.IndexOf(EndMarker, StringComparison.Ordinal);
 
-        if (start >= 0 && end > start)
+        // A second occurrence of either marker anywhere else in the file - nested inside the
+        // first pair, or simply a second well-formed pair later on - makes which pair is "the"
+        // block genuinely ambiguous. This is exactly the shape V12Cleanup's own multiplicity
+        // guard (CountOccurrences(...) != 1) already refuses to act on rather than guess at;
+        // checking it here too means Shape.Marked itself is now trustworthy, so no future
+        // consumer has to re-derive that same defence just to avoid acting on a false positive.
+        var hasSecondStart = start >= 0
+            && content.IndexOf(StartMarker, start + StartMarker.Length, StringComparison.Ordinal) >= 0;
+        var hasSecondEnd = end >= 0
+            && content.IndexOf(EndMarker, end + EndMarker.Length, StringComparison.Ordinal) >= 0;
+
+        if (start >= 0 && end > start && !hasSecondStart && !hasSecondEnd)
         {
             return new ClaudeMdState
             {

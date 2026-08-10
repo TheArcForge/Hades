@@ -348,6 +348,13 @@ public class MemoryToolsTests : IClassFixture<WebApplicationFactory<Program>>, I
 
     public void Dispose()
     {
+        // See EditorToolTestBase.Dispose's own comment: _factory is a fresh per-test
+        // WebApplicationFactory whose own background services can still be touching
+        // _appRoot/_projectRoot until the host itself is disposed - which must happen before
+        // the recursive delete below. Confirmed live: this exact race is what failed here in
+        // the first full-suite run during this fix's own verification.
+        _factory.Dispose();
+
         foreach (var dir in new[] { _appRoot, _projectRoot })
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
     }

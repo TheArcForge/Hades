@@ -524,7 +524,7 @@ public sealed class GraphDatabase : IDisposable
             LIMIT $limit;
             """;
         command.Parameters.AddWithValue("$since", (object?)sinceUtcMs ?? DBNull.Value);
-        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, MaxSearchLimit));
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, MaxSearchFetch));
 
         var results = new List<FileState>();
         using var reader = command.ExecuteReader();
@@ -669,10 +669,49 @@ public sealed class GraphDatabase : IDisposable
         path.Equals(prefix, StringComparison.Ordinal)
         || path.StartsWith(prefix + "/", StringComparison.Ordinal);
 
-    /// <summary>Upper bound on <see cref="SearchByName"/>'s <c>limit</c> regardless of what a
-    /// caller passes — unbounded results are a token-budget hazard for the agent consuming them,
-    /// and SQLite treats a negative LIMIT as "no limit", so the parameter alone cannot enforce it.</summary>
+    /// <summary>
+    /// The largest <c>limit</c> any MCP tool built on this database documents as its own maximum
+    /// (graph_query, get_recently_changed, search_by_name, find_unset_references' project scope,
+    /// ...) — what a CALLER may legitimately request. Deliberately kept separate from <see
+    /// cref="MaxSearchFetch"/>, the ceiling actually applied to a raw SQL LIMIT: those are two
+    /// different questions, and conflating them was Plan 15 Task 1's defect 2 (see <see
+    /// cref="MaxSearchFetch"/>'s own doc comment for the mechanism). This constant is not read
+    /// directly by any query — every one of the six methods below clamps against <see
+    /// cref="MaxSearchFetch"/> instead, so that a caller AT this documented maximum still gets an
+    /// honest answer.
+    /// </summary>
     const int MaxSearchLimit = 500;
+
+    /// <summary>
+    /// Upper bound on the raw number of rows a single query is willing to fetch — deliberately ONE
+    /// MORE than <see cref="MaxSearchLimit"/>, not equal to it. Unbounded results are a
+    /// token-budget hazard for the agent consuming them, and SQLite treats a negative LIMIT as "no
+    /// limit", so the parameter alone cannot enforce a cap — that much <see cref="MaxSearchLimit"/>
+    /// already covered.
+    ///
+    /// The reason for the extra one: every tool built on this database (graph_query,
+    /// get_recently_changed, ...) detects truncation honestly by requesting <c>limit + 1</c> rows
+    /// and checking whether more came back than it asked for — see e.g. QueryTools.GraphQuery's own
+    /// "One more than the cap" comment. At a caller's own documented maximum (=
+    /// <see cref="MaxSearchLimit"/>), that sentinel request becomes <see cref="MaxSearchLimit"/> + 1
+    /// rows. Before this constant existed as its own thing (Plan 15 Task 1 —
+    /// docs/backlog/graph-correctness-defects.md defect 2), a single shared constant of 500 played
+    /// both roles, so the raw SQL LIMIT clamp discarded that sentinel row at exactly a caller's own
+    /// maximum: clamping 501 and clamping 500 both bottomed out at 500, indistinguishable, so a
+    /// caller AT the documented maximum could never tell "exactly 500 real matches" from "500
+    /// truncated out of thousands" — measured on a real project at exactly this boundary (1,232
+    /// true matches, <c>limit=500</c> reported <c>truncated: false</c>).
+    ///
+    /// This constant is the fix, and nothing more than the fix: it only widens what the DATABASE is
+    /// willing to fetch on the way there. What a tool hands back to its own caller is still bounded
+    /// by the ORIGINAL limit via that tool's own <c>.Take(limit)</c> afterward (e.g.
+    /// QueryTools.BuildResult) — so <c>totalReturned</c> never exceeds what was requested, only
+    /// <c>truncated</c> becomes trustworthy at the boundary. Applied uniformly to every method below
+    /// that shared the old single-constant clamp, not only the ones with a live caller today, so a
+    /// future caller adopting the same <c>limit + 1</c> convention does not silently reintroduce
+    /// this defect.
+    /// </summary>
+    const int MaxSearchFetch = MaxSearchLimit + 1;
 
     /// <summary>Escapes SQLite LIKE wildcards (<c>%</c>, <c>_</c>) and the escape character itself,
     /// so a literal search for e.g. "m_Health" cannot also match "mXHealth" — underscores are
@@ -763,7 +802,7 @@ public sealed class GraphDatabase : IDisposable
             """;
         command.Parameters.AddWithValue("$pattern", $"%{EscapeLikeWildcards(pattern.ToLowerInvariant())}%");
         command.Parameters.AddWithValue("$kind", (object?)kind ?? DBNull.Value);
-        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, MaxSearchLimit));
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, MaxSearchFetch));
 
         var results = new List<GraphNode>();
         using var reader = command.ExecuteReader();
@@ -813,7 +852,7 @@ public sealed class GraphDatabase : IDisposable
             ORDER BY path, name
             LIMIT $limit;
             """;
-        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, MaxSearchLimit));
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, MaxSearchFetch));
 
         var results = new List<GraphNode>();
         using var reader = command.ExecuteReader();
@@ -858,7 +897,7 @@ public sealed class GraphDatabase : IDisposable
             LIMIT $limit;
             """;
         command.Parameters.AddWithValue("$pattern", $"%{EscapeLikeWildcards(namePattern.ToLowerInvariant())}%");
-        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, MaxSearchLimit));
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, MaxSearchFetch));
 
         var results = new List<ComponentUsage>();
         using var reader = command.ExecuteReader();
@@ -913,7 +952,7 @@ public sealed class GraphDatabase : IDisposable
             LIMIT $limit;
             """;
         command.Parameters.AddWithValue("$pattern", $"%{EscapeLikeWildcards(typeNamePattern.ToLowerInvariant())}%");
-        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, MaxSearchLimit));
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, MaxSearchFetch));
 
         var results = new List<ComponentMatch>();
         using var reader = command.ExecuteReader();
@@ -1034,7 +1073,7 @@ public sealed class GraphDatabase : IDisposable
             LIMIT $limit;
             """;
         command.Parameters.AddWithValue("$suffixPattern", $"%{EscapeLikeWildcards(PersistentCallTargetSuffix)}");
-        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, MaxSearchLimit));
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, MaxSearchFetch));
 
         var results = new List<UnityEventHit>();
         using var reader = command.ExecuteReader();
@@ -1206,7 +1245,7 @@ public sealed class GraphDatabase : IDisposable
             edgeTargetNamePattern is null ? DBNull.Value : $"%{EscapeLikeWildcards(edgeTargetNamePattern.ToLowerInvariant())}%");
         command.Parameters.AddWithValue("$edgeTargetKind", (object?)edgeTargetKind ?? DBNull.Value);
         command.Parameters.AddWithValue("$edgeAbsent", edgeAbsent ? 1 : 0);
-        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, MaxSearchLimit));
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, MaxSearchFetch));
 
         var results = new List<GraphNode>();
         using var reader = command.ExecuteReader();

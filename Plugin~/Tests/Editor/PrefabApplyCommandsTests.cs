@@ -189,6 +189,19 @@ namespace Hades.Tests.Editor
                 Assert.IsTrue(overridesData.TryGetProperty("unappliedProperties", out var unapplied) && unapplied.Kind == JsonValueKind.Array);
                 CollectionAssert.Contains(unapplied.Items.Select(i => i.AsString()).ToList(), "m_Name");
 
+                // prefab_apply's 'applyOverrides' op calls the exact same DoApplyOverrides core as the
+                // standalone prefab.apply_overrides wire method (see PrefabApplyCommands' own class doc
+                // comment), so it carries the identical 'note' - and Defect 5/6's fixes to that note's
+                // wording (docs/backlog/mutation-tool-defects.md) must be visible through THIS entry
+                // point too, not just the one PrefabCommandsTests exercises directly.
+                Assert.IsTrue(overridesData.TryGetProperty("note", out var overridesNote) && overridesNote.Kind == JsonValueKind.String);
+                StringAssert.Contains("prefab_apply", overridesNote.AsString());
+                StringAssert.DoesNotContain("prefab_open_editing", overridesNote.AsString());
+                StringAssert.DoesNotContain("prefab_edit_property", overridesNote.AsString());
+                StringAssert.DoesNotContain("prefab_save_editing", overridesNote.AsString());
+                StringAssert.DoesNotContain("regardless of caller", overridesNote.AsString());
+                LiveMcpToolNames.AssertMessageNamesOnlyLiveTools(overridesNote.AsString());
+
                 AssertExactlyOneLeaseWindow(fake, gate);
             }
         }
@@ -255,11 +268,15 @@ namespace Hades.Tests.Editor
 
         // ---------------------------------------------------------------- the headline: one undo, whole spec reverted
 
-        /// <summary>'instantiate' is the one op among the five whose effect is actually part of
-        /// Unity's interactive Undo stack (the others mutate an asset on disk, outside that model -
-        /// see PrefabApplyCommands' own class doc comment). Two instantiate ops of the SAME prefab
-        /// in one batch (Unity auto-disambiguates the second instance's name) is enough to prove a
-        /// single Ctrl/Cmd+Z reverts the WHOLE batch, not just the second.</summary>
+        /// <summary>'instantiate' is the one op among the five that leaves anything on Unity's
+        /// interactive Undo STACK (the others mutate an asset on disk, outside that model - see
+        /// PrefabApplyCommands' own class doc comment). 'create' also mutates the scene now - see
+        /// PrefabCommands.DoCreate's own doc comment (docs/backlog/mutation-tool-defects.md's
+        /// Defect 3) - but deliberately via InteractionMode.AutomatedAction, so it still registers no
+        /// Undo entry of its own; 'instantiate' remains the only one this specific test needs. Two
+        /// instantiate ops of the SAME prefab in one batch (Unity auto-disambiguates the second
+        /// instance's name) is enough to prove a single Ctrl/Cmd+Z reverts the WHOLE batch, not just
+        /// the second.</summary>
         [Test]
         public void Apply_RegistersUndoAsOneGroup_PerformUndoRevertsEveryOperation()
         {
@@ -288,6 +305,52 @@ namespace Hades.Tests.Editor
             var remaining = UnityEngine.Object.FindObjectsByType<Transform>(FindObjectsSortMode.None)
                 .Count(t => t.parent == null && t.name.StartsWith("UndoWidget", StringComparison.Ordinal));
             Assert.AreEqual(0, remaining, "the whole batch must revert together - BOTH instances gone after ONE undo");
+        }
+
+        // ---------------------------------------------------------------- Defect 3: nested prefabs via 'create'
+
+        /// <summary>docs/backlog/mutation-tool-defects.md's Defect 3, exercised through prefab_apply's
+        /// own batch entry point rather than PrefabCommandsTests' standalone prefab.create call -
+        /// proves the fix (PrefabCommands.DoCreate now calls SaveAsPrefabAssetAndConnect) reaches
+        /// this consolidated tool too, since 'create' calls the identical DoCreate core (see this
+        /// class's own doc comment, "Op vocabulary reuses PrefabCommands' own field names verbatim").
+        /// Checked against the raw .prefab YAML exactly like the standalone version - a nested
+        /// PrefabInstance referencing the leaf's own GUID, not a flattened copy.</summary>
+        [Test]
+        public void CreateThenReparentThenCreate_OneBatchPerStep_ProducesGenuineNestedPrefabInstance_VerifiedOnDisk()
+        {
+            var leaf = new GameObject("BatchLeaf");
+            leaf.AddComponent<BoxCollider>();
+            var leafPath = ScratchDir + "/BatchLeaf.prefab";
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                CommandTable.Dispatch(gate, Request("prefab.apply", Params(
+                    Op("create", ("gameObjectPath", JsonValue.String("BatchLeaf")), ("assetPath", JsonValue.String(leafPath))))));
+                var leafGuid = AssetDatabase.AssetPathToGUID(leafPath);
+                Assert.IsNotEmpty(leafGuid);
+
+                var root = new GameObject("BatchOuter");
+                Undo.RegisterCreatedObjectUndo(root, "test setup - not part of the behaviour under test");
+                leaf.transform.SetParent(root.transform);
+
+                var outerPath = ScratchDir + "/BatchOuter.prefab";
+                CommandTable.Dispatch(gate, Request("prefab.apply", Params(
+                    Op("create", ("gameObjectPath", JsonValue.String("BatchOuter")), ("assetPath", JsonValue.String(outerPath))))));
+
+                var fileText = File.ReadAllText(AbsolutePath(outerPath));
+                StringAssert.Contains("PrefabInstance:", fileText);
+                StringAssert.Contains("m_SourcePrefab", fileText);
+                StringAssert.Contains("guid: " + leafGuid, fileText);
+
+                // Two separate prefab.apply calls, each its own lease window - unlike
+                // AssertExactlyOneLeaseWindow (written for a SINGLE Dispatch call), this is two,
+                // still perfectly balanced.
+                Assert.IsFalse(gate.IsHeld, "prefab.apply must never leave a lease held");
+                Assert.AreEqual(fake.LockCalls, fake.UnlockCalls, "every Lock must be balanced by exactly one Unlock across both calls");
+                Assert.AreEqual(2, fake.LockCalls, "two separate prefab.apply calls, each its own lease window");
+            }
         }
     }
 }

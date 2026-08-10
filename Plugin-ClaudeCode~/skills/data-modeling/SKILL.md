@@ -24,7 +24,7 @@ Before making recommendations:
 
 1. **Check existing assets and types in the graph:**
    - Call `search_by_name("*.asset")` to discover existing ScriptableObject assets and understand naming conventions
-   - Call `find_components_using_pattern("ScriptableObject")` to find SO-derived types already defined in the project
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "ScriptableObject", edgeTargetKind: "Class")` to find SO-derived types already defined in the project
    - Call `get_project_summary()` to understand project scale — asset count and assembly structure inform whether a lightweight pattern or a formal save-system layer is appropriate
 
 2. **Check team decisions in memory:**
@@ -546,5 +546,5 @@ public PlayerSaveData ExtractSaveData() =>
 ## Cross-References
 
 - Related skills: `hades:component-design`, `hades:unity-architect`, `hades:prefab-architecture`
-- Hades MCP tools: `search_by_name`, `find_components_using_pattern`, `get_project_summary`, `recall_memory`, `propose_memory_update`
+- Hades MCP tools: `search_by_name`, `graph_query`, `get_project_summary`, `recall_memory`, `propose_memory_update`
 - Unity docs: [ScriptableObject](https://docs.unity3d.com/6000.0/Documentation/Manual/class-ScriptableObject.html), [JsonUtility](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/JsonUtility.html), [Application.persistentDataPath](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/Application-persistentDataPath.html), [CreateAssetMenu](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/CreateAssetMenuAttribute.html)

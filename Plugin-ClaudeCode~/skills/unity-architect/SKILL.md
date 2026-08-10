@@ -25,10 +25,10 @@ Before making recommendations:
 
 1. **Check existing patterns in the graph (always use Hades tools first, not grep/find):**
    - Call `get_project_summary()` to understand project scale, render pipeline, assembly count, asset coverage, and asset volumes — a 200-prefab project warrants different advice than a 20-prefab one
-   - Call `search_by_name("<keyword>", path_prefix="Assets/Scripts")` to find scripts in a specific directory, or use `match_mode="exact"` for precise lookups
+   - Call `search_by_name("<keyword>", kind="Class")` to filter by declaration kind — `search_by_name` has no path-prefix or exact-match option anymore; use `graph_query(namePattern: "<keyword>", pathPrefix: "Assets/Scripts")` to scope a search to one directory
    - Call `find_references_to("<script_path>")` to discover all dependents — returns both asset references (prefabs, scenes) and C# code references (fields, parameters, inheritance, constructors)
-   - Call `find_components_using_pattern("Pool")` or `find_components_using_pattern("Factory")` to discover whether spawn infrastructure already exists
-   - Call `find_components_using_pattern("GameEvent")` or `find_components_using_pattern("EventChannel")` to detect event architecture
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "Pool", edgeTargetKind: "Class")` or with `edgeTargetNamePattern: "Factory"` to discover whether spawn infrastructure already exists
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "GameEvent", edgeTargetKind: "Class")` or with `edgeTargetNamePattern: "EventChannel"` to detect event architecture
    - Call `trace_dependencies("<CentralSystem>")` on any system the new feature depends on to surface tight coupling early
 
 2. **Check team decisions in memory:**
@@ -585,5 +585,5 @@ propose_memory_update("architecture", "<system name>: <pattern chosen> because <
 
 - Related skills: `hades:prefab-architecture`, `hades:scene-architecture`, `hades:component-design`, `hades:data-modeling`, `hades:unity-performance`
 - Workflow skills: `hades:prefab-workflow`, `hades:scene-authoring`, `hades:animation-workflow`, `hades:unity-reviewer`
-- Hades MCP tools: `get_project_summary`, `find_components_using_pattern`, `recall_memory`, `propose_memory_update`, `search_by_name`, `trace_dependencies`
+- Hades MCP tools: `get_project_summary`, `graph_query`, `recall_memory`, `propose_memory_update`, `search_by_name`, `trace_dependencies`
 - Unity docs: [ScriptableObject](https://docs.unity3d.com/6000.0/Documentation/Manual/class-ScriptableObject.html), [Prefab Variants](https://docs.unity3d.com/6000.0/Documentation/Manual/PrefabVariants.html), [Additive Scene Loading](https://docs.unity3d.com/6000.0/Documentation/Manual/MultiSceneEditing.html), [Unity Profiler](https://docs.unity3d.com/6000.0/Documentation/Manual/Profiler.html)

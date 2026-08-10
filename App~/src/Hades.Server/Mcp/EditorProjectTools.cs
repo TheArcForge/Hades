@@ -361,7 +361,11 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
                 // call with no matching 'begin', or after the plugin's TTL already released it):
                 // whatever this app believed about a held lease for this project stops being
                 // trustworthy the moment 'end' has been requested, regardless of the plugin's own
-                // 'released' value.
+                // 'released' value. Not a workaround for LeaseRegistry.Get/All's own TTL self-expiry
+                // (see that class's doc comment) - the two agree rather than compete: self-expiry
+                // already stops a TTL-passed belief from being reported as held before 'end' is ever
+                // called, and this Clear makes that same "nothing left to believe" outcome immediate
+                // and unconditional the moment 'end' is requested, independent of TTL math.
                 leases.Clear(productGuid);
 
                 return new ScriptEditingSessionResult

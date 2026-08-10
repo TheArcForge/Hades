@@ -1,12 +1,17 @@
 import HadesControl
 
 /// The one place `ControlIconState` / `ControlSeverity` / `MenuBarContent` become an SF Symbol
-/// name. Every mapping here is one-to-one and fixed at compile time by an exhaustive switch -
-/// never a comparison between two pieces of data, which is exactly the "precedence logic" spec #3
-/// forbids in Swift. Precedence (which project's state wins, whether an error outranks an
-/// in-progress index) already happened server-side to produce the single `iconState` value
-/// `symbolName(for iconState:)` switches on; this type only picks a picture for a value the core
-/// already resolved.
+/// name, for spots that sit next to their own status text (a popover row, a headline label) where
+/// a generic glyph reads fine. Every mapping here is one-to-one and fixed at compile time by an
+/// exhaustive switch - never a comparison between two pieces of data, which is exactly the
+/// "precedence logic" spec #3 forbids in Swift. Precedence (which project's state wins, whether an
+/// error outranks an in-progress index) already happened server-side to produce the single
+/// `iconState` value `symbolName(for iconState:)` switches on; this type only picks a picture for a
+/// value the core already resolved.
+///
+/// The `NSStatusItem`'s own glyph does NOT use this type: it is a fixed, stateless "H" (see
+/// `MenuBarController.render(accessibilityDescription:)`) with no badge and no per-state variant -
+/// all state lives in the popover this file's mappings feed instead.
 public enum StatusIcon {
     /// `ControlIconState` -> SF Symbol name. Covers `.unknown` too - the fallback
     /// `ControlEnum.init(from:)` decodes any unrecognised raw value to (see that protocol's own

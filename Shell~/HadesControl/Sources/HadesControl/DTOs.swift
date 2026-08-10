@@ -791,3 +791,188 @@ public struct WriteMemoryDocumentRequest: Encodable, Equatable, Sendable {
 // POST /control/memory/proposals/{accept,dismiss,defer} all respond with the existing
 // `ActionResult` above - no new type needed; see `ControlClient.acceptMemoryProposal`/
 // `dismissMemoryProposal`/`deferMemoryProposal`.
+
+// MARK: - /control/migration/* (Plan 14 Task 10 - the missing caller)
+//
+// Mirrors, field for field, App~/src/Hades.Server/Control/MigrationEndpoint.cs. That file's own
+// class doc comment is the full design reference: detection is read-only and safe to call any
+// time; memory/traces import needs no `proceed` (non-destructive by construction); every cleanup
+// route stays independently authorised - no "clean everything" route exists on either side of the
+// wire.
+
+/// Mirrors `Hades.Server.Control.MigrationClaudeMdShape`.
+public enum MigrationClaudeMdShape: String, ControlEnum {
+    case absent
+    case marked
+    case unmarked
+
+    /// Decode target for any value this build does not recognise - see `ControlIconState.unknown`.
+    case unknown
+
+    public static var unknownFallback: Self { .unknown }
+}
+
+/// Mirrors `Hades.Server.Control.MigrationManifestEntryInfo`.
+public struct MigrationManifestEntryInfo: Decodable, Equatable, Sendable {
+    public let present: Bool
+    public let value: String?
+    public let resolvedPath: String?
+
+    public init(present: Bool, value: String?, resolvedPath: String?) {
+        self.present = present
+        self.value = value
+        self.resolvedPath = resolvedPath
+    }
+}
+
+/// Mirrors `Hades.Server.Control.MigrationClaudeMdInfo`. Deliberately just a shape - no marker
+/// offsets on the wire at all, so this client never needs to reason about where in the file a
+/// block sits; see `MigrationEndpoint.CleanClaudeMd`'s own doc comment for why cleanup re-detects
+/// fresh server-side instead.
+public struct MigrationClaudeMdInfo: Decodable, Equatable, Sendable {
+    public let shape: MigrationClaudeMdShape
+
+    public init(shape: MigrationClaudeMdShape) {
+        self.shape = shape
+    }
+}
+
+/// Mirrors `Hades.Server.Control.MigrationDetectionResult` - the full
+/// `GET /control/migration/{productGuid}/detect` response.
+public struct MigrationDetectionResult: Decodable, Equatable, Sendable {
+    public let projectRoot: String
+    public let isV12Project: Bool
+    public let manifestEntry: MigrationManifestEntryInfo
+    public let hasMemory: Bool
+    public let memoryDocumentCount: Int
+    public let hasTraces: Bool
+    public let hasGraph: Bool
+    public let hasGeneratedMcpConfig: Bool
+    public let claudeMd: MigrationClaudeMdInfo
+    public let hasUnityPlugin: Bool
+
+    public init(
+        projectRoot: String, isV12Project: Bool, manifestEntry: MigrationManifestEntryInfo,
+        hasMemory: Bool, memoryDocumentCount: Int, hasTraces: Bool, hasGraph: Bool,
+        hasGeneratedMcpConfig: Bool, claudeMd: MigrationClaudeMdInfo, hasUnityPlugin: Bool
+    ) {
+        self.projectRoot = projectRoot
+        self.isV12Project = isV12Project
+        self.manifestEntry = manifestEntry
+        self.hasMemory = hasMemory
+        self.memoryDocumentCount = memoryDocumentCount
+        self.hasTraces = hasTraces
+        self.hasGraph = hasGraph
+        self.hasGeneratedMcpConfig = hasGeneratedMcpConfig
+        self.claudeMd = claudeMd
+        self.hasUnityPlugin = hasUnityPlugin
+    }
+}
+
+/// Mirrors `Hades.Server.Control.MigrationMemorySkip`.
+public struct MigrationMemorySkip: Decodable, Equatable, Sendable {
+    public let source: String
+    public let reason: String
+
+    public init(source: String, reason: String) {
+        self.source = source
+        self.reason = reason
+    }
+}
+
+/// Mirrors `Hades.Server.Control.MigrationMemoryImportResult` - the response of
+/// `POST /control/migration/{productGuid}/importMemory`.
+public struct MigrationMemoryImportResult: Decodable, Equatable, Sendable {
+    public let imported: [String]
+    public let skipped: [MigrationMemorySkip]
+
+    public init(imported: [String], skipped: [MigrationMemorySkip]) {
+        self.imported = imported
+        self.skipped = skipped
+    }
+}
+
+/// Mirrors `Hades.Server.Control.MigrationTracesImportResult` - the response of
+/// `POST /control/migration/{productGuid}/importTraces`.
+public struct MigrationTracesImportResult: Decodable, Equatable, Sendable {
+    public let imported: Bool
+    public let skippedReason: String?
+
+    public init(imported: Bool, skippedReason: String?) {
+        self.imported = imported
+        self.skippedReason = skippedReason
+    }
+}
+
+/// Mirrors `Hades.Server.Control.MigrationClaudeMdCleanupResult`. `remainingContentOutsideBlock`
+/// is the field that keeps "cleanup succeeded" and "the file is now clean" from collapsing into
+/// one claim - see that property's own doc comment on the .NET side.
+public struct MigrationClaudeMdCleanupResult: Decodable, Equatable, Sendable {
+    public let removed: Bool
+    public let message: String
+    public let remainingContentOutsideBlock: Bool
+
+    public init(removed: Bool, message: String, remainingContentOutsideBlock: Bool) {
+        self.removed = removed
+        self.message = message
+        self.remainingContentOutsideBlock = remainingContentOutsideBlock
+    }
+}
+
+/// Mirrors `Hades.Server.Control.MigrationManifestCleanupResult`.
+public struct MigrationManifestCleanupResult: Decodable, Equatable, Sendable {
+    public let removed: Bool
+    public let message: String
+    public let occurrencesFound: Int
+    public let portConflictWarning: String
+
+    public init(removed: Bool, message: String, occurrencesFound: Int, portConflictWarning: String) {
+        self.removed = removed
+        self.message = message
+        self.occurrencesFound = occurrencesFound
+        self.portConflictWarning = portConflictWarning
+    }
+}
+
+/// Mirrors `Hades.Server.Control.MigrationMcpConfigCleanupResult`.
+public struct MigrationMcpConfigCleanupResult: Decodable, Equatable, Sendable {
+    public let removed: Bool
+    public let message: String
+
+    public init(removed: Bool, message: String) {
+        self.removed = removed
+        self.message = message
+    }
+}
+
+/// Mirrors `Hades.Server.Control.MigrationClaudeDesktopConfigCleanupResult`. `scopeWarning` is
+/// always populated - this file is global and per-user, not per-project (see
+/// `ControlClient.migrationCleanClaudeDesktopConfig`'s own doc comment for the route this backs,
+/// which carries no productGuid at all). `occurrencesFound` is likewise always populated, including
+/// when `removed` is false - this route has no companion per-project detect endpoint the way
+/// `MigrationDetectionResult` gives the other three cleanup targets, so this field is a caller's
+/// only way to learn whether there is a "hades" entry here worth offering to clean up at all.
+public struct MigrationClaudeDesktopConfigCleanupResult: Decodable, Equatable, Sendable {
+    public let removed: Bool
+    public let message: String
+    public let scopeWarning: String
+    public let occurrencesFound: Int
+
+    public init(removed: Bool, message: String, scopeWarning: String, occurrencesFound: Int) {
+        self.removed = removed
+        self.message = message
+        self.scopeWarning = scopeWarning
+        self.occurrencesFound = occurrencesFound
+    }
+}
+
+/// Body of every migration cleanup POST route. Mirrors
+/// `Hades.Server.Control.MigrationCleanupRequest` - `proceed` has no default here either, matching
+/// `V12Cleanup`'s own required-no-default rule on the .NET side.
+public struct MigrationCleanupRequest: Encodable, Equatable, Sendable {
+    public let proceed: Bool
+
+    public init(proceed: Bool) {
+        self.proceed = proceed
+    }
+}

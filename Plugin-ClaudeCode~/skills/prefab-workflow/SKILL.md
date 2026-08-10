@@ -23,7 +23,7 @@ Do NOT activate for deciding the overall prefab architecture (depth, variant str
 Before creating or modifying any prefab:
 
 1. **Discover existing prefabs:**
-   - Call `find_prefabs_with_component("<ComponentName>")` to check whether a prefab with the required component already exists — avoid duplicating assets
+   - Call `graph_query(edgeKind: "references", edgeTargetPath: "<path/to/Component.cs>")` to check whether a prefab with the required component already exists — avoid duplicating assets (get the script's path from `search_by_name` first if you only have the class name)
    - Call `search_by_name("*.prefab")` for a full prefab inventory; narrow with `search_by_name("Enemy*.prefab")` or similar patterns when scope is known
    - Call `recall_memory("prefab workflow conventions")` to surface any documented team conventions about prefab folder structure, naming, or variant depth limits
 
@@ -335,15 +335,14 @@ public static class BatchUpdatePrefabField
 
 ### Alternative: Direct MCP Tool Calls
 
-If you prefer tool calls over scripting, these editor-action tools are available:
-- `prefab_create` — create a prefab from a GameObject
-- `prefab_instantiate` — instantiate a prefab in the scene
-- `prefab_apply_overrides` — apply instance overrides back to the prefab
-- `prefab_get_contents` — inspect prefab contents without instantiating
-- `prefab_edit_property` — modify a property on a prefab asset
-- `prefab_open_editing` / `prefab_save_editing` — enter/exit prefab editing mode
-- `prefab_create_variant` — create a prefab variant
-- `component_add` / `component_set_property` — modify components on prefab instances
+If you prefer tool calls over scripting, `prefab_apply` is the batch tool for prefab operations — one call takes an ordered list of operations (`create`, `instantiate`, `applyOverrides`, `editProperty`, `createVariant`) and applies them in a single Undo group. Every `editProperty` op is atomic (load, edit, save in one step) — there is no separate open/save step, so this cannot leave a prefab stuck open the way the old open-then-edit-then-save sequence could.
+- `prefab_apply` `create` — create a prefab asset from a scene GameObject
+- `prefab_apply` `instantiate` — instantiate a prefab in the scene
+- `prefab_apply` `applyOverrides` — apply instance overrides back to the prefab
+- `prefab_apply` `editProperty` — modify a property on a prefab asset (optionally on a nested child)
+- `prefab_apply` `createVariant` — create a prefab variant
+- `inspect_asset` — inspect prefab contents without instantiating
+- `scene_apply` `addComponent` / `setProperties` — modify components on prefab instances in the scene
 
 Choose tools for quick one-off operations. Choose C# scripting (PrefabUtility API) for reusable Editor tools or complex batch operations.
 
@@ -413,5 +412,5 @@ Choose tools for quick one-off operations. Choose C# scripting (PrefabUtility AP
 
 - Architecture decisions before authoring: `hades:prefab-architecture`, `hades:unity-architect`
 - Scene placement after prefab creation: `hades:scene-authoring`
-- Hades MCP tools used in this skill: `find_prefabs_with_component`, `search_by_name`, `recall_memory`, `propose_memory_update`, `prefab_create`, `prefab_instantiate`, `prefab_apply_overrides`, `prefab_get_contents`, `prefab_edit_property`, `prefab_open_editing`, `prefab_save_editing`, `prefab_create_variant`, `component_add`, `component_set_property`
+- Hades MCP tools used in this skill: `graph_query`, `search_by_name`, `recall_memory`, `propose_memory_update`, `prefab_apply`, `inspect_asset`, `scene_apply`
 - Unity docs: [PrefabUtility](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/PrefabUtility.html), [Prefab Variants](https://docs.unity3d.com/6000.0/Documentation/Manual/PrefabVariants.html), [Prefab Mode](https://docs.unity3d.com/6000.0/Documentation/Manual/EditingInPrefabMode.html), [SerializedObject](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/SerializedObject.html)

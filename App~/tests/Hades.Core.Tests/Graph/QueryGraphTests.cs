@@ -515,6 +515,28 @@ public class QueryGraphTests : IDisposable
         Assert.NotEqual(5, hits.Count);
     }
 
+    [Fact]
+    public void QueryGraph_SentinelRequestAtDocumentedMaxSurvivesTheInternalClamp()
+    {
+        // graph_query (QueryTools.GraphQuery) asks for limit+1 rows to detect truncation
+        // honestly - see its own comment. At its documented maximum (limit=500), that becomes
+        // QueryGraph(..., limit: 501). Defect 2 (docs/backlog/graph-correctness-defects.md):
+        // GraphDatabase's own internal ceiling used to be exactly 500 too, so
+        // Math.Clamp(501, 1, 500) silently reduced the request back to 500 - discarding the
+        // sentinel row precisely at the one limit value a caller most needs an honest answer
+        // from. Reproduced directly against GraphDatabase with 550 real matches, independent of
+        // QueryTools/MCP: before the fix, this returns exactly 500 (indistinguishable from "550
+        // matches" and "exactly 500 matches"); after, it returns all 501 requested, proving the
+        // sentinel survives.
+        using var db = Open();
+        db.UpsertNodes(Enumerable.Range(0, 550).Select(i => Node($"Thing{i}", "Class", $"Assets/Thing{i}.cs")).ToList());
+
+        var hits = db.QueryGraph(kind: null, namePattern: "Thing", pathPrefix: null, edgeKind: null, limit: 501);
+
+        Assert.True(hits.Count > 500,
+            $"expected the limit+1 sentinel (501) to survive the internal clamp given 550 real matches, got {hits.Count}");
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);

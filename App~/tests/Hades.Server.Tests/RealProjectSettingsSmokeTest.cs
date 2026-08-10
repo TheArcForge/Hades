@@ -172,6 +172,11 @@ public class RealProjectSettingsSmokeTest : IClassFixture<WebApplicationFactory<
 
     public void Dispose()
     {
+        // See EditorToolTestBase.Dispose's own comment: _factory is a fresh per-test
+        // WebApplicationFactory whose own background services can still be touching _appRoot
+        // until the host itself is disposed - which must happen before the delete below.
+        _factory.Dispose();
+
         if (Directory.Exists(_appRoot)) Directory.Delete(_appRoot, recursive: true);
     }
 }

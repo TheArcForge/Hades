@@ -33,6 +33,23 @@ public sealed record LeaseStatus
 /// <see cref="LeaseStatus.AcquiredAtUtc"/>) or clears the belief outright - never leaving a stale
 /// "held" entry around once the plugin has said otherwise.
 ///
+/// A believed lease can ALSO go stale with no reconnect involved at all: the plugin's own TTL
+/// watchdog (<see cref="Runtime.ReloadGate"/>'s background <c>Timer</c>) releases Unity's real
+/// reload lock on its own once a lease's TTL passes with no renewal - and, today, tells nobody -
+/// there is no plugin-to-app push for it (see <see cref="EditorSession.Start"/>'s own
+/// "plugin-initiated notifications... not handled yet" note; this is exactly that gap). With the
+/// connection otherwise healthy, nothing would ever trigger <see cref="ReconcileAsync"/> to notice.
+/// <see cref="Get"/> and <see cref="All"/> guard against this independently, with no push and no
+/// network round trip required: a believed lease whose own recorded <see cref="LeaseStatus.ExpiresAtUtc"/>
+/// has passed is treated as released right there, evicted rather than waited out. This is safe to
+/// compute purely locally BECAUSE <see cref="LeaseStatus.ExpiresAtUtc"/> is always the plugin's own
+/// answer (this comment's opening sentence above - RecordHeld never invents one), using the exact
+/// same "now >= expiry" rule the plugin's own <c>ReloadLease.IsExpired</c> uses - so this checks
+/// the identical fact a push would have delivered, just read lazily (the next <see cref="Get"/>/
+/// <see cref="All"/> call) rather than delivered eagerly. Both this and reconnect reconciliation
+/// stay in place - defence in depth for two different ways the belief can go stale, not two
+/// competing answers to the same one.
+///
 /// Thread-safe: every method takes the same lock for the duration of its dictionary access, same
 /// convention as <see cref="EditorRegistry"/>.
 /// </summary>
@@ -82,18 +99,44 @@ public sealed class LeaseRegistry(Func<DateTimeOffset>? utcNow = null)
     }
 
     /// <summary>The believed-held lease for one project, or null when this app believes nothing
-    /// is held there.</summary>
+    /// is held there - INCLUDING a belief whose own recorded <see cref="LeaseStatus.ExpiresAtUtc"/>
+    /// has already passed (see class doc comment's "went stale with no reconnect" paragraph):
+    /// checked, and evicted if so, on every call, so no caller needs to remember to ask
+    /// separately.</summary>
     public LeaseStatus? Get(string productGuid)
     {
         if (string.IsNullOrEmpty(productGuid)) return null;
-        lock (_gate) { return _leases.GetValueOrDefault(productGuid); }
+
+        lock (_gate)
+        {
+            if (!_leases.TryGetValue(productGuid, out var status)) return null;
+            if (!IsSelfExpired(status)) return status;
+
+            _leases.Remove(productGuid);
+            return null;
+        }
     }
 
-    /// <summary>Every believed-held lease, across every project. A snapshot copy, safe to
-    /// enumerate while leases come and go.</summary>
+    /// <summary>Every believed-held lease, across every project - same self-expiry rule as
+    /// <see cref="Get"/>, applied per entry. A snapshot copy, safe to enumerate while leases come
+    /// and go.</summary>
     public IReadOnlyList<LeaseStatus> All()
     {
-        lock (_gate) { return [.. _leases.Values]; }
+        lock (_gate)
+        {
+            var expired = new List<string>();
+            var current = new List<LeaseStatus>();
+
+            foreach (var (productGuid, status) in _leases)
+            {
+                if (IsSelfExpired(status)) expired.Add(productGuid);
+                else current.Add(status);
+            }
+
+            foreach (var productGuid in expired) _leases.Remove(productGuid);
+
+            return current;
+        }
     }
 
     /// <summary>
@@ -132,4 +175,9 @@ public sealed class LeaseRegistry(Func<DateTimeOffset>? utcNow = null)
             Clear(productGuid);
         }
     }
+
+    /// <summary>True once <paramref name="status"/>'s own recorded <see cref="LeaseStatus.ExpiresAtUtc"/>
+    /// has passed - see the class doc comment's "went stale with no reconnect" paragraph for why
+    /// this is safe to decide purely locally. Caller must already hold <see cref="_gate"/>.</summary>
+    bool IsSelfExpired(LeaseStatus status) => _utcNow() >= status.ExpiresAtUtc;
 }

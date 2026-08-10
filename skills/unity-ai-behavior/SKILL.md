@@ -24,9 +24,9 @@ Do NOT activate for purely cosmetic NPC animation, dialogue systems, or cutscene
 Before making recommendations:
 
 1. **Check existing patterns in the graph:**
-   - Call `find_components_using_pattern("NavMeshAgent")` — reveals whether NavMesh navigation is already used and how agents are configured
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "NavMeshAgent", edgeTargetKind: "Class")` — reveals whether NavMesh navigation is already used and how agents are configured
    - Call `search_by_name("*AI*")` or `search_by_name("*State*")` — discovers existing AI scripts and naming conventions
-   - Call `find_components_using_pattern("Animator")` — AI and animation state are often coupled; understand the existing linkage before recommending a new architecture
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "Animator", edgeTargetKind: "Class")` — AI and animation state are often coupled; understand the existing linkage before recommending a new architecture
    - Call `search_by_name("*BehaviorTree*")` or `search_by_name("*GOAP*")` — detects whether a third-party AI framework is already in use
 
 2. **Check team decisions in memory:**
@@ -1106,5 +1106,5 @@ switch (_state)
 
 - Related skills: `hades:component-design`, `hades:unity-performance`, `hades:unity-architect`
 - Review skill: `hades:unity-reviewer`
-- Hades MCP tools: `find_components_using_pattern`, `search_by_name`, `recall_memory`, `propose_memory_update`
+- Hades MCP tools: `graph_query`, `search_by_name`, `recall_memory`, `propose_memory_update`
 - Unity docs: [NavMeshAgent](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/AI.NavMeshAgent.html), [NavMesh baking](https://docs.unity3d.com/6000.0/Documentation/Manual/nav-BuildingNavMesh.html), [Physics.OverlapSphere](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/Physics.OverlapSphere.html), [Off-Mesh Links](https://docs.unity3d.com/6000.0/Documentation/Manual/nav-CreateOffMeshLink.html)

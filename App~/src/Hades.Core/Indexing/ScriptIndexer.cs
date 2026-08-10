@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Hades.Core.Graph;
+using Hades.Core.Projects;
 using Hades.Core.Scanning;
 using Hades.Core.Unity;
 
@@ -24,6 +25,12 @@ public static class ScriptIndexer
         var filesScanned = 0;
         var typesFound = 0;
 
+        // Resolved once per call, not per file — ProjectVersion.txt/ProjectSettings.asset are
+        // small, project-level facts, not the source corpus being walked. See ProjectDefines'
+        // own class doc comment for what this set contains and the per-assembly-union caveat it
+        // carries.
+        var defines = ProjectDefines.Resolve(projectRoot).Symbols;
+
         foreach (var relativePath in relativePaths)
         {
             if (!relativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) continue;
@@ -34,7 +41,7 @@ public static class ScriptIndexer
 
             try
             {
-                var types = RoslynScriptScanner.ScanFile(relativePath, absolute);
+                var types = RoslynScriptScanner.ScanFile(relativePath, absolute, defines);
                 var scriptGuid = Unity.MetaFileReader.TryReadGuid(absolute);
 
                 database.DeleteNodesForPath(relativePath);
@@ -67,6 +74,9 @@ public static class ScriptIndexer
         // UnreachablePackagePrefixes for exactly which ones and why.
         var unreachablePackagePrefixes = ProjectWalker.UnreachablePackagePrefixes(projectRoot);
 
+        // Resolved once per call, not per file — see IndexFiles' own identical comment.
+        var defines = ProjectDefines.Resolve(projectRoot).Symbols;
+
         foreach (var root in ProjectWalker.ResolveScanRoots(projectRoot, warnings))
         {
             var visited = new HashSet<string>(StringComparer.Ordinal);
@@ -82,7 +92,7 @@ public static class ScriptIndexer
 
                 try
                 {
-                    var types = RoslynScriptScanner.ScanFile(relativePath, file);
+                    var types = RoslynScriptScanner.ScanFile(relativePath, file, defines);
 
                     // A .cs file is a Unity asset like any other, and its .meta GUID is what
                     // every MonoBehaviour's m_Script actually points at. Without it, script

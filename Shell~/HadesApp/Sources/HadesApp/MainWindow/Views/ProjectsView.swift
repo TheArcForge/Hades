@@ -18,13 +18,19 @@ import SwiftUI
 /// `DirectoryPicking`'s own doc comment) is the one place the shell chooses a path at all.
 struct ProjectsView: View {
     let viewModel: ProjectsViewModel
+    let migrationCleanupViewModel: MigrationCleanupViewModel
     let directoryPicker: any DirectoryPicking
-    @State private var selectedProductGuid: String?
 
-    init(viewModel: ProjectsViewModel, directoryPicker: any DirectoryPicking = NSOpenPanelDirectoryPicker()) {
+    init(
+        viewModel: ProjectsViewModel, migrationCleanupViewModel: MigrationCleanupViewModel = MigrationCleanupViewModel(),
+        directoryPicker: any DirectoryPicking = NSOpenPanelDirectoryPicker()
+    ) {
         self.viewModel = viewModel
+        self.migrationCleanupViewModel = migrationCleanupViewModel
         self.directoryPicker = directoryPicker
     }
+
+    @State private var selectedProductGuid: String?
 
     var body: some View {
         NavigationSplitView {
@@ -40,7 +46,7 @@ struct ProjectsView: View {
                 .navigationSplitViewColumnWidth(min: 220, ideal: 300, max: 400)
         } detail: {
             if let selected {
-                ProjectDetailView(project: selected, viewModel: viewModel)
+                ProjectDetailView(project: selected, viewModel: viewModel, migrationCleanupViewModel: migrationCleanupViewModel)
             } else {
                 Text("Select a project")
                     .foregroundStyle(.secondary)

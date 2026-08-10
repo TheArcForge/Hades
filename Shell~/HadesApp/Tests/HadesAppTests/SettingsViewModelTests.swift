@@ -149,4 +149,93 @@ struct SettingsViewModelTests {
         #expect(viewModel.launchAtLoginEnabled == false, "the OS refused - isEnabled is still false, not the requested true")
         #expect(launchAtLogin.setEnabledCallCount == 1)
     }
+
+    // MARK: - v1.2 Cleanup: the global cleanClaudeDesktopConfig action (per-item cleanup UI task)
+    //
+    // Deliberately lives HERE, not on `MigrationCleanupViewModel` - `migrationCleanClaudeDesktopConfig`
+    // carries no `productGuid` anywhere in its signature (see `ControlMigrationFetching`'s own doc
+    // comment), matching the route itself: `claude_desktop_config.json` is global and per-user, not
+    // per-project. `MigrationCleanupViewModel` owns the other three, per-project cleanup actions -
+    // see that type's own doc comment, and `MigrationCleanupViewModelTests` for their coverage.
+
+    @Test("refresh() also dry-runs the global claude_desktop_config cleanup and stores the result verbatim")
+    func refreshLoadsGlobalCleanupPreview() async {
+        let preview = MigrationClaudeDesktopConfigCleanupResult(
+            removed: false, message: "Found the 'hades' entry; not removed (no go-ahead).",
+            scopeWarning: "This changes claude_desktop_config.json globally for Claude Desktop on this machine, not just this project - any other MCP server entries are left untouched.",
+            occurrencesFound: 1
+        )
+        let settingsFetcher = FakeSettingsFetcher([.success(Self.realSettings)])
+        let migrationFetcher = FakeMigrationFetcher(
+            projectsOutcome: .success(ProjectsResult(projects: [])), cleanClaudeDesktopConfigOutcome: .success(preview))
+        let connections = FakeConnectionProvider([ControlConnection(port: 1, token: "t")], repeatLast: true)
+        let viewModel = SettingsViewModel(
+            discover: { await connections.provide() }, makeClient: { _ in settingsFetcher },
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false), resourceGuards: FakeResourceGuardReading(),
+            makeMigrationClient: { _ in migrationFetcher }
+        )
+
+        await viewModel.refresh()
+
+        #expect(viewModel.claudeDesktopConfigCleanup == preview)
+        #expect(await migrationFetcher.cleanClaudeDesktopConfigCallCount == 1)
+        #expect(await migrationFetcher.lastCleanClaudeDesktopConfigProceed == false)
+    }
+
+    @Test("a failed global-cleanup dry run self-heals, leaving prior state - and the unrelated settings fetch is unaffected")
+    func refreshGlobalCleanupPreviewFailureSelfHeals() async {
+        let migrationFetcher = FakeMigrationFetcher(
+            projectsOutcome: .success(ProjectsResult(projects: [])), cleanClaudeDesktopConfigOutcome: .failure(.staleToken))
+        let settingsFetcher = FakeSettingsFetcher([.success(Self.realSettings)])
+        let connections = FakeConnectionProvider([ControlConnection(port: 1, token: "t")], repeatLast: true)
+        let viewModel = SettingsViewModel(
+            discover: { await connections.provide() }, makeClient: { _ in settingsFetcher },
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false), resourceGuards: FakeResourceGuardReading(),
+            makeMigrationClient: { _ in migrationFetcher }
+        )
+
+        await viewModel.refresh()
+
+        #expect(viewModel.claudeDesktopConfigCleanup == nil)
+        #expect(viewModel.settings == Self.realSettings)
+    }
+
+    @Test("cleanClaudeDesktopConfig(confirmed: false) never calls the API")
+    func cleanClaudeDesktopConfigDeclinedNeverCallsAPI() async {
+        let migrationFetcher = FakeMigrationFetcher(projectsOutcome: .success(ProjectsResult(projects: [])))
+        let connections = FakeConnectionProvider([ControlConnection(port: 1, token: "t")], repeatLast: true)
+        let viewModel = SettingsViewModel(
+            discover: { await connections.provide() }, makeClient: { _ in FakeSettingsFetcher([]) },
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false), resourceGuards: FakeResourceGuardReading(),
+            makeMigrationClient: { _ in migrationFetcher }
+        )
+
+        await viewModel.cleanClaudeDesktopConfig(confirmed: false)
+
+        #expect(await migrationFetcher.cleanClaudeDesktopConfigCallCount == 0)
+        #expect(viewModel.claudeDesktopConfigCleanup == nil)
+    }
+
+    @Test("cleanClaudeDesktopConfig(confirmed: true) calls proceed:true and stores the result verbatim, including the global scope warning")
+    func cleanClaudeDesktopConfigConfirmedStoresResultVerbatim() async {
+        let confirmed = MigrationClaudeDesktopConfigCleanupResult(
+            removed: true, message: "Removed the 'hades' entry from claude_desktop_config.json. Every other server entry is untouched.",
+            scopeWarning: "This changes claude_desktop_config.json globally for Claude Desktop on this machine, not just this project - any other MCP server entries are left untouched.",
+            occurrencesFound: 1
+        )
+        let migrationFetcher = FakeMigrationFetcher(
+            projectsOutcome: .success(ProjectsResult(projects: [])), cleanClaudeDesktopConfigOutcome: .success(confirmed))
+        let connections = FakeConnectionProvider([ControlConnection(port: 1, token: "t")], repeatLast: true)
+        let viewModel = SettingsViewModel(
+            discover: { await connections.provide() }, makeClient: { _ in FakeSettingsFetcher([]) },
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false), resourceGuards: FakeResourceGuardReading(),
+            makeMigrationClient: { _ in migrationFetcher }
+        )
+
+        await viewModel.cleanClaudeDesktopConfig(confirmed: true)
+
+        #expect(await migrationFetcher.cleanClaudeDesktopConfigCallCount == 1)
+        #expect(await migrationFetcher.lastCleanClaudeDesktopConfigProceed == true)
+        #expect(viewModel.claudeDesktopConfigCleanup == confirmed)
+    }
 }

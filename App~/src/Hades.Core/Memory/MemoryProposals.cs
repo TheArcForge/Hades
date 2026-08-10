@@ -98,24 +98,64 @@ public sealed class MemoryProposals(AppPaths paths)
         return new MemoryProposal { FileName = fileName };
     }
 
-    /// <summary>Every pending (and past - nothing here filters by status) proposal, newest first.
-    /// Filenames are timestamp-prefixed (see <see cref="UniqueFileName"/>), so a plain descending
-    /// ordinal sort on the name is already chronological - no need to parse
-    /// <see cref="MemoryProposalInfo.CreatedAt"/> back out just to order by it. Empty, not an
-    /// exception, when nothing has ever been proposed for this project (no proposals/ directory
-    /// yet) - the ordinary state for most projects.</summary>
+    /// <summary>Every pending (and past - nothing here filters by status) proposal, ordered for
+    /// review - see <see cref="OrderForReview"/> for exactly how. Empty, not an exception, when
+    /// nothing has ever been proposed for this project (no proposals/ directory yet) - the
+    /// ordinary state for most projects.</summary>
     public IReadOnlyList<MemoryProposalInfo> List(string productGuid)
     {
         var proposalsDir = Path.Combine(paths.MemoryDir(productGuid), ProposalsDirName);
         if (!Directory.Exists(proposalsDir)) return [];
 
-        return Directory.EnumerateFiles(proposalsDir, "*.md")
+        var parsed = Directory.EnumerateFiles(proposalsDir, "*.md")
             .Select(Path.GetFileName)
             .OfType<string>()
-            .OrderByDescending(name => name, StringComparer.Ordinal)
-            .Select(name => ParseProposal(name, File.ReadAllText(Path.Combine(proposalsDir, name))))
-            .ToList();
+            .Select(name => ParseProposal(name, File.ReadAllText(Path.Combine(proposalsDir, name))));
+
+        return OrderForReview(parsed).ToList();
     }
+
+    /// <summary>
+    /// Orders proposals for the control API's review queue (spec #3 §3.4, replacing
+    /// <c>/hades:show-proposals</c> as the primary surface) - the fix for a flat, unordered list
+    /// mixing a handful of agent-authored proposals with dozens of analyzer-generated statistical
+    /// rows in no particular order, burying the few a person would actually act on.
+    ///
+    /// <b>Anything a human review action can still land on sorts ahead of pure analyzer output.</b>
+    /// "inferred" is the one <see cref="MemoryProposalInfo.Status"/> value the real
+    /// Hades-Unity-Client corpus uses for analyzer-generated rows (topic_cluster, time_of_day,
+    /// failure_correlation, acceptance_rate, and the convention-inferrer all write it) - see that
+    /// property's own doc comment. Every other value - "pending", "accepted", "deferred", a blank
+    /// frontmatter field (a real corpus has had exactly this shape - see
+    /// Hades.Core.Tests.Memory.RealProjectMemoryImportSmokeTest's own comment on
+    /// proposals/20260614-174745-.md), or anything not yet invented - sorts ahead of it. This
+    /// intentionally does NOT enumerate the "authored" side as a closed set: status is not a closed
+    /// enum (see <see cref="MemoryProposalInfo.Status"/>'s own doc comment), so the default for
+    /// anything unrecognised is to surface it prominently, never to bury it as if it were noise.
+    ///
+    /// <b>Equal-status rows stay contiguous</b> - <see cref="MemoryProposalInfo.Status"/> itself is
+    /// the tiebreak, ordinal, before falling back to the pre-existing newest-name-first order
+    /// (filenames are timestamp-prefixed - see <see cref="UniqueFileName"/> - so a descending
+    /// ordinal sort on the name is already chronological). This is not a claim that one status
+    /// outranks another; it only guarantees that a shell grouping consecutive equal-status rows
+    /// into sections (see <c>ProposalQueueView</c>'s own doc comment) never has to split one status
+    /// into two separate, non-adjacent runs.
+    ///
+    /// Never filters by status - an accepted or deferred proposal still appears in the result
+    /// exactly as before this method existed, only WHERE it appears changed. This is also the ONLY
+    /// place in this codebase that interprets <c>status</c> at all: spec #3 §1 "Swift renders, .NET
+    /// decides" - nothing downstream (<c>MemoryEndpoint</c>, the shell's own <c>ProposalQueueView</c>)
+    /// re-sorts or re-derives this ordering, only renders whatever already fell out of it.
+    /// </summary>
+    static IEnumerable<MemoryProposalInfo> OrderForReview(IEnumerable<MemoryProposalInfo> proposals) =>
+        proposals
+            .OrderBy(p => p.Status == InferredStatus)
+            .ThenBy(p => p.Status, StringComparer.Ordinal)
+            .ThenByDescending(p => p.FileName, StringComparer.Ordinal);
+
+    /// <summary>The one status value analyzer-generated proposals carry - see
+    /// <see cref="OrderForReview"/>.</summary>
+    const string InferredStatus = "inferred";
 
     /// <summary>One proposal by its plain basename (see <see cref="MemoryProposalInfo.FileName"/>).
     /// Null when it does not exist - never an exception, same "absence is a normal state, not a

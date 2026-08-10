@@ -25,8 +25,8 @@ Before making recommendations:
 
 1. **Check existing input setup in the graph:**
    - Call `search_by_name("*.inputactions")` — if an Input Action Asset exists, examine its action maps before recommending new ones; match the existing naming style
-   - Call `find_components_using_pattern("PlayerInput")` — detects whether the project already uses the new Input System's `PlayerInput` component, and on which prefabs
-   - Call `find_components_using_pattern("Input")` — surfaces legacy `Input.GetKey`/`Input.GetAxis` usage; note how widespread it is before recommending a migration
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "PlayerInput", edgeTargetKind: "Class")` — detects whether the project already uses the new Input System's `PlayerInput` component, and on which prefabs
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "Input", edgeTargetKind: "Class")` — surfaces legacy `Input.GetKey`/`Input.GetAxis` usage; note how widespread it is before recommending a migration
 
 2. **Check team decisions in memory:**
    - Call `recall_memory("input system controls rebinding")` to surface documented input decisions or control schemes
@@ -684,5 +684,5 @@ private void CloseMenu()
 ## Cross-References
 
 - Related skills: `hades:component-design`, `hades:unity-ui` (for rebinding UI)
-- Hades MCP tools: `search_by_name`, `find_components_using_pattern`, `recall_memory`, `propose_memory_update`
+- Hades MCP tools: `search_by_name`, `graph_query`, `recall_memory`, `propose_memory_update`
 - Unity docs: [Input System package](https://docs.unity3d.com/Packages/com.unity.inputsystem@1.8/manual/index.html), [PlayerInput component](https://docs.unity3d.com/Packages/com.unity.inputsystem@1.8/manual/PlayerInput.html), [PlayerInputManager](https://docs.unity3d.com/Packages/com.unity.inputsystem@1.8/manual/PlayerInputManager.html), [Runtime rebinding](https://docs.unity3d.com/Packages/com.unity.inputsystem@1.8/manual/ActionBindings.html#interactive-rebinding)

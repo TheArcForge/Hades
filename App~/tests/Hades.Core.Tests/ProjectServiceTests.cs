@@ -69,6 +69,27 @@ public class ProjectServiceTests : IDisposable
         Assert.Equal(1, summary!.TotalNodes);
         Assert.Equal(1, summary.NodesByKind["Class"]);
         Assert.NotNull(summary.LastIndexedUtc);
+        Assert.Contains("UNITY_EDITOR", summary.AppliedDefines);
+    }
+
+    [Fact]
+    public void Summary_AppliedDefinesReflectsProjectVersionAndScriptingDefineSymbols()
+    {
+        // Plan 15 Task 3 Step 4: get_project_summary must STATE which symbols were applied, so
+        // code guarded by anything else is a stated limitation rather than a silent hole.
+        MakeUnityProject();
+        File.WriteAllText(Path.Combine(_projectRoot, "ProjectSettings", "ProjectVersion.txt"),
+            "m_EditorVersion: 6000.3.2f1\nm_EditorVersionWithRevision: 6000.3.2f1 (a9779f353c9b)\n");
+        File.WriteAllText(Path.Combine(_projectRoot, "ProjectSettings", "ProjectSettings.asset"),
+            "  productGUID: aaaabbbbccccddddeeeeffff00001111\n  scriptingDefineSymbols:\n    Standalone: MY_CUSTOM_DEFINE\n");
+        var service = NewService();
+        var project = service.AdoptAndIndex(_projectRoot)!;
+
+        var summary = service.Summary(project.ProductGuid)!;
+
+        Assert.Contains("UNITY_EDITOR", summary.AppliedDefines);
+        Assert.Contains("UNITY_6000_3_OR_NEWER", summary.AppliedDefines);
+        Assert.Contains("MY_CUSTOM_DEFINE", summary.AppliedDefines);
     }
 
     [Fact]

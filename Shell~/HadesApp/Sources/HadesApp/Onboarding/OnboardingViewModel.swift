@@ -43,9 +43,11 @@ public final class OnboardingViewModel {
     private let completionStore: any OnboardingCompletionTracking
     private let claudeCodeVerifier: any ClaudeCodeVerifying
 
-    /// `nil` in production - see `MigrationOffering`'s own doc comment for why: there is no control
-    /// API endpoint to back a real conformance with today. Tests inject a fake to prove the
-    /// offered-never-silently-performed contract ahead of that endpoint existing.
+    /// `AppDelegate` passes a real `LiveMigrationOffering` here (Plan 14 Task 10) - see
+    /// `MigrationOffering`'s own doc comment. Defaults to `nil` only for callers that do not care
+    /// about migration at all (SwiftUI previews, and every existing test that predates this
+    /// parameter); tests that DO exercise migration inject `FakeMigrationOffering` to prove the
+    /// offered-never-silently-performed contract without a real control-API round trip.
     private let migrationOffering: (any MigrationOffering)?
 
     public init(
@@ -88,9 +90,11 @@ public final class OnboardingViewModel {
     /// for why that, not a second implementation, is the whole of what this method does for adding
     /// itself. The ONE thing it adds on top: after the add attempt, if (and only if) a real
     /// `MigrationOffering` is wired, ask whether the just-added path looks like a v1.2 project, and
-    /// if so surface the offer - never act on it. Production leaves `migrationOffering` `nil` (see
-    /// that property's own doc comment), so this check is unreachable for a real user today; that is
-    /// deliberate, not an oversight.
+    /// if so surface the offer - never act on it. Production wires a real `LiveMigrationOffering`
+    /// (see `migrationOffering`'s own doc comment), so this check IS reachable for a real user; a
+    /// caller that omits `migrationOffering` (previews, most existing tests) simply never sees an
+    /// offer, which is the same "nothing to check" short-circuit this method already needed for
+    /// that case.
     public func addProject(path: String) async {
         await projectsViewModel.addProject(path: path)
 

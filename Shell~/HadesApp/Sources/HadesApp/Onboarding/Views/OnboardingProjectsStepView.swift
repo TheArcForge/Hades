@@ -17,10 +17,10 @@ import SwiftUI
 /// second, related gap. The text below says so plainly instead of showing a button that does
 /// nothing.
 ///
-/// **The migration offer** (spec #4 §5, offered when Task 2's `V12Detector` would fire) renders
-/// here too, directly beneath the project list, whenever `viewModel.migrationOfferedProjectPath` is
-/// non-nil - see `MigrationOffering`'s own doc comment for why production never actually populates
-/// this today.
+/// **The migration offer** (spec #4 §5, offered when `V12Detector` fires) renders here too,
+/// directly beneath the project list, whenever `viewModel.migrationOfferedProjectPath` is non-nil -
+/// see `MigrationOffering`'s own doc comment for the real `LiveMigrationOffering` conformance that
+/// populates it (Plan 14 Task 10).
 struct OnboardingProjectsStepView: View {
     let viewModel: OnboardingViewModel
     let directoryPicker: any DirectoryPicking

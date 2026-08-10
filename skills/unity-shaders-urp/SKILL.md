@@ -25,7 +25,7 @@ Do NOT activate for HDRP questions — redirect to `hades:unity-shaders-hdrp`. D
 Before making recommendations:
 
 1. **Confirm the render pipeline:**
-   - Call `analyze_render_pipeline()` — CRITICAL first step. If the result indicates HDRP, stop and redirect to `hades:unity-shaders-hdrp`. If Built-in, warn the user and note the migration path.
+   - Call `project_settings(section: "renderPipeline")` — CRITICAL first step. If the result indicates HDRP, stop and redirect to `hades:unity-shaders-hdrp`. If Built-in, warn the user and note the migration path.
    - Confirm the `UniversalRenderPipelineAsset` is assigned in Project Settings > Graphics.
 
 2. **Understand existing shader assets:**
@@ -575,6 +575,6 @@ private void OnRenderImage(RenderTexture src, RenderTexture dest)
 ## Cross-References
 
 - Related skills: `hades:unity-performance`, `hades:unity-vfx`
-- Hades MCP tools used here: `analyze_render_pipeline`, `search_by_name`, `recall_memory`, `propose_memory_update`
+- Hades MCP tools used here: `project_settings` (section: "renderPipeline"), `search_by_name`, `recall_memory`, `propose_memory_update`
 - If pipeline is HDRP → `hades:unity-shaders-hdrp`
 - Unity docs: [URP Shader documentation](https://docs.unity3d.com/Packages/com.unity.render-pipelines.universal@17.0/manual/writing-shaders-urp-basic-introduction.html), [ScriptableRendererFeature API](https://docs.unity3d.com/Packages/com.unity.render-pipelines.universal@17.0/api/UnityEngine.Rendering.Universal.ScriptableRendererFeature.html), [MaterialPropertyBlock](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/MaterialPropertyBlock.html)

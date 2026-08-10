@@ -24,8 +24,8 @@ Do NOT activate for general performance questions not involving entities — tho
 Before making ECS recommendations, gather context so advice matches the actual project state.
 
 1. **Check for existing ECS usage:**
-   - Call `find_components_using_pattern("IComponentData")` — reveals whether ECS components already exist. If they do, advice must be consistent with those patterns.
-   - Call `find_components_using_pattern("SystemBase")` and `find_components_using_pattern("ISystem")` — identifies existing ECS systems. Presence of `ISystem` (unmanaged) suggests a performance-first stance; `SystemBase` suggests an earlier adoption or more managed-style code.
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "IComponentData", edgeTargetKind: "Class")` — reveals whether ECS components already exist. If they do, advice must be consistent with those patterns.
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "SystemBase", edgeTargetKind: "Class")` and the same with `edgeTargetNamePattern: "ISystem"` — identifies existing ECS systems. Presence of `ISystem` (unmanaged) suggests a performance-first stance; `SystemBase` suggests an earlier adoption or more managed-style code.
 
 2. **Understand project scale and targets:**
    - Call `get_project_summary()` — reveals platform targets (mobile vs. PC/console), project age, and team size. ECS has a steep learning curve; on a solo mobile project with a 6-month timeline, it is rarely appropriate.
@@ -685,7 +685,7 @@ public class ButtonController : MonoBehaviour
 
 - Related skills: `hades:unity-performance` (CPU/GPU cost model, profiling workflow — profile before adopting ECS), `hades:unity-architect` (architecture trade-offs, when ECS fits the overall system design)
 - Hades MCP tools used in this skill:
-  - `find_components_using_pattern` — detect existing ECS components and systems
+  - `graph_query` — detect existing ECS components and systems (edgeKind: "references", edgeTargetNamePattern, edgeTargetKind: "Class")
   - `get_project_summary` — project scale, platform target, team context
   - `search_by_name` — find existing Job or system files by naming convention
   - `recall_memory` — retrieve documented ECS/DOTS decisions

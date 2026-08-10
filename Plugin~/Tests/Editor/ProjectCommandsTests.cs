@@ -212,14 +212,16 @@ namespace Hades.Tests.Editor
         // ---------------------------------------------------------------- project.recompile_scripts
 
         [Test]
-        public void RecompileScripts_ReleasesLeaseBeforeTriggeringRecompile_OrderProven()
+        public void RecompileScripts_ReleasesLeaseBeforeRefreshingBeforeTriggeringRecompile_OrderProven()
         {
             var order = new List<string>();
             using var pump = new MainThreadPump();
             using var gate = new ReloadGate(new OrderTrackingLockApi(order), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
 
-            var original = ProjectCommands.TriggerRecompile;
+            var originalTrigger = ProjectCommands.TriggerRecompile;
+            var originalRefresh = ProjectCommands.RefreshAssets;
             ProjectCommands.TriggerRecompile = () => order.Add("recompile");
+            ProjectCommands.RefreshAssets = () => order.Add("refresh");
             try
             {
                 var result = CommandTable.Dispatch(gate, Request("project.recompile_scripts", JsonValue.NewObject()));
@@ -227,24 +229,29 @@ namespace Hades.Tests.Editor
             }
             finally
             {
-                ProjectCommands.TriggerRecompile = original;
+                ProjectCommands.TriggerRecompile = originalTrigger;
+                ProjectCommands.RefreshAssets = originalRefresh;
             }
 
-            CollectionAssert.AreEqual(new[] { "lock", "unlock", "recompile" }, order,
-                "release must happen strictly BEFORE the recompile trigger - holding the lease across it would block the very reload it is asking for");
+            CollectionAssert.AreEqual(new[] { "lock", "unlock", "refresh", "recompile" }, order,
+                "release must happen strictly BEFORE refresh, which must happen strictly BEFORE the recompile trigger - "
+                + "holding the lease across either would block the very reload they are asking for, and a brand-new "
+                + "file must be imported (refresh) before compilation of it is requested (recompile) - mutation-tool-defects.md #1");
             Assert.IsFalse(gate.IsHeld);
         }
 
         [Test]
-        public void RecompileScripts_LeaseBusyElsewhere_ThrowsActionableError_NeverTriggersRecompile()
+        public void RecompileScripts_LeaseBusyElsewhere_ThrowsActionableError_NeverRefreshesOrTriggersRecompile()
         {
             var order = new List<string>();
             using var pump = new MainThreadPump();
             using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
             gate.Acquire("someone-else", TimeSpan.FromMinutes(5));
 
-            var original = ProjectCommands.TriggerRecompile;
+            var originalTrigger = ProjectCommands.TriggerRecompile;
+            var originalRefresh = ProjectCommands.RefreshAssets;
             ProjectCommands.TriggerRecompile = () => order.Add("recompile");
+            ProjectCommands.RefreshAssets = () => order.Add("refresh");
             try
             {
                 var ex = Assert.Throws<InvalidOperationException>(() =>
@@ -253,10 +260,11 @@ namespace Hades.Tests.Editor
             }
             finally
             {
-                ProjectCommands.TriggerRecompile = original;
+                ProjectCommands.TriggerRecompile = originalTrigger;
+                ProjectCommands.RefreshAssets = originalRefresh;
             }
 
-            Assert.IsEmpty(order, "must never trigger recompile when the lease could not be acquired at all");
+            Assert.IsEmpty(order, "must never refresh or trigger recompile when the lease could not be acquired at all");
             Assert.IsTrue(gate.IsHeld);
             Assert.AreEqual("someone-else", gate.CurrentLeaseId);
             gate.Release("someone-else");

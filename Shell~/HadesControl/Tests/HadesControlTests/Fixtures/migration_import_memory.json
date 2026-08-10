@@ -1,0 +1,17 @@
+{
+  "imported": [],
+  "skipped": [
+    {
+      "source": "conventions.md",
+      "reason": "'conventions.md' already exists in app storage; import never overwrites it."
+    },
+    {
+      "source": "decisions.md",
+      "reason": "'decisions.md' already exists in app storage; import never overwrites it."
+    },
+    {
+      "source": "proposals/idea.md",
+      "reason": "'proposals/idea.md' already exists in app storage; import never overwrites it."
+    }
+  ]
+}

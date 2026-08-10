@@ -7,14 +7,14 @@ import Testing
 /// `OnboardingViewModel` owns first-run onboarding's own step sequencing, the Claude Code
 /// reachability check, project adding (delegated to a real `ProjectsViewModel` - never
 /// reimplemented, see `addProjectDelegatesToProjectsViewModel` below), and the migration-offer
-/// gate. Per Plan 14 Task 6's own explicit instruction, migration's DECISION logic
-/// (`V12Detector`/`V12Importer`/`V12Cleanup`, all `.NET`, `App~/src/Hades.Core/Migration/`) is never
-/// re-implemented here - there is no control-API endpoint exposing any of the three today (confirmed
-/// by grep across `App~/src/Hades.Server/Control/`), so `MigrationOffering` is a seam production
-/// leaves `nil` (see `OnboardingViewModel.migrationOffering`'s own doc comment). These tests prove
-/// the one contract that IS legitimately Swift's own regardless of what eventually backs that seam:
-/// an offer is surfaced, never auto-performed, and performing requires an explicit, separate
-/// confirmation - spec #4 §10, "Migration is always offered, never performed silently."
+/// gate. Migration's DECISION logic (`V12Detector`/`V12Importer`/`V12Cleanup`, all `.NET`,
+/// `App~/src/Hades.Core/Migration/`) is never re-implemented here - `OnboardingViewModel` only ever
+/// calls through the thin `MigrationOffering` seam (see that protocol's own doc comment), which
+/// `AppDelegate` backs with a real `LiveMigrationOffering` in production as of Plan 14 Task 10.
+/// These tests use `FakeMigrationOffering` throughout, so they prove the one contract that is
+/// legitimately `OnboardingViewModel`'s OWN regardless of what backs the seam: an offer is
+/// surfaced, never auto-performed, and performing requires an explicit, separate confirmation -
+/// spec #4 §10, "Migration is always offered, never performed silently."
 @Suite("OnboardingViewModel")
 @MainActor
 struct OnboardingViewModelTests {
@@ -181,7 +181,7 @@ struct OnboardingViewModelTests {
         #expect(await fetcher.lastAddedPath == "/tmp/demo")
     }
 
-    @Test("addProject(path:) never offers migration when no MigrationOffering is wired (production's real default)")
+    @Test("addProject(path:) never offers migration when no MigrationOffering is wired (the init's own safe default)")
     func addProjectWithNoMigrationOfferingNeverOffersMigration() async {
         let fetcher = FakeProjectsFetcher([.success(ProjectsResult(projects: []))], addOutcome: .failure(.staleToken))
         let projectsViewModel = ProjectsViewModel(
@@ -190,8 +190,9 @@ struct OnboardingViewModelTests {
             projectsViewModel: projectsViewModel,
             completionStore: FakeOnboardingCompletionTracking(),
             claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable])
-            // migrationOffering defaults to nil - the real production shape until a control-API
-            // endpoint exists.
+            // migrationOffering omitted - defaults to nil. AppDelegate itself always passes a real
+            // LiveMigrationOffering (Plan 14 Task 10); this test proves the OTHER case still degrades
+            // safely, e.g. for any future caller that does not care about migration at all.
         )
 
         await viewModel.addProject(path: "/tmp/v12-project")

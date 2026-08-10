@@ -33,21 +33,36 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
         popover.behavior = .transient // closes on outside click, standard menu-bar-dropdown UX
         popover.delegate = self
-        popover.contentViewController = NSHostingController(
+        let hostingController = NSHostingController(
             rootView: MenuBarRootView(viewModel: viewModel, onOpenHades: onOpenHades, onQuit: onQuit)
         )
+        // Without this, `NSHostingController.preferredContentSize` stays (0, 0) until its view has
+        // actually been laid out inside a window - which does not happen until `show(relativeTo:
+        // of:preferredEdge:)` itself inserts it. `show` reads whatever size is available RIGHT THEN
+        // to anchor the popover to `button`, so with no size known yet it anchors using (0, 0) and
+        // only resizes to the real SwiftUI content size (data already loaded from `bootstrap()`, not
+        // a timing race with the network) a moment later - a resize that does not re-anchor to
+        // `button`, leaving the window offset from it by roughly the content's own height every
+        // single time (confirmed: identical on the first open AND a second open/close cycle in the
+        // same run, so this is not a one-off launch race). `.preferredContentSize` makes
+        // `NSHostingController` compute and keep that property current continuously, so `show` has
+        // the real size up front and anchors correctly the first time.
+        hostingController.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = hostingController
 
         if let button = statusItem.button {
-            button.image = statusIcon(for: viewModel.content)
+            button.image = statusIcon()
             button.action = #selector(handleStatusItemClick)
             button.target = self
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
-        // Keeps the glyph current even while the popover is closed and polling is deliberately
-        // stopped - e.g. the one bootstrap() fetch at launch, or the result of a Release tap.
-        viewModel.onContentChange = { [weak self] content in
-            self?.statusItem.button?.image = self?.statusIcon(for: content)
+        // The glyph itself never varies with content (see `statusIcon()`'s own doc comment), but
+        // the button's image still needs setting at least once before `viewModel.content` exists -
+        // reusing the same content-change hook the popover's data relies on is simpler than a
+        // special-cased one-shot assignment.
+        viewModel.onContentChange = { [weak self] _ in
+            self?.statusItem.button?.image = self?.statusIcon()
         }
     }
 
@@ -82,11 +97,40 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         onOpenHades()
     }
 
-    private func statusIcon(for content: MenuBarContent) -> NSImage? {
-        NSImage(
-            systemSymbolName: StatusIcon.symbolName(for: content),
-            accessibilityDescription: "Hades"
-        )
+    private func statusIcon() -> NSImage? {
+        render(accessibilityDescription: "Hades")
+    }
+
+    /// Draws the menu-bar glyph: a bare "H", nothing else - no enclosing shape, no badge, no
+    /// per-state variant. Per-project/per-state detail lives entirely in the popover this status
+    /// item opens (see `MenuBarContentView`, which uses `StatusIcon.symbolName(for:)` for icons
+    /// that sit next to their own text) - the icon itself must read as Hades regardless of state,
+    /// so it no longer varies with it. SF Symbols has no unadorned single-letter glyph (only
+    /// container variants like `h.square`/`h.circle` - verified empirically, neither `"h"` nor
+    /// `"H"` resolves), so this draws the character directly instead of compositing an SF Symbol.
+    /// `isTemplate = true` is what makes AppKit re-tint the drawn shape (using only this image's
+    /// alpha, never the black drawn here) for light menu bars, dark menu bars, and the
+    /// highlighted/selected state - there is no colour baked in anywhere in this image.
+    private func render(accessibilityDescription: String) -> NSImage? {
+        let canvas: CGFloat = 18 // standard menu-bar glyph size
+
+        let image = NSImage(size: NSSize(width: canvas, height: canvas))
+        image.lockFocus()
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
+            .foregroundColor: NSColor.black,
+        ]
+        let glyph = "H" as NSString
+        let glyphSize = glyph.size(withAttributes: attributes)
+        glyph.draw(
+            at: NSPoint(x: (canvas - glyphSize.width) / 2, y: (canvas - glyphSize.height) / 2),
+            withAttributes: attributes)
+
+        image.unlockFocus()
+        image.isTemplate = true
+        image.accessibilityDescription = accessibilityDescription
+        return image
     }
 
     // MARK: - NSPopoverDelegate

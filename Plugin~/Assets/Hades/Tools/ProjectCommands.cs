@@ -35,12 +35,15 @@ namespace Hades.Tools
     ///
     /// project.recompile_scripts is the one handler in this whole plan that WANTS a reload once it
     /// returns, so it deliberately does NOT hold the lease across the trigger: LeaseScope.Run's own
-    /// acquire/work/release covers only this handler's bounded prep, and <see cref="TriggerRecompile"/>
-    /// (the actual CompilationPipeline.RequestScriptCompilation() call) runs strictly AFTER that
-    /// lease is already released - see ProjectCommandsTests for the ordering proof. Holding the
-    /// lease across the trigger would make this handler fight its own lock: a held ReloadGate lease
-    /// is exactly what blocks Unity's domain reload (and therefore recompilation) from happening at
-    /// all.
+    /// acquire/work/release covers only this handler's bounded prep, and <see cref="RefreshAssets"/>
+    /// then <see cref="TriggerRecompile"/> (AssetDatabase.Refresh() then
+    /// CompilationPipeline.RequestScriptCompilation()) both run strictly AFTER that lease is
+    /// already released - see ProjectCommandsTests for the ordering proof. Holding the lease across
+    /// either call would make this handler fight its own lock: a held ReloadGate lease is exactly
+    /// what blocks Unity's domain reload (and therefore recompilation) from happening at all.
+    /// RefreshAssets runs first because TriggerRecompile alone only recompiles scripts Unity
+    /// already knows about - a brand-new .cs file has no .meta yet and is not part of that set
+    /// until Refresh imports it (mutation-tool-defects.md #1; see RefreshAssets' own doc comment).
     ///
     /// project.run_tests never links UnityEditor.TestTools.TestRunner.Api at compile time: Hades'
     /// own asmdef ships with an EMPTY "references" array (see PluginInstallerTests'
@@ -119,12 +122,36 @@ namespace Hades.Tools
 
         static void RealTriggerRecompile() => UnityEditor.Compilation.CompilationPipeline.RequestScriptCompilation();
 
+        /// <summary>Seam over AssetDatabase.Refresh() - same swappable-static-field convention as
+        /// <see cref="TriggerRecompile"/> and for the same testing reason (a test proving call
+        /// ORDER must never touch the real asset database; restore in TearDown).
+        ///
+        /// This is mutation-tool-defects.md #1's fix. <see cref="TriggerRecompile"/>
+        /// (CompilationPipeline.RequestScriptCompilation) only asks Unity to recompile scripts it
+        /// ALREADY knows about - a brand-new .cs file has no .meta yet, so it is not part of that
+        /// set at all until something imports it. Interactively, opening/focusing the Editor does
+        /// that automatically; CommandTable.HandleAssetsRefresh's own doc comment already explains
+        /// why a BACKGROUND Editor (batchmode above all - it never gets the focus event) does not:
+        /// "without this nothing can provoke a recompile". RecompileScripts and EndScriptEditing
+        /// both now call this FIRST, so a new file is imported - and therefore actually part of the
+        /// compiled set - before the explicit recompile request that follows it. Called
+        /// unconditionally, every time, exactly like <see cref="TriggerRecompile"/> already was:
+        /// see EndScriptEditing's own doc comment for why "always, not only when a new file is
+        /// detected" is the deliberate choice here.</summary>
+        public static Action RefreshAssets = RealRefreshAssets;
+
+        static void RealRefreshAssets() => UnityEditor.AssetDatabase.Refresh();
+
         internal static JsonValue RecompileScripts(ReloadGate gate, JsonValue @params)
         {
             var result = LeaseScope.Run(gate, "project.recompile_scripts", () => JsonValue.NewObject());
 
             // Deliberately AFTER LeaseScope.Run has already returned (and therefore already
-            // released) - see this file's own class doc comment.
+            // released) - see this file's own class doc comment. RefreshAssets runs BEFORE
+            // TriggerRecompile so a brand-new .cs file (no .meta yet) is actually imported, and
+            // therefore part of the compiled set, before compilation of that set is requested -
+            // see RefreshAssets' own doc comment (mutation-tool-defects.md #1).
+            RefreshAssets();
             TriggerRecompile();
 
             return result.SetProperty("requested", JsonValue.Bool(true));
@@ -166,7 +193,7 @@ namespace Hades.Tools
                 var holder = gate.CurrentLeaseId;
                 throw new InvalidOperationException(
                     "BeginScriptEditing needs Unity's reload lock, but it is currently held by lease '" + holder
-                    + "'. Call EndScriptEditing (or lease_release), or wait for it to finish, then retry.");
+                    + "'. Call script_editing_session with action 'end', or wait for it to finish, then retry.");
             }
 
             var lease = gate.CurrentLease;
@@ -175,16 +202,32 @@ namespace Hades.Tools
                 .SetProperty("expiresAtUtcMs", JsonValue.Integer(ToUnixTimeMs(lease.ExpiresAtUtc)));
         }
 
-        /// <summary>Releases <see cref="ScriptEditingLeaseId"/> if held, THEN triggers
-        /// recompilation via the SAME <see cref="TriggerRecompile"/> seam RecompileScripts uses -
-        /// release-then-trigger, never fight its own lock, for the identical reason RecompileScripts
-        /// itself does not hold the lease across the trigger (see this file's own class doc
-        /// comment). Always triggers recompilation, even when nothing was actually held (the old
-        /// package's EndScriptEditing always asked Unity to recompile too) - what changed is HOW
-        /// the release happens: <see cref="ReloadGate.Release"/> already calls
-        /// <see cref="IEditorLockApi.Unlock"/> ZERO times when nothing is held for this id, rather
-        /// than the old implementation's unconditional force-unlock that could drive Unity's native
-        /// counter to -1 (see DomainReloadTools.cs).
+        /// <summary>Releases <see cref="ScriptEditingLeaseId"/> if held, THEN refreshes the asset
+        /// database and triggers recompilation via the SAME <see cref="RefreshAssets"/>/
+        /// <see cref="TriggerRecompile"/> seams RecompileScripts uses - release-then-refresh-then-
+        /// trigger, never fight its own lock, for the identical reason RecompileScripts itself does
+        /// not hold the lease across either call (see this file's own class doc comment). Always
+        /// runs both, even when nothing was actually held (the old package's EndScriptEditing always
+        /// asked Unity to recompile too) - what changed is HOW the release happens:
+        /// <see cref="ReloadGate.Release"/> already calls <see cref="IEditorLockApi.Unlock"/> ZERO
+        /// times when nothing is held for this id, rather than the old implementation's
+        /// unconditional force-unlock that could drive Unity's native counter to -1 (see
+        /// DomainReloadTools.cs).
+        ///
+        /// RefreshAssets BEFORE TriggerRecompile is mutation-tool-defects.md #1's fix: a brand-new
+        /// .cs file written during this session has no .meta yet, so
+        /// CompilationPipeline.RequestScriptCompilation() alone had genuinely nothing new to
+        /// compile - Unity never imported the file at all, which is why this call used to report
+        /// success while silently leaving the new type out of Assembly-CSharp.dll. Refresh runs
+        /// UNCONDITIONALLY, not only when this session is known to have written a new file: this
+        /// plugin has no visibility into the agent's own out-of-band file writes between Begin and
+        /// End (Begin/End are pure lease bookkeeping around a session Hades never sees the inside
+        /// of), so any narrower trigger would mean re-deriving "did a new file appear" by walking
+        /// Assets itself - more moving parts than the failure mode (a silent no-op recompile)
+        /// tolerates. Matching what a human pressing Cmd+R does is simpler and cannot under-fire.
+        /// The cost is acceptable because this handler is a class-3 SESSION BOUNDARY (the agent
+        /// must come back to call it at all), never a hot per-edit path the way a class-1 mutation
+        /// is.
         ///
         /// 'released' reports whether THIS call actually released a lease of ours - computed from
         /// whether <see cref="ScriptEditingLeaseId"/> was the current holder BEFORE releasing,
@@ -196,7 +239,9 @@ namespace Hades.Tools
             var wasHeldByUs = gate.CurrentLeaseId == ScriptEditingLeaseId;
             var released = gate.Release(ScriptEditingLeaseId);
 
-            // Deliberately AFTER release - see this method's own doc comment.
+            // Deliberately AFTER release, and deliberately Refresh BEFORE TriggerRecompile - see
+            // this method's own doc comment (mutation-tool-defects.md #1).
+            RefreshAssets();
             TriggerRecompile();
 
             return JsonValue.NewObject()

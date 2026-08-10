@@ -105,7 +105,7 @@ public static class ReferenceReading
         {
             throw new ArgumentException(
                 $"'{property}' is not a field on fileID {fileId} in '{relativePath}'. Available "
-                + "fields: " + string.Join(", ", properties.Keys) + ". Call component_list_properties to confirm.",
+                + "fields: " + string.Join(", ", properties.Keys) + ". Call inspect_asset with 'target' and 'component' (no 'property') to confirm.",
                 nameof(property));
         }
 
@@ -114,7 +114,7 @@ public static class ReferenceReading
             throw new ArgumentException(
                 $"'{property}' on fileID {fileId} in '{relativePath}' is not an object-reference "
                 + "field - its value does not have the {fileID, guid, type} shape. Call "
-                + "component_get_property to see its actual value.",
+                + "inspect_asset with 'target', 'component', and 'property' to see its actual value.",
                 nameof(property));
         }
 

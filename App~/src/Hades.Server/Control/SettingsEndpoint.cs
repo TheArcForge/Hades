@@ -127,8 +127,11 @@ public sealed record SettingsSnapshot
 /// </summary>
 public static class SettingsEndpoint
 {
-    /// <summary>The MCP endpoint's documented, fixed port - see this class's own doc comment.</summary>
-    public const int McpPort = 7823;
+    /// <summary>The MCP endpoint's documented, fixed port - see this class's own doc comment.
+    /// Sourced from <see cref="Hades.Core.Mcp.McpDefaults.Port"/>, the single place the literal
+    /// 7823 is written - see that type's own doc comment for why it lives in Hades.Core rather
+    /// than here.</summary>
+    public const int McpPort = Hades.Core.Mcp.McpDefaults.Port;
 
     const string DefaultLogLevel = "Information";
 

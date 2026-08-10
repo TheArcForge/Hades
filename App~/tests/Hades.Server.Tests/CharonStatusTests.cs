@@ -287,6 +287,12 @@ public sealed class CharonStatusTests : IClassFixture<WebApplicationFactory<Prog
     {
         foreach (var disposable in _toDispose) disposable.Dispose();
 
+        // See EditorToolTestBase.Dispose's own comment: _factory is a fresh per-test
+        // WebApplicationFactory whose own background services can still be touching
+        // _appRoot/_projectRoot until the host itself is disposed - which must happen before
+        // the recursive delete below.
+        _factory.Dispose();
+
         foreach (var dir in new[] { _appRoot, _projectRoot })
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
     }

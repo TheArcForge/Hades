@@ -43,6 +43,7 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
     const string MissingScriptGuid = "cccc3333cccc3333cccc3333cccc3333";
     const string UnindexedGuid = "dddd4444dddd4444dddd4444dddd4444";
     const string VariantSourceGuid = "beb43c66c1c72416290db5dae24d452f";
+    const string NestedInstanceSourceGuid = "cccccccccccccccccccccccccccccccc";
     const string ShaderGuid = "ccccccccccccccccccccccccccccccc1";
     const string TextureGuid = "ccccccccccccccccccccccccccccccc2";
 
@@ -96,6 +97,35 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
                 m_RemovedComponents: []
               m_SourcePrefab: {fileID: 100100000, guid: {{VariantSourceGuid}}, type: 3}
             """);
+
+        // Plan 15 Task 2. Mirrors project_aurora's real Assets/_ResourcesStatic/Buildings/
+        // BedroomWithChestAndTable.prefab, ground-truthed by reading its raw YAML and its source
+        // prefab (Assets/_ResourcesStatic/BasePrefab.prefab): TWO independent local override
+        // anchors sharing one PrefabInstance - a stripped Transform (fileId 101) that owns
+        // nothing (present only to anchor the locally-added "Sprite" child's m_Father), and a
+        // stripped GameObject (fileId 102) that owns 3 added MonoBehaviours, discoverable only by
+        // scanning for components whose OWN m_GameObject names it (a stripped GameObject carries
+        // no m_Component list of its own - confirmed on the real file). See
+        // ComponentInspectionTests.NestedInstanceWithOverriddenRoot for the byte-for-byte same
+        // shape at the Hades.Core level; this copy exists so the full MCP round trip - the
+        // documented "feed the reported fileId back as target" workflow - is proven end-to-end,
+        // not just at ReadThrough's own layer.
+        Write("Assets/NestedInstance.prefab", Header
+            + "--- !u!1001 &100\nPrefabInstance:\n  serializedVersion: 2\n  m_Modification:\n"
+            + "    m_TransformParent: {fileID: 0}\n    m_Modifications: []\n    m_RemovedComponents: []\n"
+            + $"  m_SourcePrefab: {{fileID: 100100000, guid: {NestedInstanceSourceGuid}, type: 3}}\n"
+            + "--- !u!1 &102 stripped\nGameObject:\n"
+            + $"  m_CorrespondingSourceObject: {{fileID: 6000, guid: {NestedInstanceSourceGuid}, type: 3}}\n"
+            + "  m_PrefabInstance: {fileID: 100}\n"
+            + "--- !u!114 &103\nMonoBehaviour:\n  m_GameObject: {fileID: 102}\n"
+            + $"  m_Script: {{fileID: 11500000, guid: {HealthScriptGuid}, type: 3}}\n"
+            + "--- !u!114 &104\nMonoBehaviour:\n  m_GameObject: {fileID: 102}\n"
+            + $"  m_Script: {{fileID: 11500000, guid: {MissingScriptGuid}, type: 3}}\n"
+            + "--- !u!4 &101 stripped\nTransform:\n"
+            + $"  m_CorrespondingSourceObject: {{fileID: 5000, guid: {NestedInstanceSourceGuid}, type: 3}}\n"
+            + "  m_PrefabInstance: {fileID: 100}\n"
+            + "--- !u!1 &106\nGameObject:\n  m_Component:\n  - component: {fileID: 107}\n  m_Name: Sprite\n"
+            + "--- !u!4 &107\nTransform:\n  m_GameObject: {fileID: 106}\n  m_Father: {fileID: 101}\n");
 
         Write("Assets/Legacy.prefab", Header + """
             --- !u!1001 &100100000
@@ -336,6 +366,25 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
     }
 
     [Fact]
+    public async Task Structure_ANestedInstanceWithAnOverriddenRoot_ReportsBothLocalOverrideAnchorsSeparately()
+    {
+        // Before this fix, the real BedroomWithChestAndTable.prefab reported exactly ONE
+        // "PrefabInstance" root here (the placeholder that owns nothing) - the other placeholder
+        // (the one that actually owns the 3 real MonoBehaviour overrides) was completely absent
+        // from the hierarchy, not even as an empty node.
+        var structured = Structured(await McpTestClient.CallTool(_factory, "inspect_asset",
+            new { path = "Assets/NestedInstance.prefab" }));
+
+        var roots = structured.GetProperty("hierarchy").GetProperty("roots").EnumerateArray().ToList();
+        var placeholders = roots.Where(r => r.GetProperty("kind").GetString() == "PrefabInstance").ToList();
+        Assert.Equal(2, placeholders.Count);
+        Assert.All(placeholders, p => Assert.Equal(NestedInstanceSourceGuid, p.GetProperty("sourcePrefabGuid").GetString()));
+        // Unchanged contract: a "PrefabInstance" placeholder's inline components stay empty in the
+        // structure view either way - target= is still what surfaces the real ones.
+        Assert.All(placeholders, p => Assert.Empty(p.GetProperty("components").EnumerateArray()));
+    }
+
+    [Fact]
     public async Task Structure_Scene_ReturnsTheSameShapeAsPrefab()
     {
         var structured = Structured(await McpTestClient.CallTool(_factory, "inspect_asset",
@@ -540,6 +589,48 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
         var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "inspect_asset",
             new { path = "Assets/Enemy.prefab", target = 999 }));
         Assert.Contains("999", text);
+    }
+
+    // ---------------- Plan 15 Task 2: nested prefab instance placeholders (documented round trip)
+
+    [Fact]
+    public async Task Components_TheOverriddenPlaceholdersReportedFileId_ResolvesTheRealLocalOverrides()
+    {
+        // The literal, documented workflow: call inspect_asset(path) to see structure, then feed a
+        // reported node's fileId straight back as 'target'. fileId 102 (the placeholder that owns
+        // the 3 real overrides) is exactly what Structure_ANestedInstanceWithAnOverriddenRoot_...
+        // reports above - this proves narrowing into it actually works end-to-end, script guid
+        // resolution (the graph touch ProjectService.GetComponents adds) included.
+        var structured = Structured(await McpTestClient.CallTool(_factory, "inspect_asset",
+            new { path = "Assets/NestedInstance.prefab", target = 102 }));
+
+        Assert.Equal("components", structured.GetProperty("depth").GetString());
+        var components = structured.GetProperty("components").EnumerateArray().ToList();
+        Assert.Equal(2, components.Count);
+
+        var resolved = components.Single(c => c.GetProperty("scriptGuid").GetString() == HealthScriptGuid);
+        Assert.Equal("Assets/Scripts/Health.cs", resolved.GetProperty("typeName").GetString());
+        Assert.False(resolved.GetProperty("missing").GetBoolean());
+
+        var missing = components.Single(c => c.GetProperty("scriptGuid").GetString() == MissingScriptGuid);
+        Assert.True(missing.GetProperty("missing").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Components_TheOtherPlaceholdersReportedFileId_NeverBlamesCorruption()
+    {
+        // fileId 101 (the placeholder that owns nothing - mirrors "Graphics" in the real repro) is
+        // ALSO one of the two nodes Structure_ANestedInstanceWithAnOverriddenRoot_... reports.
+        // Before this fix, feeding it back as 'target' - exactly the tool's own documented
+        // instructions - threw "the file may be corrupted or hand-edited" for a completely
+        // healthy file.
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "inspect_asset",
+            new { path = "Assets/NestedInstance.prefab", target = 101 }));
+
+        // The fix's own message explicitly DENIES corruption ("...is not corrupted or
+        // hand-edited...") - a naive substring check for "corrupted" would false-fail on that
+        // very denial, so this targets the specific claim that must never appear instead.
+        Assert.DoesNotContain("may be corrupted", text, StringComparison.OrdinalIgnoreCase);
     }
 
     // ================================================================== inspect_asset: depth "properties"
@@ -797,6 +888,12 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
 
     public void Dispose()
     {
+        // See EditorToolTestBase.Dispose's own comment: _factory is a fresh per-test
+        // WebApplicationFactory whose own background services can still be touching
+        // _appRoot/_projectRoot until the host itself is disposed - which must happen before
+        // the recursive delete below.
+        _factory.Dispose();
+
         foreach (var dir in new[] { _appRoot, _projectRoot })
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
     }

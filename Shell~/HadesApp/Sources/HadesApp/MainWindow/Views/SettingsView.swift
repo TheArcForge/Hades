@@ -90,9 +90,26 @@ struct SettingsView: View {
                 }
                 .opacity(0.5)
             }
+
+            migrationCleanup
         }
         .formStyle(.grouped)
         .frame(minWidth: 420, minHeight: 340)
+    }
+
+    /// The one GLOBAL `V12Cleanup` action, `cleanClaudeDesktopConfig` - deliberately here, on the
+    /// one surface that is not project-scoped at all, never under Projects. Rendered only when
+    /// `viewModel.claudeDesktopConfigCleanup.occurrencesFound > 0` - "do not offer to clean a file
+    /// that is not there," the same discipline `ProjectDetailView`'s per-project "v1.2 Cleanup"
+    /// section holds to, applied here to the one target with no per-project detect endpoint behind
+    /// it (see `MigrationClaudeDesktopConfigCleanupResult.occurrencesFound`'s own doc comment).
+    @ViewBuilder
+    private var migrationCleanup: some View {
+        if let cleanup = viewModel.claudeDesktopConfigCleanup, cleanup.occurrencesFound > 0 {
+            SwiftUI.Section("v1.2 Cleanup") {
+                MigrationCleanClaudeDesktopConfigRow(result: cleanup, viewModel: viewModel)
+            }
+        }
     }
 
     /// The picture-only decision this view makes about `ProcessInfo.ThermalState` - an exhaustive,

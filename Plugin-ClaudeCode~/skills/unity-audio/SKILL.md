@@ -24,7 +24,7 @@ Do NOT activate for visual effects triggered alongside audio, animation state th
 Before making recommendations:
 
 1. **Check existing audio usage in the graph:**
-   - Call `find_components_using_pattern("AudioSource")` — count how many objects carry AudioSource directly; if many, the project likely uses a distributed model
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "AudioSource", edgeTargetKind: "Class")` — count how many objects carry AudioSource directly; if many, the project likely uses a distributed model
    - Call `search_by_name("*Mixer*")` — detect whether an AudioMixer asset already exists; if so, match its group structure
    - Call `search_by_name("*Audio*")` — find existing audio managers, event assets, and listener scripts
 
@@ -728,5 +728,5 @@ audioSource.volume = 0.7f;
 ## Cross-References
 
 - Related skills: `hades:component-design`, `hades:data-modeling`, `hades:unity-performance`
-- Hades MCP tools: `find_components_using_pattern`, `search_by_name`, `recall_memory`, `propose_memory_update`
+- Hades MCP tools: `graph_query`, `search_by_name`, `recall_memory`, `propose_memory_update`
 - Unity docs: [AudioMixer](https://docs.unity3d.com/6000.0/Documentation/Manual/AudioMixer.html), [AudioSource](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/AudioSource.html), [Audio Spatializer SDK](https://docs.unity3d.com/6000.0/Documentation/Manual/AudioSpatializerSDK.html)

@@ -179,6 +179,43 @@ public sealed class LeaseVisibilityTests : IClassFixture<WebApplicationFactory<P
         Assert.Contains("lease-xyz", detail);
     }
 
+    // ---------------------------------------------------------------- TTL self-expiry (mutation-tool-defects.md #2)
+
+    /// <summary>The exact live repro from mutation-tool-defects.md #2: ttlSeconds=5, no 'end' call,
+    /// wait past expiry - the plugin's own TTL watchdog genuinely released Unity's real reload lock
+    /// (proven separately, live, by an unrelated lease-requiring call succeeding - see this defect's
+    /// Plugin~ half), but with nothing pushing that fact back to the app and no reconnect to trigger
+    /// ReconcileAsync, hades_charon_status kept reporting leaseHeld=true / leaseHeldForSeconds
+    /// climbing / a negative "expires in" indefinitely. LeaseRegistry.Get's own TTL self-expiry (see
+    /// its class doc comment) is what closes this without needing a plugin-to-app push: this reads
+    /// leaseHeld=false the moment the BELIEVED lease's own recorded expiry has passed, Editor still
+    /// attached and connected the whole time, no reconnect and no lease.release involved at all.</summary>
+    [Fact]
+    public async Task LeaseHeldWhileAttached_ButItsOwnTtlHasAlreadyPassed_ReportsLeaseHeldFalse()
+    {
+        var (reads, writes) = await ConnectAsFakeUnityAsync(MakeHello(processId: 9103));
+        var responder = RespondToNextProbeAsync(reads, writes);
+
+        var leases = _factory.Services.GetRequiredService<LeaseRegistry>();
+        leases.RecordHeld(ProjectGuid, "lease-ttl-fired", DateTimeOffset.UtcNow.AddSeconds(-215)); // already expired
+
+        var structured = Structured(await McpTestClient.CallTool(_factory, "hades_charon_status"));
+        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(structured.GetProperty("attached").GetBoolean()); // the connection itself never dropped
+        Assert.False(structured.GetProperty("leaseHeld").GetBoolean());
+        Assert.False(structured.TryGetProperty("leaseId", out _));
+        Assert.False(structured.TryGetProperty("leaseHeldForSeconds", out _));
+        Assert.False(structured.TryGetProperty("leaseExpiresAtUtc", out _));
+        Assert.DoesNotContain("lease-ttl-fired", structured.GetProperty("detail").GetString()!);
+
+        // The self-expiry is not merely hidden from the read side - it evicted the stale entry, so
+        // a second, independent read (e.g. the /control/summary endpoint's own LeaseRegistry.Get)
+        // sees exactly the same "nothing believed held" truth, not a lingering entry only this one
+        // call happened to filter out.
+        Assert.Null(leases.Get(ProjectGuid));
+    }
+
     // ---------------------------------------------------------------- held while NOT attached
 
     [Fact]
@@ -272,6 +309,12 @@ public sealed class LeaseVisibilityTests : IClassFixture<WebApplicationFactory<P
     public void Dispose()
     {
         foreach (var disposable in _toDispose) disposable.Dispose();
+
+        // See EditorToolTestBase.Dispose's own comment: _factory is a fresh per-test
+        // WebApplicationFactory whose own background services can still be touching
+        // _appRoot/_projectRoot until the host itself is disposed - which must happen before
+        // the recursive delete below.
+        _factory.Dispose();
 
         foreach (var dir in new[] { _appRoot, _projectRoot })
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);

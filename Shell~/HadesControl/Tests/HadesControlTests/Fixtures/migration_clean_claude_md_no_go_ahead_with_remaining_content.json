@@ -1,0 +1,5 @@
+{
+  "removed": false,
+  "message": "Found a well-formed HADES:START/END block, with other content outside it that will remain untouched; not removed yet (no go-ahead).",
+  "remainingContentOutsideBlock": true
+}

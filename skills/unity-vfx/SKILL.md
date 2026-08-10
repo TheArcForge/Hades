@@ -24,11 +24,11 @@ Do NOT activate for general rendering performance questions — those go to `had
 Before making recommendations, gather project-specific context so advice is calibrated to the actual codebase.
 
 1. **Determine the render pipeline — this governs VFX Graph eligibility:**
-   - Call `analyze_render_pipeline()` — VFX Graph requires URP or HDRP. If Built-in is returned, VFX Graph is not available and all advice must target the legacy Particle System. Do not suggest VFX Graph if this returns Built-in.
+   - Call `project_settings(section: "renderPipeline")` — VFX Graph requires URP or HDRP. If Built-in is returned, VFX Graph is not available and all advice must target the legacy Particle System. Do not suggest VFX Graph if this returns Built-in.
 
 2. **Audit existing VFX usage:**
-   - Call `find_components_using_pattern("ParticleSystem")` — inventories legacy particle systems in the scene. Large counts on mobile are an immediate concern for CPU emission cost.
-   - Call `find_components_using_pattern("VisualEffect")` — inventories VFX Graph instances. Shows whether the team has already adopted VFX Graph.
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "ParticleSystem", edgeTargetKind: "Class")` — inventories legacy particle systems in the scene. Large counts on mobile are an immediate concern for CPU emission cost.
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "VisualEffect", edgeTargetKind: "Class")` — inventories VFX Graph instances. Shows whether the team has already adopted VFX Graph.
 
 3. **Check documented VFX decisions:**
    - Call `recall_memory("VFX particles effects")` — retrieves any particle budgets, platform limits, or effect decisions already recorded by the team.
@@ -666,8 +666,8 @@ private void Update()
 
 - Related skills: `hades:unity-performance` (overdraw, draw call budgets, GPU cost model), `hades:unity-shaders-urp` (URP Shader Graph for VFX materials), `hades:unity-shaders-hdrp` (HDRP Shader Graph for VFX materials)
 - Hades MCP tools used in this skill:
-  - `analyze_render_pipeline` — confirm URP/HDRP before recommending VFX Graph
-  - `find_components_using_pattern` — audit existing ParticleSystem and VisualEffect usage
+  - `project_settings` (section: "renderPipeline") — confirm URP/HDRP before recommending VFX Graph
+  - `graph_query` — audit existing ParticleSystem and VisualEffect usage (edgeKind: "references", edgeTargetNamePattern, edgeTargetKind: "Class")
   - `recall_memory` — documented VFX budgets and decisions
   - `propose_memory_update` — record new VFX decisions for the team
 - Unity docs: [VFX Graph](https://docs.unity3d.com/Packages/com.unity.visualeffectgraph@latest), [Particle System](https://docs.unity3d.com/6000.0/Documentation/Manual/ParticleSystems.html), [VisualEffect API](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/VFX.VisualEffect.html), [ParticleSystem.EmissionModule](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/ParticleSystem.EmissionModule.html), [VFXCullingFlags](https://docs.unity3d.com/Packages/com.unity.visualeffectgraph@latest/api/UnityEngine.VFX.VFXCullingFlags.html)

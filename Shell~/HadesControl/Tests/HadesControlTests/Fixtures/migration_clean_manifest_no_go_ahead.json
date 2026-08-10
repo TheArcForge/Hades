@@ -1,0 +1,6 @@
+{
+  "removed": false,
+  "message": "Found 1 occurrence(s) of com.arcforge.hades in manifest.json; not removed (no go-ahead).",
+  "occurrencesFound": 1,
+  "portConflictWarning": "If v1.2's package entry stays in Packages/manifest.json while the app is also running, both will try to bind port 7823 and conflict."
+}

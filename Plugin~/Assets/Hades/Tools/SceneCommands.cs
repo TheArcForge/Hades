@@ -363,14 +363,14 @@ namespace Hades.Tools
         public static ArgumentException NotFoundError(string path) =>
             new ArgumentException(
                 "GameObject not found: '" + path + "'. Root objects in the active scene: "
-                + string.Join(", ", RootNames()) + ". Call scene_get_hierarchy to see the full tree.");
+                + string.Join(", ", RootNames()) + ". Call inspect_asset to see the full tree.");
 
         static ArgumentException ComponentNotFoundError(GameObject go, string typeName)
         {
             var existing = go.GetComponents<Component>().Where(c => c != null).Select(c => c.GetType().Name);
             return new ArgumentException(
                 "Component '" + typeName + "' not found on '" + GetPath(go) + "'. Existing components: "
-                + string.Join(", ", existing) + ". Use component_get_all to confirm.");
+                + string.Join(", ", existing) + ". Use inspect_asset to confirm.");
         }
 
         /// <summary>The one safe way to fetch a required component anywhere in this plugin.

@@ -36,6 +36,7 @@ public sealed class ControlListener : IDisposable
     readonly OperationRegistry _operations;
     readonly IConfiguration _configuration;
     readonly int _actualMcpPort;
+    readonly string? _claudeDesktopConfigPath;
 
     WebApplication? _app;
     bool _disposed;
@@ -101,11 +102,19 @@ public sealed class ControlListener : IDisposable
     /// unmodified case every existing caller of this constructor before this parameter existed
     /// implicitly assumed, and still the correct assumption for any caller that does not override
     /// it.</param>
+    /// <param name="claudeDesktopConfigPath">Backs <c>POST /control/migration/claudeDesktopConfig/clean</c>
+    /// (see <see cref="MigrationEndpoint.CleanClaudeDesktopConfig"/>) - test-only, same
+    /// safe-default-in-production convention as <paramref name="actualMcpPort"/>. Defaults to
+    /// <c>null</c>, which <see cref="MigrationEndpoint.CleanClaudeDesktopConfig"/> resolves to the
+    /// real <see cref="Migration.V12Cleanup.ClaudeDesktopConfigPath"/> - the ordinary, unmodified
+    /// case for every real launch of this app. Tests supply a scratch path so that route can be
+    /// exercised end to end over real HTTP without ever touching the developer's own Claude Desktop
+    /// configuration.</param>
     public ControlListener(string connectionFilePath, int port = 0,
         ProjectService? projects = null, LeaseRegistry? leases = null, Func<DateTimeOffset>? utcNow = null,
         ProjectsEndpoint.ProcessLauncher? launchProcess = null, EditorProxy? editorProxy = null,
         OperationRegistry? operations = null, IConfiguration? configuration = null,
-        int actualMcpPort = SettingsEndpoint.McpPort)
+        int actualMcpPort = SettingsEndpoint.McpPort, string? claudeDesktopConfigPath = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionFilePath);
         _connectionFilePath = connectionFilePath;
@@ -118,6 +127,7 @@ public sealed class ControlListener : IDisposable
         _operations = operations ?? new OperationRegistry();
         _configuration = configuration ?? new ConfigurationBuilder().Build();
         _actualMcpPort = actualMcpPort;
+        _claudeDesktopConfigPath = claudeDesktopConfigPath;
     }
 
     /// <summary>The port actually bound - valid only after <see cref="Start"/>.</summary>
@@ -243,6 +253,29 @@ public sealed class ControlListener : IDisposable
             MemoryEndpoint.DismissProposal(_projects, project, fileName, confirm));
         app.MapPost("/control/memory/proposals/defer", (string? project, string? fileName) =>
             MemoryEndpoint.DeferProposal(_projects, project, fileName));
+
+        // Task 10: migration off v1.2 (spec #4 §5) - the missing caller. See MigrationEndpoint's
+        // own class doc comment for the full design: detection is read-only, import needs no
+        // proceed gate (non-destructive by construction), and cleanup stays four independently
+        // authorised routes - no "clean everything" route exists here either. The last route
+        // carries no {productGuid}: claude_desktop_config.json is global and per-user, not
+        // per-project, and _claudeDesktopConfigPath is null in every real launch of this app (see
+        // this class's own "claudeDesktopConfigPath" constructor parameter doc comment) - only
+        // tests ever override it, onto a scratch file.
+        app.MapGet("/control/migration/{productGuid}/detect", (string productGuid) =>
+            MigrationEndpoint.Detect(_projects, productGuid));
+        app.MapPost("/control/migration/{productGuid}/importMemory", (string productGuid) =>
+            MigrationEndpoint.ImportMemory(_projects, productGuid));
+        app.MapPost("/control/migration/{productGuid}/importTraces", (string productGuid) =>
+            MigrationEndpoint.ImportTraces(_projects, productGuid));
+        app.MapPost("/control/migration/{productGuid}/cleanClaudeMd", (string productGuid, MigrationCleanupRequest request) =>
+            MigrationEndpoint.CleanClaudeMd(_projects, productGuid, request));
+        app.MapPost("/control/migration/{productGuid}/cleanManifest", (string productGuid, MigrationCleanupRequest request) =>
+            MigrationEndpoint.CleanManifest(_projects, productGuid, request));
+        app.MapPost("/control/migration/{productGuid}/cleanMcpConfig", (string productGuid, MigrationCleanupRequest request) =>
+            MigrationEndpoint.CleanMcpConfig(_projects, productGuid, request));
+        app.MapPost("/control/migration/claudeDesktopConfig/clean", (MigrationCleanupRequest request) =>
+            MigrationEndpoint.CleanClaudeDesktopConfig(request, _claudeDesktopConfigPath));
 
         // Synchronous Start(), not RunAsync/StartAsync: mirrors EditorListener.Start() and lets
         // Program.cs start this listener the same unawaited way it starts that one. IHost.Start()

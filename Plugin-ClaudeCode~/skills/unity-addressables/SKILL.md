@@ -25,7 +25,7 @@ Before making recommendations, gather project-specific context so advice is cali
 
 1. **Check if Addressables is already in use:**
    - Call `search_by_name("*AddressableAsset*")` — finds AddressableAssetSettings, AddressableAssetGroup, and AddressableAssetData files. If none exist, the project has not adopted Addressables yet; adjust the scope of advice accordingly.
-   - Call `find_components_using_pattern("AssetReference")` — locates MonoBehaviours with `AssetReference` fields, indicating Addressables is already wired into gameplay code.
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "AssetReference", edgeTargetKind: "Class")` — locates MonoBehaviours with `AssetReference` fields, indicating Addressables is already wired into gameplay code.
 
 2. **Assess project scale:**
    - Call `get_project_summary()` — reveals total asset count, scene count, and build targets. Addressables provide the most value in large projects (many assets) or projects with remote content. Small prototypes rarely justify the setup cost.
@@ -732,7 +732,7 @@ private void Start()
 - Related skills: `hades:unity-performance` (memory budgets, asset memory cost), `hades:scene-architecture` (scene-based loading strategies, additive scene patterns), `hades:data-modeling` (data-driven asset key strategies, ScriptableObject catalogs)
 - Hades MCP tools used in this skill:
   - `search_by_name` — confirm whether Addressables is already set up in the project
-  - `find_components_using_pattern` — locate existing AssetReference usage
+  - `graph_query` — locate existing AssetReference usage (edgeKind: "references", edgeTargetNamePattern, edgeTargetKind: "Class")
   - `get_project_summary` — assess project scale to determine if Addressables is warranted
   - `recall_memory` — documented group strategies and memory decisions
   - `propose_memory_update` — record new loading and memory decisions for the team

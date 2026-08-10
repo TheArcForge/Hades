@@ -115,6 +115,10 @@ public class ReferenceReadingTests : IDisposable
         var ex = Assert.Throws<ArgumentException>(
             () => ReferenceReading.GetReference(_projectRoot, "Assets/Enemy.prefab", fileId: 3, "maxHealth"));
         Assert.Contains("not an object-reference field", ex.Message);
+
+        // Regression test for the dead-tool-name cleanup: this used to point at the now-deleted
+        // component_get_property.
+        Assert.Contains("inspect_asset with 'target', 'component', and 'property' to see its actual value.", ex.Message);
     }
 
     [Fact]
@@ -125,6 +129,10 @@ public class ReferenceReadingTests : IDisposable
         var ex = Assert.Throws<ArgumentException>(
             () => ReferenceReading.GetReference(_projectRoot, "Assets/Enemy.prefab", fileId: 3, "notAField"));
         Assert.Contains("notAField", ex.Message);
+
+        // Regression test for the dead-tool-name cleanup: this used to point at the now-deleted
+        // component_list_properties.
+        Assert.Contains("inspect_asset with 'target' and 'component' (no 'property') to confirm.", ex.Message);
     }
 
     [Fact]

@@ -145,6 +145,32 @@ public sealed class MemoryEndpointHttpTests : IDisposable
         Assert.Equal("Use object pooling.", proposal.GetProperty("content").GetString());
     }
 
+    // The proposal queue is spec #3 §3.4's primary surface: real proposals must come first, ahead
+    // of analyzer-generated statistical rows, so a person is never left hunting through dozens of
+    // "inferred" rows for the handful they'd actually act on. This proves the ordering
+    // Hades.Core.Memory.MemoryProposalsTests already proves at the unit level is actually wired
+    // through this endpoint end-to-end, not just present on the underlying class.
+    [Fact]
+    public async Task Get_Proposals_NonInferredStatusSortsBeforeInferred_EvenWhenNewerByName()
+    {
+        var authored = _projects.ProposeMemoryUpdate(ProjectGuid, "patterns.md", "authored content", "why")!;
+        var analyzerLike = _projects.ProposeMemoryUpdate(ProjectGuid, "patterns.md", "analyzer content", "why")!;
+        _projects.SetMemoryProposalStatus(ProjectGuid, analyzerLike.FileName, "inferred");
+
+        using var listener = StartListener();
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Get, $"/control/memory?project={ProjectGuid}", listener.Token));
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        var fileNames = body.GetProperty("proposals").EnumerateArray()
+            .Select(p => p.GetProperty("fileName").GetString())
+            .ToList();
+
+        Assert.Equal([authored.FileName, analyzerLike.FileName], fileNames);
+    }
+
     // ---------------------------------------------------------------- Plan 11 Task 7 audit fixes:
     // sizeDisplay and createdAgo - sizeBytes/createdAtUtc alone forced a shell to convert bytes to
     // KB/MB, or subtract a raw timestamp from "now", itself (the "formatting a duration"/"raw

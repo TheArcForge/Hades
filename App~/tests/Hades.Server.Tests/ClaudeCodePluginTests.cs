@@ -21,8 +21,8 @@ namespace Hades.Server.Tests;
 /// 2. <b>A skill or command silently missing from the shipped plugin.</b> The real source of truth
 ///    for what v1.2 ships is <c>/skills/</c> (22 directories, one <c>SKILL.md</c> each) and
 ///    <c>/commands/</c> (6 files) at the repo root - the same source
-///    <c>scripts/sync-plugin.sh</c> already packages from for the pre-existing (not locally
-///    installed) <c>.claude-plugin/</c> proto-plugin. Byte-identical comparison mirrors
+///    <c>scripts/sync-plugin.sh</c> already packages from for the retired v1.2 proto-plugin (whose
+///    manifest now lives under <c>Legacy~/</c>). Byte-identical comparison mirrors
 ///    <see cref="PluginWireContractTests"/>'s own reasoning for <c>Plugin~/Contract</c>: a copy
 ///    that can drift from its source is worse than no copy, and hand-retyped content is exactly
 ///    the kind of copy that drifts silently.
@@ -121,6 +121,45 @@ public class ClaudeCodePluginTests
         // never a re-typed 7823 literal that could silently drift from it.
         var expectedUrl = $"http://127.0.0.1:{SettingsEndpoint.McpPort}/mcp";
         Assert.Equal(expectedUrl, hades.GetProperty("url").GetString());
+    }
+
+    /// <summary>
+    /// The repo root must not itself be an installable Claude Code plugin.
+    ///
+    /// It used to be: a root <c>.claude-plugin/plugin.json</c>, also named "hades". On any checkout
+    /// where v1.2 had run, a generated root <c>.mcp.json</c> sat beside it launching
+    /// <c>node Bridge~/launcher/dist/index.js</c> - the bridge to the MCP server that ran inside the
+    /// Unity Editor. Pointing Claude Code at such a checkout <b>succeeded</b>, silently binding to
+    /// the retired ~90-tool surface instead of the standalone app's 32. Nothing failed; it simply
+    /// answered as the wrong generation of Hades.
+    ///
+    /// On a fresh clone the outcome was milder but still wrong: <c>.mcp.json</c> is gitignored as a
+    /// machine-specific runtime artifact, so the install produced skills and commands with no MCP
+    /// server at all.
+    ///
+    /// That is why this test exists rather than a doc note: on the machines that mattered most - the
+    /// ones already running Hades - the failure was invisible at runtime, so the only durable fix is
+    /// making the wrong door absent. The manifest now lives in <c>Legacy~/</c> (see its README).
+    /// Restoring either file re-opens the path, so this fails loudly if they come back.
+    /// </summary>
+    [Fact]
+    public void RepoRoot_IsNotItselfAnInstallablePlugin_SoPointingClaudeCodeHereCannotSilentlyLoadTheRetiredV12Surface()
+    {
+        var rootManifest = Path.Combine(RepoRoot, ".claude-plugin", "plugin.json");
+        Assert.False(File.Exists(rootManifest),
+            $"{rootManifest} exists again. The repo root must not be an installable plugin - it "
+            + "would silently serve the retired v1.2 bridge instead of Plugin-ClaudeCode~. Move it "
+            + "back under Legacy~/.");
+
+        var rootMcp = Path.Combine(RepoRoot, ".mcp.json");
+        Assert.False(File.Exists(rootMcp),
+            $"{rootMcp} exists again. A root .mcp.json makes this checkout installable as a plugin "
+            + "and reintroduces the silent wrong-surface path. Move it back under Legacy~/.");
+
+        // The replacement must still be here - otherwise this test would "pass" on a checkout with
+        // no plugin at all, which is not the state it is describing.
+        Assert.True(File.Exists(Path.Combine(PluginRoot, ".claude-plugin", "plugin.json")),
+            "Plugin-ClaudeCode~ is missing its manifest, so there is no installable plugin at all.");
     }
 
     // -------------------------------------------------------------------------------- skills parity

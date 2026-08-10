@@ -208,6 +208,18 @@ public abstract class EditorToolTestBase : IClassFixture<WebApplicationFactory<P
     {
         foreach (var disposable in _toDispose) disposable.Dispose();
 
+        // Factory is a fresh derived WebApplicationFactory built per test (see the constructor's
+        // own WithWebHostBuilder call) and was never disposed until now. Left running, its own
+        // real background services - EditorListener's live accept loop and ControlListener's,
+        // both started unconditionally during Program.cs's own startup, plus ObservationService's
+        // periodic sweep - keep touching _appRoot/_projectRoot after the test body returns, since
+        // nothing here ever stopped them. Disposing the host BEFORE deleting the directories below
+        // is what actually stops that traffic; deleting first (the previous order) left it free to
+        // still be mid-write under either directory when the recursive delete ran, racing it
+        // (IOException: "Directory not empty" - a different test each time, depending on which
+        // leaked host's background work and which test's own teardown happened to collide).
+        Factory.Dispose();
+
         foreach (var dir in new[] { _appRoot, _projectRoot })
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
     }

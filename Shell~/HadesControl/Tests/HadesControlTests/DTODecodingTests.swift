@@ -410,3 +410,156 @@ struct DTODecodingTests {
         #expect(deferred.message == "Proposal deferred.")
     }
 }
+
+/// Plan 14 Task 10: `/control/migration/*` - the missing caller. Every fixture here (except the
+/// three noted below) was captured from a real, running Hades.Server against a synthetic scratch
+/// v1.2 project - never the developer's own machine or real Claude Desktop config, matching this
+/// task's own explicit constraint.
+///
+/// `migration_clean_claude_desktop_config_removed.json` and
+/// `migration_clean_claude_desktop_config_no_go_ahead.json` are hand-authored exceptions: both
+/// mirror `Hades.Server.Control.MigrationClaudeDesktopConfigCleanupResult`'s wire shape and the
+/// exact literal strings `V12Cleanup.CleanClaudeDesktopConfig` produces (already proven for real,
+/// byte-for-byte, by `Hades.Core.Tests.Migration.V12CleanupTests` and
+/// `Hades.Server.Tests.Control.MigrationEndpointHttpTests` against scratch files) rather than
+/// live-captured, because a live capture would require pointing a running core's
+/// `claudeDesktopConfigPath` at either a scratch file (in which case it is not meaningfully more
+/// "real" than hand-authoring the same JSON) or - the one thing this whole task explicitly forbids
+/// - the developer's own real `claude_desktop_config.json`.
+///
+/// `migration_clean_claude_md_no_go_ahead_with_remaining_content.json` (added for the per-item
+/// cleanup UI task) is hand-authored for a narrower reason: it is the exact literal string
+/// `V12Cleanup.CleanClaudeMd`'s dry-run branch now produces for the hybrid shape, already proven
+/// byte-for-byte by `V12CleanupTests` and `MigrationEndpointHttpTests` against scratch files, so a
+/// live capture would exercise nothing this suite does not already cover elsewhere.
+@Suite("Migration DTO decoding")
+struct MigrationDTODecodingTests {
+    @Test("MigrationDetectionResult decodes a full v1.2 project - every item present")
+    func detectV12() throws {
+        let result = try Fixtures.decode(MigrationDetectionResult.self, "migration_detect_v12")
+
+        #expect(result.isV12Project == true)
+        #expect(result.manifestEntry.present == true)
+        #expect(result.manifestEntry.value == "file:/Users/mike/Projects/Hades")
+        #expect(result.manifestEntry.resolvedPath == "/Users/mike/Projects/Hades")
+        #expect(result.hasMemory == true)
+        #expect(result.memoryDocumentCount == 3)
+        #expect(result.hasTraces == true)
+        #expect(result.hasGraph == false)
+        #expect(result.hasGeneratedMcpConfig == true)
+        #expect(result.claudeMd.shape == .marked)
+        #expect(result.hasUnityPlugin == false)
+    }
+
+    @Test("MigrationDetectionResult decodes a non-v1.2 project - everything absent, honestly, not an error")
+    func detectNonV12() throws {
+        let result = try Fixtures.decode(MigrationDetectionResult.self, "migration_detect_non_v12")
+
+        #expect(result.isV12Project == false)
+        #expect(result.manifestEntry.present == false)
+        #expect(result.manifestEntry.value == nil)
+        #expect(result.manifestEntry.resolvedPath == nil)
+        #expect(result.hasMemory == false)
+        #expect(result.memoryDocumentCount == 0)
+        #expect(result.claudeMd.shape == .absent)
+    }
+
+    @Test("MigrationMemoryImportResult decodes a real collision report - never overwrites")
+    func importMemorySkipped() throws {
+        // Captured against a project already adopted once before this call (ProjectService.Adopt
+        // auto-imports memory on first sight - see that method's own doc comment), so every entry
+        // is a genuine, real "already exists" skip, not a hand-typed approximation.
+        let result = try Fixtures.decode(MigrationMemoryImportResult.self, "migration_import_memory")
+
+        #expect(result.imported.isEmpty)
+        #expect(result.skipped.count == 3)
+        let conventions = try #require(result.skipped.first { $0.source == "conventions.md" })
+        #expect(conventions.reason.contains("already exists"))
+        #expect(result.skipped.contains { $0.source == "proposals/idea.md" })
+    }
+
+    @Test("MigrationTracesImportResult decodes a real successful import")
+    func importTraces() throws {
+        let result = try Fixtures.decode(MigrationTracesImportResult.self, "migration_import_traces")
+
+        #expect(result.imported == true)
+        #expect(result.skippedReason == nil)
+    }
+
+    @Test("MigrationClaudeMdCleanupResult: no go-ahead leaves removed false, remainingContentOutsideBlock false")
+    func cleanClaudeMdNoGoAhead() throws {
+        let result = try Fixtures.decode(MigrationClaudeMdCleanupResult.self, "migration_clean_claude_md_no_go_ahead")
+
+        #expect(result.removed == false)
+        #expect(result.message.contains("no go-ahead"))
+        #expect(result.remainingContentOutsideBlock == false)
+    }
+
+    @Test("MigrationClaudeMdCleanupResult: the real hybrid shape - removed true AND remainingContentOutsideBlock true")
+    func cleanClaudeMdRemovedWithRemainingContent() throws {
+        // "cleanup succeeded" and "the file is now clean" are different claims - this is the field
+        // that keeps the shell from conflating them. See this task's own brief.
+        let result = try Fixtures.decode(MigrationClaudeMdCleanupResult.self, "migration_clean_claude_md_removed_with_remaining_content")
+
+        #expect(result.removed == true)
+        #expect(result.remainingContentOutsideBlock == true)
+    }
+
+    @Test("MigrationClaudeMdCleanupResult: the hybrid shape BEFORE agreeing - remainingContentOutsideBlock is true even on a proceed:false dry run")
+    func cleanClaudeMdNoGoAheadWithRemainingContent() throws {
+        // The per-item cleanup UI task's own gap fix: a caller building a confirmation prompt must
+        // learn "other content will survive" BEFORE the user agrees, not only after acting. Same
+        // fact as cleanClaudeMdRemovedWithRemainingContent above, one step earlier.
+        let result = try Fixtures.decode(MigrationClaudeMdCleanupResult.self, "migration_clean_claude_md_no_go_ahead_with_remaining_content")
+
+        #expect(result.removed == false)
+        #expect(result.remainingContentOutsideBlock == true)
+        #expect(result.message.localizedCaseInsensitiveContains("outside"))
+    }
+
+    @Test("MigrationManifestCleanupResult decodes occurrencesFound and the port-conflict warning even before removal")
+    func cleanManifestNoGoAhead() throws {
+        let result = try Fixtures.decode(MigrationManifestCleanupResult.self, "migration_clean_manifest_no_go_ahead")
+
+        #expect(result.removed == false)
+        #expect(result.occurrencesFound == 1)
+        #expect(result.portConflictWarning.localizedCaseInsensitiveContains("port"))
+    }
+
+    @Test("MigrationManifestCleanupResult decodes a real removal")
+    func cleanManifestRemoved() throws {
+        let result = try Fixtures.decode(MigrationManifestCleanupResult.self, "migration_clean_manifest_removed")
+
+        #expect(result.removed == true)
+        #expect(result.occurrencesFound == 1)
+    }
+
+    @Test("MigrationMcpConfigCleanupResult decodes both outcomes")
+    func cleanMcpConfig() throws {
+        let notRemoved = try Fixtures.decode(MigrationMcpConfigCleanupResult.self, "migration_clean_mcp_config_no_go_ahead")
+        #expect(notRemoved.removed == false)
+
+        let removed = try Fixtures.decode(MigrationMcpConfigCleanupResult.self, "migration_clean_mcp_config_removed")
+        #expect(removed.removed == true)
+        #expect(removed.message == "Removed the generated .mcp.json.")
+    }
+
+    @Test("MigrationClaudeDesktopConfigCleanupResult always carries a global scope warning")
+    func cleanClaudeDesktopConfig() throws {
+        let result = try Fixtures.decode(MigrationClaudeDesktopConfigCleanupResult.self, "migration_clean_claude_desktop_config_removed")
+
+        #expect(result.removed == true)
+        #expect(result.scopeWarning.localizedCaseInsensitiveContains("global"))
+        #expect(result.scopeWarning.contains("claude_desktop_config.json"))
+        #expect(result.occurrencesFound == 1)
+    }
+
+    @Test("MigrationClaudeDesktopConfigCleanupResult: occurrencesFound is populated on a proceed:false dry run too - the only presence signal this global-scope route has, with no per-project detect endpoint behind it")
+    func cleanClaudeDesktopConfigNoGoAhead() throws {
+        let result = try Fixtures.decode(MigrationClaudeDesktopConfigCleanupResult.self, "migration_clean_claude_desktop_config_no_go_ahead")
+
+        #expect(result.removed == false)
+        #expect(result.occurrencesFound == 1)
+        #expect(result.scopeWarning.localizedCaseInsensitiveContains("global"))
+    }
+}

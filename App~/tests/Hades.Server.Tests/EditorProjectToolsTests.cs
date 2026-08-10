@@ -368,19 +368,27 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
     [Fact]
     public async Task ScriptEditingSession_Begin_RecordsHeldLease_WithThePluginsActualExpiry_NotTheRequestedTtl()
     {
+        // Deliberately NOT "5 seconds from now" (what a ttlSeconds=5.0 echo would produce) and
+        // deliberately relative to UtcNow rather than a fixed literal - LeaseRegistry.Get now
+        // self-expires against real wall-clock time (see its class doc comment), so a hardcoded
+        // past-by-now literal would make this test's own later Get(ProjectGuid) call see nothing,
+        // for reasons that have nothing to do with what this test is actually proving.
+        var actualExpiryMs = DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeMilliseconds();
+
         var (reads, writes) = await ConnectAsFakeUnityAsync();
         var responder = AnswerBusyProbeThenRespondAsync(reads, writes, Obj(
-            ("leaseId", JsonValue.String("hades-script-editing")), ("expiresAtUtcMs", JsonValue.Integer(1_700_000_030_000))));
+            ("leaseId", JsonValue.String("hades-script-editing")), ("expiresAtUtcMs", JsonValue.Integer(actualExpiryMs))));
 
         // ttlSeconds=5 requested, but the plugin answers with a DIFFERENT actual expiry
-        // (1_700_000_030_000ms) - LeaseRegistry must record THAT, never an echo of the request.
+        // (actualExpiryMs, ~30 minutes out) - LeaseRegistry must record THAT, never an echo of the
+        // request.
         await McpTestClient.CallTool(Factory, "script_editing_session", new { action = "begin", ttlSeconds = 5.0 });
         await responder.WaitAsync(TimeSpan.FromSeconds(5));
 
         var lease = Factory.Services.GetRequiredService<LeaseRegistry>().Get(ProjectGuid);
         Assert.NotNull(lease);
         Assert.Equal("hades-script-editing", lease!.LeaseId);
-        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_030_000), lease.ExpiresAtUtc);
+        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(actualExpiryMs), lease.ExpiresAtUtc);
     }
 
     [Fact]

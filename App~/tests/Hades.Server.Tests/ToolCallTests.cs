@@ -96,6 +96,19 @@ public class ToolCallTests : IClassFixture<WebApplicationFactory<Program>>, IDis
     }
 
     [Fact]
+    public async Task GetProjectSummary_ReportsAppliedDefines()
+    {
+        // Plan 15 Task 3 Step 4: the define set applied while indexing must be STATED, not left
+        // for a caller to discover only by noticing #if-guarded code is missing.
+        var structured = Structured(await McpTestClient.CallTool(_factory, "get_project_summary"));
+
+        var appliedDefines = structured.GetProperty("appliedDefines").EnumerateArray()
+            .Select(e => e.GetString()).ToList();
+
+        Assert.Contains("UNITY_EDITOR", appliedDefines);
+    }
+
+    [Fact]
     public async Task HadesStatus_HandsOutProjectHandles()
     {
         var structured = Structured(await McpTestClient.CallTool(_factory, "hades_status"));
@@ -182,6 +195,12 @@ public class ToolCallTests : IClassFixture<WebApplicationFactory<Program>>, IDis
 
     public void Dispose()
     {
+        // See EditorToolTestBase.Dispose's own comment: _factory is a fresh per-test
+        // WebApplicationFactory whose own background services can still be touching
+        // _appRoot/_projectRoot until the host itself is disposed - which must happen before
+        // the recursive delete below.
+        _factory.Dispose();
+
         foreach (var dir in new[] { _appRoot, _projectRoot })
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
     }

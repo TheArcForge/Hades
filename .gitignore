@@ -52,6 +52,13 @@ Dashboard~/node_modules/
 .arcforge/server.json
 .mcp.json
 
+# LLVM coverage output from the Xcode-instrumented HadesApp binary, written to its process CWD
+# on exit (seen at the repo root and at Shell~/HadesApp). Regenerated every run, never committed.
+# Bare filenames match at any depth, so this covers both locations. The .meta entry is needed
+# because Unity generates a .meta for anything sitting at the repo root.
+default.profraw
+default.profraw.meta
+
 # Keep memory tracked
 !.arcforge/memory/
 

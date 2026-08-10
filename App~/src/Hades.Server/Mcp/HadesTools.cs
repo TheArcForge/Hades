@@ -178,7 +178,16 @@ public sealed class HadesTools(ProjectService projects)
 
     [McpServerTool(Name = "get_project_summary", Title = "Project Summary", ReadOnly = true, UseStructuredContent = true)]
     [Description("Structured overview of a Unity project: node counts by kind, index freshness, "
-               + "and where the project lives." + ToolSupport.SavedStateClause)]
+               + "and where the project lives." + ToolSupport.SavedStateClause
+               + " appliedDefines lists the C# preprocessor symbols indexing applied when "
+               + "evaluating #if (UNITY_EDITOR, the Unity-version ladder from ProjectVersion.txt, "
+               + "this project's own scriptingDefineSymbols, and every asmdef versionDefine whose "
+               + "named package resolves to a satisfying version) - the SAME set project-wide, for "
+               + "every file, which is an approximation: Unity's real compiler uses a DIFFERENT "
+               + "set per assembly (asmdef), and Hades does not yet track file-to-asmdef "
+               + "membership. Code gated on a symbol outside this list - a platform define, a "
+               + "csc.rsp-only symbol, or a versionDefine keyed to a built-in Unity module rather "
+               + "than an installed package - is not in the graph at all.")]
     public ProjectSummary GetProjectSummary(
         [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
     {

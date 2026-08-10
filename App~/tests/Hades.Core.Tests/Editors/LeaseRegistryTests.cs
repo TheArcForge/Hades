@@ -155,6 +155,92 @@ public sealed class LeaseRegistryTests : IDisposable
         Assert.Equal(2, registry.All().Count);
     }
 
+    // ---------------------------------------------------------------- TTL self-expiry (defect: the
+    // lease indicator lying after the plugin's own TTL watchdog released the real lock with no
+    // reconnect, and so no ReconcileAsync, to notice)
+
+    [Fact]
+    public void Get_PastItsOwnRecordedExpiry_ReturnsNullWithNoExplicitClear()
+    {
+        var t0 = DateTimeOffset.UtcNow;
+        var clock = t0;
+        var registry = new LeaseRegistry(() => clock);
+        registry.RecordHeld(ProjectGuid, "lease-1", t0.AddSeconds(5));
+
+        clock = t0.AddSeconds(220); // the exact shape of the live repro: ttlSeconds=5, no end, wait past it
+        Assert.Null(registry.Get(ProjectGuid));
+    }
+
+    [Fact]
+    public void Get_OneTickBeforeItsOwnExpiry_StillReturnsTheLease()
+    {
+        var t0 = DateTimeOffset.UtcNow;
+        var clock = t0;
+        var registry = new LeaseRegistry(() => clock);
+        var expiry = t0.AddSeconds(5);
+        registry.RecordHeld(ProjectGuid, "lease-1", expiry);
+
+        clock = expiry.AddTicks(-1);
+        Assert.NotNull(registry.Get(ProjectGuid));
+    }
+
+    [Fact]
+    public void Get_AtExactlyItsOwnExpiry_ReturnsNull()
+    {
+        // Same "now >= expiry" boundary as the plugin's own ReloadLease.IsExpired - see the class
+        // doc comment for why the two must agree.
+        var t0 = DateTimeOffset.UtcNow;
+        var clock = t0;
+        var registry = new LeaseRegistry(() => clock);
+        var expiry = t0.AddSeconds(5);
+        registry.RecordHeld(ProjectGuid, "lease-1", expiry);
+
+        clock = expiry;
+        Assert.Null(registry.Get(ProjectGuid));
+    }
+
+    [Fact]
+    public void All_ExcludesASelfExpiredLease_ButKeepsAnUnexpiredOneForAnotherProject()
+    {
+        const string otherProject = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        var t0 = DateTimeOffset.UtcNow;
+        var clock = t0;
+        var registry = new LeaseRegistry(() => clock);
+        registry.RecordHeld(ProjectGuid, "lease-expired", t0.AddSeconds(5));
+        registry.RecordHeld(otherProject, "lease-still-good", t0.AddSeconds(60));
+
+        clock = t0.AddSeconds(10);
+
+        var all = registry.All();
+        var remaining = Assert.Single(all);
+        Assert.Equal(otherProject, remaining.ProductGuid);
+        Assert.Equal("lease-still-good", remaining.LeaseId);
+    }
+
+    [Fact]
+    public void Get_AfterSelfExpiring_EvictsSoAFreshAcquireOfTheSameLeaseIdResetsAcquiredAtUtc()
+    {
+        // Guards the interaction with RecordHeld's own "renewing the same lease id preserves
+        // AcquiredAtUtc" rule (see RecordHeld_RenewingTheSameLeaseId_... above): once a lease has
+        // genuinely self-expired and been evicted, a LATER RecordHeld that happens to reuse the
+        // same textual id is a brand new hold, not a continuation, and must stamp a fresh
+        // AcquiredAtUtc rather than resurrecting the expired one's.
+        var t0 = DateTimeOffset.UtcNow;
+        var clock = t0;
+        var registry = new LeaseRegistry(() => clock);
+        registry.RecordHeld(ProjectGuid, "lease-1", t0.AddSeconds(5));
+
+        clock = t0.AddSeconds(10);
+        Assert.Null(registry.Get(ProjectGuid)); // self-expires and evicts
+
+        clock = t0.AddSeconds(11);
+        registry.RecordHeld(ProjectGuid, "lease-1", clock.AddSeconds(30));
+
+        var found = registry.Get(ProjectGuid);
+        Assert.NotNull(found);
+        Assert.Equal(clock, found!.AcquiredAtUtc); // fresh, not t0 - the expired hold does not linger
+    }
+
     // ---------------------------------------------------------------- reconnect reconciliation
 
     [Fact]
@@ -166,6 +252,25 @@ public sealed class LeaseRegistryTests : IDisposable
         // Must return promptly without waiting on any network round trip - there is nothing to
         // confirm, and nobody answers on the "Unity" side of this connection in this test. If
         // this incorrectly sent a request anyway, it would hang here until the timeout fires.
+        await registry.ReconcileAsync(ProjectGuid, session).WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Null(registry.Get(ProjectGuid));
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_WhenTheLocalBeliefHasAlreadySelfExpired_SkipsTheNetworkRoundTrip()
+    {
+        // TTL self-expiry (Get's own guard - see the class doc comment) already knows this belief
+        // is gone before ReconcileAsync's internal Get(productGuid) call even runs - so there is
+        // nothing to confirm, same as the nothing-recorded-at-all case above, and this must not
+        // hang waiting for a lease.renew nobody on the "Unity" side of this test will ever answer.
+        var (session, _, _) = await ConnectAsync();
+        var t0 = DateTimeOffset.UtcNow;
+        var clock = t0;
+        var registry = new LeaseRegistry(() => clock);
+        registry.RecordHeld(ProjectGuid, "lease-1", t0.AddSeconds(5));
+        clock = t0.AddSeconds(10);
+
         await registry.ReconcileAsync(ProjectGuid, session).WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.Null(registry.Get(ProjectGuid));

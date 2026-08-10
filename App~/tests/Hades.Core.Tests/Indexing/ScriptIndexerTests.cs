@@ -404,6 +404,188 @@ public class ScriptIndexerTests : IDisposable
         Assert.Equal(1, result.FilesScanned);
     }
 
+    // --- Plan 15 Task 3: conditional compilation, end to end -------------------------------
+    // RoslynScriptScannerTests proves the scanner mechanism respects #if/#else correctly given
+    // a define set; these prove ScriptIndexer actually RESOLVES and PASSES one, against real
+    // ProjectVersion.txt / ProjectSettings.asset files on disk — the wiring the unit-level tests
+    // cannot see.
+
+    void WriteProjectVersion(string editorVersion) =>
+        WriteScript("ProjectSettings/ProjectVersion.txt",
+            $"m_EditorVersion: {editorVersion}\nm_EditorVersionWithRevision: {editorVersion} (a9779f353c9b)\n");
+
+    [Fact]
+    public void IndexesCodeGuardedByUnityEditorEvenWithNoProjectVersionFile()
+    {
+        // UNITY_EDITOR is unconditional (ProjectDefines.UnityEditorSymbol) — must apply even when
+        // ProjectVersion.txt does not exist, the shape most of this test class's own fixtures use.
+        WriteScript("Assets/Scripts/EditorDrawer.cs", """
+            #if UNITY_EDITOR
+            public class EditorOnlyDrawer { }
+            #endif
+            """);
+        using var db = OpenGraph();
+
+        ScriptIndexer.IndexProject(_projectRoot, db);
+
+        Assert.Single(db.SearchByName("EditorOnlyDrawer"));
+    }
+
+    [Fact]
+    public void StillExcludesCodeGuardedByASymbolNotInTheAppliedSet()
+    {
+        // The regression this whole task must not introduce: proving false #if branches are
+        // still excluded end to end, not just in the scanner unit tests — the shortcut Plan 15
+        // Task 3 rejects (stripping #if/#else entirely) would make this test fail.
+        WriteScript("Assets/Scripts/AndroidOnly.cs", """
+            #if UNITY_ANDROID
+            public class NeverInThisIndex { }
+            #endif
+            """);
+        using var db = OpenGraph();
+
+        ScriptIndexer.IndexProject(_projectRoot, db);
+
+        Assert.Empty(db.SearchByName("NeverInThisIndex"));
+    }
+
+    [Fact]
+    public void IndexesCodeGuardedByTheVersionLadderFromProjectVersionTxt()
+    {
+        WriteProjectVersion("6000.3.2f1");
+        WriteScript("Assets/Scripts/NewApi.cs", """
+            #if UNITY_6000_3_OR_NEWER
+            public class UsesNewApi { }
+            #endif
+            """);
+        using var db = OpenGraph();
+
+        ScriptIndexer.IndexProject(_projectRoot, db);
+
+        Assert.Single(db.SearchByName("UsesNewApi"));
+    }
+
+    [Fact]
+    public void IndexesCodeGuardedByAUserScriptingDefineSymbol()
+    {
+        WriteScript("ProjectSettings/ProjectSettings.asset", """
+              productGUID: aaaabbbbccccddddeeeeffff00001111
+              scriptingDefineSymbols:
+                Standalone: MY_CUSTOM_DEFINE
+              additionalCompilerArguments: {}
+            """);
+        WriteScript("Assets/Scripts/CustomGated.cs", """
+            #if MY_CUSTOM_DEFINE
+            public class GatedByCustomDefine { }
+            #endif
+            """);
+        using var db = OpenGraph();
+
+        ScriptIndexer.IndexProject(_projectRoot, db);
+
+        Assert.Single(db.SearchByName("GatedByCustomDefine"));
+    }
+
+    // --- Plan 15 Task 4: versionDefines, end to end -----------------------------------------
+    // The insidious half of Plan 15's conditional-compilation defect: code gated on a genuinely
+    // INSTALLED package version (an asmdef's own "versionDefines", resolved against Packages/
+    // manifest.json and packages-lock.json), not on UNITY_EDITOR or a user scriptingDefineSymbol.
+    // Real repro: project_aurora's Packages/com.arongranberg.astar/AstarPathfindingProject.asmdef
+    // carries {"name":"com.unity.entities","expression":"1.0.0-pre.47","define":"MODULE_ENTITIES"},
+    // and that project's Packages/manifest.json declares "com.unity.entities":"1.4.2" - so
+    // MODULE_ENTITIES is genuinely defined in real compiles, and Core/ECS/Components/
+    // AutoRepathPolicy.cs (entirely "#if MODULE_ENTITIES") was 100% invisible before this.
+
+    void WriteAsmdef(string relativePath, string versionDefinesEntryJson) =>
+        WriteScript(relativePath, "{\"name\":\"Test\",\"versionDefines\":[" + versionDefinesEntryJson + "]}");
+
+    [Fact]
+    public void IndexesCodeGuardedByAVersionDefineWhenTheManifestSatisfiesIt()
+    {
+        WriteAsmdef("Packages/com.example.astar/Test.asmdef",
+            """{"name":"com.example.entities","expression":"1.0.0-pre.1","define":"MODULE_ENTITIES"}""");
+        WriteManifest("\"com.example.entities\":\"1.4.2\"");
+        WriteScript("Packages/com.example.astar/AutoRepathPolicy.cs", """
+            #if MODULE_ENTITIES
+            public class AutoRepathPolicy { }
+            #endif
+            """);
+        using var db = OpenGraph();
+
+        ScriptIndexer.IndexProject(_projectRoot, db);
+
+        Assert.Single(db.SearchByName("AutoRepathPolicy"));
+    }
+
+    [Fact]
+    public void StillExcludesCodeGuardedByAVersionDefineWhenTheInstalledVersionIsTooLow()
+    {
+        WriteAsmdef("Packages/com.example.astar/Test.asmdef",
+            """{"name":"com.example.entities","expression":"2.0.0","define":"MODULE_ENTITIES"}""");
+        WriteManifest("\"com.example.entities\":\"1.4.2\"");
+        WriteScript("Packages/com.example.astar/AutoRepathPolicy.cs", """
+            #if MODULE_ENTITIES
+            public class NeverInThisIndex { }
+            #endif
+            """);
+        using var db = OpenGraph();
+
+        ScriptIndexer.IndexProject(_projectRoot, db);
+
+        Assert.Empty(db.SearchByName("NeverInThisIndex"));
+    }
+
+    [Fact]
+    public void TakesExactlyOneBranchWhenBaseTypeIsGatedByAVersionDefine()
+    {
+        // Mirrors the real shape of astar's own VersionedMonoBehaviour.cs: "#if MODULE_ENTITIES
+        // ... #else ... #endif" choosing between two base types. The rejected shortcut (stripping
+        // #if/#else so both branches land) would make both classes appear; Roslyn's own
+        // preprocessor guarantees exactly one does when given a concrete, resolved define set.
+        WriteAsmdef("Packages/com.example.astar/Test.asmdef",
+            """{"name":"com.example.entities","expression":"1.0.0","define":"MODULE_ENTITIES"}""");
+        WriteManifest("\"com.example.entities\":\"1.4.2\"");
+        WriteScript("Packages/com.example.astar/Versioned.cs", """
+            #if MODULE_ENTITIES
+            public class UsesEntities { }
+            #else
+            public class FallsBackWithoutEntities { }
+            #endif
+            """);
+        using var db = OpenGraph();
+
+        ScriptIndexer.IndexProject(_projectRoot, db);
+
+        Assert.Single(db.SearchByName("UsesEntities"));
+        Assert.Empty(db.SearchByName("FallsBackWithoutEntities"));
+    }
+
+    void WriteLock(string dependencyEntriesJson) =>
+        WriteScript("Packages/packages-lock.json", "{\"dependencies\":{" + dependencyEntriesJson + "}}");
+
+    [Fact]
+    public void ResolvesAVersionDefineForATransitiveDependencyOnlyVisibleInPackagesLockJson()
+    {
+        // Real project_aurora shape: com.unity.burst/mathematics/collections are pulled in
+        // TRANSITIVELY by com.unity.entities and never appear as a direct Packages/manifest.json
+        // dependency at all - only packages-lock.json (Unity's own record of what actually got
+        // resolved) lists them, at "depth":1. See ProjectDefines' own class doc comment for why
+        // this project deliberately reads packages-lock.json too, not manifest.json alone.
+        WriteAsmdef("Packages/com.example.astar/Test.asmdef",
+            """{"name":"com.example.burst","expression":"1.8.7","define":"MODULE_BURST"}""");
+        WriteLock("\"com.example.burst\":{\"version\":\"1.8.26\",\"depth\":1,\"source\":\"registry\"}");
+        WriteScript("Packages/com.example.astar/BurstOnly.cs", """
+            #if MODULE_BURST
+            public class UsesBurst { }
+            #endif
+            """);
+        using var db = OpenGraph();
+
+        ScriptIndexer.IndexProject(_projectRoot, db);
+
+        Assert.Single(db.SearchByName("UsesBurst"));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_projectRoot)) Directory.Delete(_projectRoot, recursive: true);

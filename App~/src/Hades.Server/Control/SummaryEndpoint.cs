@@ -162,6 +162,17 @@ public sealed record ProjectSnapshot
 /// <see cref="SummaryLease.LeaseId"/>, resolved to the holding project's productGuid - see that
 /// property's own doc comment and <see cref="Hades.Server.Control.EditorsEndpoint"/>'s class doc
 /// comment for why.</item>
+/// <item><b>The <see cref="ControlIconState.Error"/> headline with more than one known project.</b>
+/// With exactly one project, naming its problem is the only useful thing a headline can say, and
+/// the shell showing that same sentence again in the one row underneath is unavoidable, not a
+/// rendering bug. With more than one, doing the same - one project's row text repeated with its
+/// name stuck in front - hides whether anything else needs a look and tells the user nothing the
+/// row didn't already, so <see cref="AttentionSummary"/> switches to a count ("N of M projects need
+/// attention") instead: information a single row can't carry. Every other branch's headline already
+/// says something a row doesn't (a lease's elapsed time, which project is still indexing) even with
+/// several projects known, so only this branch needed the switch - see
+/// <see cref="SummaryResolveTests.MultipleSimultaneousLeases_PicksTheOneExpiringSoonest"/> for a
+/// pinned example of a multi-project headline that was already fine.</item>
 /// </list>
 /// </summary>
 public static class SummaryEndpoint
@@ -225,10 +236,21 @@ public static class SummaryEndpoint
 
         if (projects.FirstOrDefault(p => !p.PathExists) is { } errorProject)
         {
+            // Single project: name the one thing wrong with it - there is no "across projects" to
+            // summarize instead, and the row right below says the same thing for the same reason
+            // this headline does (see this class's own doc comment on why that's fine here but not
+            // below). Multiple projects: naming just THIS project's problem would either repeat a
+            // row verbatim (if that row is the only other content) or bury how many OTHER projects
+            // also need a look - so the headline switches to a count, which is genuinely new
+            // information rather than a copy of something already on screen.
+            var headline = projects.Count == 1
+                ? $"{errorProject.Name}: project path not found — check that the volume is mounted."
+                : AttentionSummary(rows);
+
             return new SummaryResult
             {
                 IconState = ControlIconState.Error,
-                Headline = $"{errorProject.Name}: project path not found — check that the volume is mounted.",
+                Headline = headline,
                 Rows = rows,
                 Lease = lease,
             };
@@ -319,6 +341,20 @@ public static class SummaryEndpoint
             ExpiresInSeconds = Math.Max(0, (int)Math.Round((lease.ExpiresAtUtc - now).TotalSeconds)),
             Releasable = project.Attached,
         };
+    }
+
+    /// <summary>The multi-project Error headline: "N of M projects need attention" rather than one
+    /// project's row text repeated with a name stuck in front - see the <see cref="Resolve"/> call
+    /// site's own comment. "Needs attention" is exactly <see cref="ControlSeverity.Ok"/> vs not -
+    /// the same severity already sent per row, just counted, never a second judgment about which
+    /// project is wrong or how. Grammar agrees with the count that varies (N, the number needing
+    /// attention) - always exactly one project by construction of the <see cref="Resolve"/> branch
+    /// that calls this, but written generally rather than assuming that.</summary>
+    static string AttentionSummary(IReadOnlyList<SummaryRow> rows)
+    {
+        var needsAttention = rows.Count(r => r.Severity != ControlSeverity.Ok);
+        var verb = needsAttention == 1 ? "needs" : "need";
+        return $"{needsAttention} of {rows.Count} projects {verb} attention";
     }
 
     /// <summary>"12s" under a minute, "2m" at or beyond - same rendering

@@ -30,10 +30,16 @@ Open your Unity project and add the package via **Package Manager → Add packag
 | `Scanner~/` | Node.js C# parser (tree-sitter based) |
 | `skills/` | 22 Claude Code skills (Markdown) |
 | `commands/` | 6 slash commands (Markdown) |
-| `.claude-plugin/` | Plugin manifest |
+| `Plugin-ClaudeCode~/` | The Claude Code plugin — manifest, `.mcp.json`, and copies of the skills and commands above |
+| `Legacy~/` | Retired v1.2 delivery files, kept for reference only (see its README) |
 | `Documentation/` | Architecture docs, roadmap, guides |
 
-Directories with a tilde suffix (`Bridge~/`, `Scanner~/`) are invisible to Unity's asset pipeline by design.
+Directories with a tilde suffix (`Bridge~/`, `Scanner~/`, `Plugin-ClaudeCode~/`, `Legacy~/`) are invisible to Unity's asset pipeline by design.
+
+**The repository root is deliberately not an installable Claude Code plugin.** Its manifest and
+`.mcp.json` used to live here and pointed at the retired in-Editor server, so pointing Claude Code
+at this checkout silently loaded the wrong generation of Hades. Install `Plugin-ClaudeCode~/`
+instead; a test enforces that the root stays un-installable.
 
 ## Running Tests
 

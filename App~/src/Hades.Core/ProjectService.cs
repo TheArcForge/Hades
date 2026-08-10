@@ -41,6 +41,24 @@ public sealed record ProjectSummary
     /// and edge counts per project - see <see cref="GraphDatabase.TotalEdges"/>.</summary>
     public required int TotalEdges { get; init; }
     public DateTimeOffset? LastIndexedUtc { get; init; }
+
+    /// <summary>
+    /// Plan 15 Task 3 Step 4 + Task 4: the C# preprocessor symbols Hades actually applied while
+    /// parsing this project's scripts - see <see cref="Projects.ProjectDefines"/>'s own class doc
+    /// comment for what goes into this set (UNITY_EDITOR, always; the Unity-version ladder from
+    /// ProjectVersion.txt; scriptingDefineSymbols' "Standalone" target from ProjectSettings.asset;
+    /// and every asmdef's own versionDefines whose named package resolves, via Packages/
+    /// manifest.json or packages-lock.json, to a version satisfying its expression) and,
+    /// critically, the limitation it does NOT hide: this is one project-wide UNION applied to
+    /// every file, not the real compiler's per-assembly set - an asmdef that would NOT actually
+    /// compile with one of these symbols is still indexed as if it did, and code gated on a
+    /// symbol OUTSIDE this list (a platform define, a csc.rsp-only symbol, or a versionDefine
+    /// keyed to a built-in Unity module rather than an installed package) does not appear in the
+    /// graph at all. Reported explicitly, sorted, so that gap is something a caller can SEE - the
+    /// same standard <c>/control/settings</c> and <c>find_orphan_scripts</c> already hold
+    /// themselves to: an honest superset/approximation beats a silent one.
+    /// </summary>
+    public required IReadOnlyList<string> AppliedDefines { get; init; }
 }
 
 public sealed record SceneSummary
@@ -679,6 +697,12 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
             NodesByKind = database.CountByKind(),
             TotalEdges = database.TotalEdges(),
             LastIndexedUtc = _lastIndexed.TryGetValue(productGuid, out var at) ? at : null,
+
+            // Resolved fresh from disk, same "reflects last saved state" convention as every
+            // other project-level fact Hades reports - see ProjectDefines.Resolve's own doc
+            // comment for why recomputing here (two small file reads) is cheap enough to not
+            // need caching alongside the indexed graph.
+            AppliedDefines = ProjectDefines.Resolve(project.Path).Symbols,
         };
     }
 

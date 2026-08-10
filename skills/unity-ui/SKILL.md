@@ -24,8 +24,8 @@ Do NOT activate for questions purely about animations on UI elements (see `hades
 Before making recommendations:
 
 1. **Detect what UI system is already in use:**
-   - Call `find_components_using_pattern("UIDocument")` to see if UI Toolkit documents are present
-   - Call `find_components_using_pattern("Canvas")` to see if uGUI canvases exist
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "UIDocument", edgeTargetKind: "Class")` to see if UI Toolkit documents are present
+   - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "Canvas", edgeTargetKind: "Class")` to see if uGUI canvases exist
    - Call `search_by_name("*.uxml")` to find UXML templates already authored
    - Call `search_by_name("*.uss")` to find USS stylesheets in the project
 
@@ -664,8 +664,8 @@ public class BadHUDPositioner : MonoBehaviour
 - `hades:data-modeling` — ScriptableObject-based data sources that feed UI ViewModels
 
 **Hades graph tools useful for UI work:**
-- `find_components_using_pattern("UIDocument")` — locate existing UI Toolkit screens
-- `find_components_using_pattern("Canvas")` — locate existing uGUI canvases
+- `graph_query(edgeKind: "references", edgeTargetNamePattern: "UIDocument", edgeTargetKind: "Class")` — locate existing UI Toolkit screens
+- `graph_query(edgeKind: "references", edgeTargetNamePattern: "Canvas", edgeTargetKind: "Class")` — locate existing uGUI canvases
 - `search_by_name("*.uxml")` — find UXML templates
 - `search_by_name("*.uss")` — find USS stylesheets
 - `recall_memory("UI architecture toolkit uGUI")` — retrieve the project's documented UI strategy

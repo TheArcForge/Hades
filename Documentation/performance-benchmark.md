@@ -81,18 +81,20 @@ Measured from Charon trace data (total_duration_ms including MCP overhead):
 | `hades_ping` | 17 | 3 | 13 | — |
 | `hades_status` | 9 | 20 | 65 | — |
 | `search_by_name` | 69 | 33 | 539 | 5-20ms (LIKE scan) |
-| `query_graph` | 10 | 117 | 503 | 10-100ms (aggregations) |
+| `query_graph` (→ `graph_query`) | 10 | 117 | 503 | 10-100ms (aggregations) |
 | `find_references_to` | 2 | 9 | 16 | 1-5ms (one-hop) |
 | `trace_dependencies` | 3 | 350 | 1,031 | 10-50ms (5-hop) |
-| `find_orphan_scripts` | 2 | 1,114 | 2,215 | — |
-| `find_components_using_pattern` | 3 | 436 | 776 | — |
+| `find_orphan_scripts` (→ `graph_query`) | 2 | 1,114 | 2,215 | — |
+| `find_components_using_pattern` (→ `graph_query`) | 3 | 436 | 776 | — |
 | `get_project_summary` | 7 | 17 | 73 | — |
 | `get_scene_summary` | 1 | 3 | 3 | — |
-| `component_find` | 1 | 12 | 12 | — |
-| `find_prefabs_with_component` | 1 | 4 | 4 | — |
-| `asset_find` | 1 | 186 | 186 | — |
+| `component_find` (→ `graph_query`) | 1 | 12 | 12 | — |
+| `find_prefabs_with_component` (→ `graph_query`) | 1 | 4 | 4 | — |
+| `asset_find` (→ `graph_query`) | 1 | 186 | 186 | — |
 | `recall_memory` | 7 | 5 | 7 | — |
 | `validate_memory` | 3 | 7 | 14 | — |
+
+_Tool names above reflect the pre-Phase-10 surface these numbers were measured against. `query_graph`, `find_orphan_scripts`, `find_components_using_pattern`, `component_find`, `find_prefabs_with_component`, and `asset_find` no longer exist as separate tools — all six were consolidated into `graph_query`'s filter parameters (see the tool's own description). The historical per-shape timings remain informative for what each access pattern costs._
 
 ### Comparison to §2.6 targets
 
@@ -109,7 +111,7 @@ Measured from Charon trace data (total_duration_ms including MCP overhead):
 **Notes on misses:**
 - `trace_dependencies` max (1,031ms) is inflated by a wildcard `search_by_name` scan across 163k nodes before traversal. The actual traversal span took 0ms. This is a query planner issue, not a graph performance issue.
 - `search_by_name` max (539ms) occurred during concurrent rebuild. Average (33ms) is acceptable for the graph size.
-- `query_graph` max (503ms) involved full ScriptType enumeration (13,264 results). Typical queries are well under 100ms.
+- `graph_query` (measured as `query_graph`, its pre-Phase-10 name) max (503ms) involved full ScriptType enumeration (13,264 results). Typical queries are well under 100ms.
 - All misses are within agent reasoning latency (100ms-2s) and do not create perceptible delays in agent interactions.
 
 ---

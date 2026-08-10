@@ -194,6 +194,47 @@ public sealed class SummaryResolveTests
         Assert.Equal(ControlSeverity.Error, row.Severity);
     }
 
+    // ---------------------------------------------------------------- Error headline with more than one project
+
+    [Fact]
+    public void PathMissing_TwoProjects_HeadlineIsACountNotARepeatOfTheRowBelow()
+    {
+        // The live bug report, verbatim: a healthy "Hades-Unity-Client" plus a second project
+        // named "project" whose path is missing. The old headline was
+        // "project: project path not found — check that the volume is mounted." - the exact same
+        // sentence as the row directly beneath it. The fix must show neither that sentence nor any
+        // other row's status text - only a count.
+        var healthy = new ProjectSnapshot
+        {
+            Name = "Hades-Unity-Client", PathExists = true, Attached = true, Busy = false,
+            LastIndexedUtc = Now.AddSeconds(-12),
+        };
+        var broken = new ProjectSnapshot
+        {
+            Name = "project", PathExists = false, Attached = false, Busy = false, LastIndexedUtc = Now.AddMinutes(-5),
+        };
+
+        var result = SummaryEndpoint.Resolve([healthy, broken], Now);
+
+        Assert.Equal(ControlIconState.Error, result.IconState);
+        Assert.Equal("1 of 2 projects needs attention", result.Headline);
+        Assert.DoesNotContain(result.Rows, row => row.Status == result.Headline);
+        Assert.DoesNotContain("project path not found", result.Headline, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void PathMissing_ThreeProjectsTwoBroken_HeadlineCountsBothAndPluralizesNeed()
+    {
+        var healthy = new ProjectSnapshot { Name = "A", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now };
+        var brokenOne = new ProjectSnapshot { Name = "B", PathExists = false, Attached = false, Busy = false, LastIndexedUtc = Now };
+        var brokenTwo = new ProjectSnapshot { Name = "C", PathExists = false, Attached = false, Busy = false, LastIndexedUtc = Now };
+
+        var result = SummaryEndpoint.Resolve([healthy, brokenOne, brokenTwo], Now);
+
+        Assert.Equal(ControlIconState.Error, result.IconState);
+        Assert.Equal("2 of 3 projects need attention", result.Headline);
+    }
+
     // ---------------------------------------------------------------- precedence: one condition at a time
 
     public static IEnumerable<object[]> SingleConditionCases()
@@ -643,6 +684,12 @@ public sealed class SummaryProgramWiringTests : IClassFixture<WebApplicationFact
 
     public void Dispose()
     {
+        // See EditorToolTestBase.Dispose's own comment: _factory is a fresh per-test
+        // WebApplicationFactory whose own background services can still be touching
+        // _appRoot/_projectRoot until the host itself is disposed - which must happen before
+        // the recursive delete below.
+        _factory.Dispose();
+
         foreach (var dir in new[] { _appRoot, _projectRoot })
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
     }

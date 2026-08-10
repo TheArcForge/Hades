@@ -1,6 +1,7 @@
 import AppKit
 import HadesControl
 import HadesSupervision
+import os
 
 /// AppKit wiring: the composition root. Constructs the real `CoreSupervisor`, the real
 /// `MenuBarViewModel` (wired to the real `Discovery.read`/`ControlClient` via
@@ -42,6 +43,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // own doc comment.
         let mainWindowViewModel = MainWindowViewModel(supervisor: supervisor)
         let projectsViewModel = ProjectsViewModel()
+        // The per-item migration cleanup UI's own view model - the three {productGuid}-scoped
+        // V12Cleanup actions, rendered inside ProjectDetailView's "v1.2 Cleanup" section. See
+        // MigrationCleanupViewModel's own doc comment for why the fourth, global action lives on
+        // SettingsViewModel instead (constructed with its own default below, in HadesMenuBarApp.main()).
+        let migrationCleanupViewModel = MigrationCleanupViewModel()
         let tracesViewModel = TracesViewModel()
         let memoryViewModel = MemoryViewModel()
 
@@ -63,8 +69,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let mainWindowScene = MainWindowScene(
-            viewModel: mainWindowViewModel, projectsViewModel: projectsViewModel, tracesViewModel: tracesViewModel,
-            memoryViewModel: memoryViewModel, activationCoordinator: activationCoordinator)
+            viewModel: mainWindowViewModel, projectsViewModel: projectsViewModel, migrationCleanupViewModel: migrationCleanupViewModel,
+            tracesViewModel: tracesViewModel, memoryViewModel: memoryViewModel, activationCoordinator: activationCoordinator)
         self.mainWindowScene = mainWindowScene
 
         menuBarController = MenuBarController(
@@ -84,8 +90,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // is already there once the main window opens later; nothing is fetched twice.
         let onboardingCompletionStore = UserDefaultsOnboardingStore()
         if !onboardingCompletionStore.hasCompletedOnboarding {
+            // Plan 14 Task 10: the control API now has a real /control/migration/* surface (see
+            // Hades.Server.Control.MigrationEndpoint) to back this seam, so this is no longer the
+            // `nil` MigrationOffering's own doc comment describes Task 6 leaving it - see
+            // LiveMigrationOffering's own doc comment for exactly what it does (imports memory and
+            // traces) and does not do (any of V12Cleanup's four cleanup routes) under this offer.
             let onboardingViewModel = OnboardingViewModel(
-                projectsViewModel: projectsViewModel, completionStore: onboardingCompletionStore)
+                projectsViewModel: projectsViewModel, completionStore: onboardingCompletionStore,
+                migrationOffering: LiveMigrationOffering())
             let onboardingWindowController = OnboardingWindowController(
                 viewModel: onboardingViewModel, activationCoordinator: activationCoordinator)
             self.onboardingWindowController = onboardingWindowController
@@ -118,30 +130,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return .terminateLater
     }
 
-    /// Phase-one placeholder for how the core gets launched. Mirrors
-    /// `App~/scripts/e2e-editor-attach.sh`'s own established convention (`dotnet run --project
-    /// src/Hades.Server --no-launch-profile`) and `CoreSupervisor.Configuration`'s own doc comment
-    /// example - `/usr/bin/env` plus `["dotnet", "run", ...]` because `HadesCoreReaper` spawns the
-    /// core via `posix_spawn`, which (unlike `posix_spawnp`) never searches `PATH` itself; `env`
-    /// does that PATH search on `posix_spawn`'s behalf. The repo root is located from this SOURCE
-    /// FILE's own compile-time path (the same technique, and the same justification, as
-    /// `HadesSupervision`'s `BuildProducts.packageRoot`: a running process's own location is not a
-    /// reliable way to find "the repo" once toolchain-internal host processes are involved).
-    ///
-    /// This is a deliberate, DOCUMENTED simplification the plan did not specify - see the Plan 12
-    /// Task 3 report. Spec #4 (distribution) replaces `dotnet run` against source with a
-    /// self-contained published binary embedded in the app bundle; nothing here assumes today's
-    /// dev-time invocation survives that change.
-    private static func makeConfiguration() -> CoreSupervisor.Configuration {
-        let repoRoot =
-            URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // AppDelegate.swift -> Sources/HadesApp/
-            .deletingLastPathComponent()  // -> Sources/
-            .deletingLastPathComponent()  // -> HadesApp/
-            .deletingLastPathComponent()  // -> Shell~/
-            .deletingLastPathComponent()  // -> repo root
-        let serverProject = repoRoot.appendingPathComponent("App~/src/Hades.Server").path
+    /// Diagnostic channel for `makeConfiguration()`'s bundled-vs-fallback decision - visible in
+    /// Console.app / `log show --predicate 'subsystem == "com.arcforge.hades.shell"'` regardless of
+    /// how the app was launched (Finder, DMG, Homebrew, Terminal), unlike a bare `print` which goes
+    /// nowhere useful for an `LSUIElement` app with no console window. Deliberately not `private`
+    /// to `makeConfiguration` alone (it is `private` to the type instead): logging which core an
+    /// already-running app picked must survive being read back independently of any one call.
+    private static let launchLogger = Logger(subsystem: "com.arcforge.hades.shell", category: "CoreLaunch")
 
+    /// How the core gets launched. Spec #4 (distribution): prefers the self-contained core
+    /// published INTO the bundle at `Contents/Resources/HadesServer/Hades.Server` - see
+    /// `scripts/build-app.sh`'s own `dotnet publish` step (Release configuration only - see that
+    /// script's own comment for why Debug does not pay this cost) - a single native executable
+    /// launched by its own absolute path: no `dotnet`, no `PATH` search, no .NET SDK on the
+    /// recipient's machine at all. `HadesCoreReaper` still spawns it via `posix_spawn`, unchanged.
+    ///
+    /// Falls back to the ORIGINAL phase-one placeholder - `/usr/bin/env` plus `["dotnet", "run",
+    /// "--project", <repo>/App~/src/Hades.Server, "--no-launch-profile"]`, mirroring
+    /// `App~/scripts/e2e-editor-attach.sh`'s own established convention - whenever the bundled
+    /// binary is not there. That is the ordinary shape of a `build-app.sh Debug` build (day-to-day
+    /// iteration keeps working exactly as before) or an unbundled `swift run`; it is NOT what a
+    /// distributed `Hades.app` should ever do, so it is never silent - see `launchLogger` above.
+    /// The repo root for that fallback is located from this SOURCE FILE's own compile-time path
+    /// (the same technique, and the same justification, as `HadesSupervision`'s
+    /// `BuildProducts.packageRoot`: a running process's own location is not a reliable way to find
+    /// "the repo" once toolchain-internal host processes are involved); `env` does the `PATH`
+    /// search `posix_spawn` (unlike `posix_spawnp`) never does itself.
+    ///
+    /// See the Plan 12 Task 3 report for the placeholder this replaces, and
+    /// Documentation/ReleasePipeline.md section 6 for the distribution story this is now part of.
+    private static func makeConfiguration() -> CoreSupervisor.Configuration {
         // `Bundle.main.url(forAuxiliaryExecutable:)` finds a helper binary placed in
         // `Contents/MacOS/` alongside the app's own executable - see scripts/build-app.sh, which
         // copies the HadesSupervision-built HadesCoreReaper there. Deliberately NOT
@@ -155,6 +173,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Bundle.main.url(forAuxiliaryExecutable: "HadesCoreReaper")
             ?? URL(fileURLWithPath: "/nonexistent/HadesCoreReaper-not-bundled")
 
+        // `Contents/Resources/`, not `Contents/MacOS/`: the published core is an entire runtime
+        // tree (the apphost plus well over a hundred managed/native files), not one auxiliary
+        // executable - Resources is the conventional bundle location for that kind of bulk embedded
+        // content, leaving Contents/MacOS holding only the app's own executable plus the one small
+        // HadesCoreReaper helper, exactly as before. Code signing is unaffected by the choice
+        // either way - `codesign --deep` walks Resources and MacOS identically - see
+        // scripts/build-app.sh's own comment on its codesign step.
+        let bundledCore = Bundle.main.resourceURL?.appendingPathComponent("HadesServer/Hades.Server")
+        if let bundledCore, FileManager.default.isExecutableFile(atPath: bundledCore.path) {
+            launchLogger.info("Launching bundled self-contained core: \(bundledCore.path, privacy: .public)")
+            return CoreSupervisor.Configuration(
+                coreExecutable: bundledCore,
+                coreArguments: [],
+                reaperExecutable: reaperExecutable
+            )
+        }
+
+        let repoRoot =
+            URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // AppDelegate.swift -> Sources/HadesApp/
+            .deletingLastPathComponent()  // -> Sources/
+            .deletingLastPathComponent()  // -> HadesApp/
+            .deletingLastPathComponent()  // -> Shell~/
+            .deletingLastPathComponent()  // -> repo root
+        let serverProject = repoRoot.appendingPathComponent("App~/src/Hades.Server").path
+
+        launchLogger.warning(
+            "No bundled core at Contents/Resources/HadesServer/Hades.Server (looked in \(bundledCore?.path ?? "<no resourceURL>", privacy: .public)) - falling back to `dotnet run --project \(serverProject, privacy: .public) --no-launch-profile`. This needs the .NET SDK and this exact source checkout on THIS machine; expected for a build-app.sh Debug build or an unbundled swift run, never for a distributed Hades.app."
+        )
         return CoreSupervisor.Configuration(
             coreExecutable: URL(fileURLWithPath: "/usr/bin/env"),
             coreArguments: ["dotnet", "run", "--project", serverProject, "--no-launch-profile"],
