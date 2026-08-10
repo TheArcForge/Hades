@@ -743,7 +743,7 @@ actor FakeClaudeCodeVerifying: ClaudeCodeVerifying {
 /// plus a call count and the last-seen argument(s) - the same simpler shape `FakeProjectsFetcher`'s
 /// own six actions use (see that type's own doc comment): nothing here needs a multi-call script,
 /// since every consumer calls each endpoint at most once per its own method invocation. Every new
-/// initializer parameter added for the four cleanup routes defaults to `.failure(.staleToken)`, so
+/// initializer parameter added for the five cleanup routes defaults to `.failure(.staleToken)`, so
 /// every existing `FakeMigrationFetcher(projectsOutcome:...)` call site (`LiveMigrationOfferingTests`)
 /// keeps compiling and passing unchanged - the same additive-parameter convention this file already
 /// uses throughout (see `FakeProjectsFetcher`'s own doc comment).
@@ -788,6 +788,11 @@ actor FakeMigrationFetcher: ControlMigrationFetching {
         case failure(ControlClientError)
     }
 
+    enum HadesHubCleanupOutcome {
+        case success(MigrationHadesHubCleanupResult)
+        case failure(ControlClientError)
+    }
+
     private var projectsOutcome: ProjectsOutcome
     private(set) var projectsCallCount = 0
 
@@ -822,6 +827,10 @@ actor FakeMigrationFetcher: ControlMigrationFetching {
     private(set) var cleanClaudeDesktopConfigCallCount = 0
     private(set) var lastCleanClaudeDesktopConfigProceed: Bool?
 
+    private var hadesHubCleanupOutcome: HadesHubCleanupOutcome
+    private(set) var cleanHadesHubCallCount = 0
+    private(set) var lastCleanHadesHubProceed: Bool?
+
     init(
         projectsOutcome: ProjectsOutcome,
         detectOutcome: DetectOutcome = .failure(.staleToken),
@@ -830,7 +839,8 @@ actor FakeMigrationFetcher: ControlMigrationFetching {
         cleanClaudeMdOutcome: ClaudeMdCleanupOutcome = .failure(.staleToken),
         cleanManifestOutcome: ManifestCleanupOutcome = .failure(.staleToken),
         cleanMcpConfigOutcome: McpConfigCleanupOutcome = .failure(.staleToken),
-        cleanClaudeDesktopConfigOutcome: ClaudeDesktopConfigCleanupOutcome = .failure(.staleToken)
+        cleanClaudeDesktopConfigOutcome: ClaudeDesktopConfigCleanupOutcome = .failure(.staleToken),
+        hadesHubCleanupOutcome: HadesHubCleanupOutcome = .failure(.staleToken)
     ) {
         self.projectsOutcome = projectsOutcome
         self.detectOutcome = detectOutcome
@@ -840,6 +850,7 @@ actor FakeMigrationFetcher: ControlMigrationFetching {
         self.cleanManifestOutcome = cleanManifestOutcome
         self.cleanMcpConfigOutcome = cleanMcpConfigOutcome
         self.cleanClaudeDesktopConfigOutcome = cleanClaudeDesktopConfigOutcome
+        self.hadesHubCleanupOutcome = hadesHubCleanupOutcome
     }
 
     func projects() async throws(ControlClientError) -> ProjectsResult {
@@ -936,6 +947,20 @@ actor FakeMigrationFetcher: ControlMigrationFetching {
     /// See `setCleanClaudeMdOutcome(_:)`'s own doc comment.
     func setCleanClaudeDesktopConfigOutcome(_ outcome: ClaudeDesktopConfigCleanupOutcome) {
         cleanClaudeDesktopConfigOutcome = outcome
+    }
+
+    func migrationCleanHadesHub(proceed: Bool) async throws(ControlClientError) -> MigrationHadesHubCleanupResult {
+        cleanHadesHubCallCount += 1
+        lastCleanHadesHubProceed = proceed
+        switch hadesHubCleanupOutcome {
+        case .success(let result): return result
+        case .failure(let error): throw error
+        }
+    }
+
+    /// See `setCleanClaudeMdOutcome(_:)`'s own doc comment.
+    func setHadesHubCleanupOutcome(_ outcome: HadesHubCleanupOutcome) {
+        hadesHubCleanupOutcome = outcome
     }
 }
 

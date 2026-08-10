@@ -6,6 +6,7 @@ public sealed class V12CleanupTests : IDisposable
 {
     readonly string _projectRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
     readonly string _claudeDesktopScratchDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+    readonly string _hadesHubScratchDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
 
     public V12CleanupTests() => Directory.CreateDirectory(_projectRoot);
 
@@ -50,6 +51,18 @@ public sealed class V12CleanupTests : IDisposable
         return path;
     }
 
+    /// Mirrors the real, live shape confirmed on the reference machine: launcher.js, hub.json, and
+    /// hub-path.json sitting directly inside the hades-hub directory - see
+    /// <see cref="V12Cleanup.CleanHadesHub"/>'s own doc comment for where these three names come
+    /// from.
+    void WriteHadesHubFixture()
+    {
+        Directory.CreateDirectory(_hadesHubScratchDir);
+        File.WriteAllText(Path.Combine(_hadesHubScratchDir, "launcher.js"), "// retired v1.2 stdio launcher\n");
+        File.WriteAllText(Path.Combine(_hadesHubScratchDir, "hub.json"), """{"port":64638,"pid":15503,"startedAt":1786166593681}""");
+        File.WriteAllText(Path.Combine(_hadesHubScratchDir, "hub-path.json"), """{"hubEntry":"/Users/mike/Projects/Hades/Bridge~/hub/dist/index.js"}""");
+    }
+
     static (byte[] Content, DateTime WriteTimeUtc) Snapshot(string path) =>
         (File.ReadAllBytes(path), File.GetLastWriteTimeUtc(path));
 
@@ -61,6 +74,23 @@ public sealed class V12CleanupTests : IDisposable
         var after = Snapshot(path);
         Assert.True(before.Content.AsSpan().SequenceEqual(after.Content), $"'{path}' content changed");
         Assert.Equal(before.WriteTimeUtc, after.WriteTimeUtc);
+    }
+
+    /// Directory-level counterpart to <see cref="Snapshot"/>/<see cref="AssertUnchanged"/> - every
+    /// file's relative path and content, recursively, for proving a wholesale directory delete
+    /// either did or (on a dry run) did NOT touch a single byte anywhere underneath it.
+    static Dictionary<string, byte[]> SnapshotDirectory(string dir) =>
+        Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
+            .ToDictionary(f => Path.GetRelativePath(dir, f), File.ReadAllBytes);
+
+    static void AssertDirectoryUnchanged(string dir, Dictionary<string, byte[]> before)
+    {
+        var after = SnapshotDirectory(dir);
+        Assert.Equal(before.Keys.OrderBy(k => k, StringComparer.Ordinal), after.Keys.OrderBy(k => k, StringComparer.Ordinal));
+        foreach (var (path, bytes) in before)
+        {
+            Assert.True(bytes.AsSpan().SequenceEqual(after[path]), $"'{path}' changed");
+        }
     }
 
     // ==================================================================
@@ -846,11 +876,130 @@ public sealed class V12CleanupTests : IDisposable
     }
 
     // ==================================================================
+    // ~/.arcforge/hades-hub/: the retired v1.2 Node launcher + its hub state - global, and
+    // removed wholesale (spec #4 §1 lists ~/.arcforge/hades-hub/launcher.js among what v2 retires)
+    // ==================================================================
+
+    [Fact]
+    public void HadesHubDirectory_PointsAtTheStandardLocationUnderTheHomeDirectory()
+    {
+        // Pure string computation - never touches disk, never risks the real directory.
+        var path = V12Cleanup.HadesHubDirectory;
+
+        Assert.EndsWith(Path.Combine(".arcforge", "hades-hub"), path);
+    }
+
+    [Fact]
+    public void CleanHadesHub_NoDirectoryAtPath_ReportsNothingToDoAndNeverCreatesOne()
+    {
+        var result = V12Cleanup.CleanHadesHub(_hadesHubScratchDir, proceed: true);
+
+        Assert.False(result.Removed);
+        Assert.False(result.Found);
+        Assert.False(Directory.Exists(_hadesHubScratchDir));
+        Assert.Contains("hades-hub", result.Message, StringComparison.Ordinal);
+        Assert.Contains("nothing to remove", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CleanHadesHub_Present_DeletesTheWholeDirectoryRecursively()
+    {
+        WriteHadesHubFixture();
+
+        var result = V12Cleanup.CleanHadesHub(_hadesHubScratchDir, proceed: true);
+
+        Assert.True(result.Removed);
+        Assert.True(result.Found);
+        Assert.False(Directory.Exists(_hadesHubScratchDir));
+        Assert.Contains("hades-hub", result.Message, StringComparison.Ordinal);
+        Assert.Contains("Removed", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CleanHadesHub_NestedSubdirectoriesAndOtherFiles_AllRemovedRecursively()
+    {
+        // Mirrors the real, live shape confirmed on the reference machine: hades-hub can hold more
+        // than the three well-known files - e.g. a "pending" subdirectory the hub writes to at
+        // runtime. Wholesale removal must not depend on enumerating every possible file it might
+        // contain.
+        WriteHadesHubFixture();
+        Directory.CreateDirectory(Path.Combine(_hadesHubScratchDir, "pending"));
+        File.WriteAllText(Path.Combine(_hadesHubScratchDir, "pending", "some-project.json"), "{}");
+
+        var result = V12Cleanup.CleanHadesHub(_hadesHubScratchDir, proceed: true);
+
+        Assert.True(result.Removed);
+        Assert.False(Directory.Exists(_hadesHubScratchDir));
+    }
+
+    // ---- Found: this target has no companion V12Detector scan (it is global, not per-project -
+    // same reasoning as CleanClaudeDesktopConfig's own OccurrencesFound), so Found is a caller's
+    // ONLY way to learn whether there is anything here worth offering to clean up at all, and
+    // must be accurate on a dry run, before any go-ahead ----
+
+    [Fact]
+    public void CleanHadesHub_NoGoAhead_LeavesDirectoryAndEveryFileUntouched()
+    {
+        WriteHadesHubFixture();
+        var before = SnapshotDirectory(_hadesHubScratchDir);
+
+        var result = V12Cleanup.CleanHadesHub(_hadesHubScratchDir, proceed: false);
+
+        Assert.False(result.Removed);
+        Assert.True(result.Found);
+        Assert.True(Directory.Exists(_hadesHubScratchDir));
+        Assert.Contains("hades-hub", result.Message, StringComparison.Ordinal);
+        Assert.Contains("no go-ahead", result.Message, StringComparison.OrdinalIgnoreCase);
+        AssertDirectoryUnchanged(_hadesHubScratchDir, before);
+    }
+
+    // ---- scope: the whole directory goes, but never its parent or anything else under it ----
+
+    [Fact]
+    public void CleanHadesHub_NeverTouchesTheParentArcforgeDirectoryOrItsOtherContents()
+    {
+        // ~/.arcforge/ holds more than hades-hub on the reference machine (mcp-bridge.js,
+        // servers/) - removing hades-hub must never reach a level up.
+        var parent = Path.GetDirectoryName(_hadesHubScratchDir)!;
+        Directory.CreateDirectory(parent);
+        var siblingFile = Path.Combine(parent, "mcp-bridge.js");
+        File.WriteAllText(siblingFile, "// unrelated, must survive");
+        WriteHadesHubFixture();
+
+        var result = V12Cleanup.CleanHadesHub(_hadesHubScratchDir, proceed: true);
+
+        Assert.True(result.Removed);
+        Assert.True(Directory.Exists(parent));
+        Assert.Equal("// unrelated, must survive", File.ReadAllText(siblingFile));
+    }
+
+    [Fact]
+    public void CleanHadesHub_NeverTouchesAProjectsArcforgeMemoryDirectory()
+    {
+        // ~/.arcforge/hades-hub/ (home directory, global, retired v1.2 Node hub state) and
+        // <projectRoot>/.arcforge/memory/ (per-project, authored, irreplaceable - see
+        // V12Importer's own remarks) are two entirely different directories that happen to share
+        // the ".arcforge" name. CleanHadesHub takes an explicit directory argument and no
+        // project-root parameter at all, so there is no code path through which it could ever
+        // reach a project's memory - proven here, not just asserted by inspection.
+        var memoryFile = Path.Combine(_projectRoot, ".arcforge", "memory", "conventions.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(memoryFile)!);
+        File.WriteAllText(memoryFile, "# Authored conventions - never delete\n");
+        WriteHadesHubFixture();
+
+        var result = V12Cleanup.CleanHadesHub(_hadesHubScratchDir, proceed: true);
+
+        Assert.True(result.Removed);
+        Assert.True(File.Exists(memoryFile));
+        Assert.Equal("# Authored conventions - never delete\n", File.ReadAllText(memoryFile));
+    }
+
+    // ==================================================================
     // Cross-cutting: the standard every step is held to
     // ==================================================================
 
     [Fact]
-    public void NoGoAhead_AcrossAllFourTargets_NothingOnDiskChangesAtAll()
+    public void NoGoAhead_AcrossAllFiveTargets_NothingOnDiskChangesAtAll()
     {
         WriteClaudeMd("before\n" + Start + "\nblock\n" + End + "\nafter\n");
         WriteManifest(
@@ -866,44 +1015,51 @@ public sealed class V12CleanupTests : IDisposable
         WriteMcpJson();
         var desktopConfigPath = WriteClaudeDesktopConfig(
             """{ "mcpServers": { "hades": { "command": "node" }, "other": { "command": "x" } } }""");
+        WriteHadesHubFixture();
 
         var claudeMdBefore = Snapshot(ClaudeMdPath);
         var manifestBefore = Snapshot(ManifestPath);
         var mcpJsonBefore = Snapshot(McpJsonPath);
         var desktopConfigBefore = Snapshot(desktopConfigPath);
+        var hadesHubBefore = SnapshotDirectory(_hadesHubScratchDir);
 
         var claudeMdState = DetectClaudeMd();
         var claudeMdResult = V12Cleanup.CleanClaudeMd(_projectRoot, claudeMdState, proceed: false);
         var manifestResult = V12Cleanup.CleanManifest(_projectRoot, proceed: false);
         var mcpConfigResult = V12Cleanup.CleanMcpConfig(_projectRoot, proceed: false);
         var desktopConfigResult = V12Cleanup.CleanClaudeDesktopConfig(desktopConfigPath, proceed: false);
+        var hadesHubResult = V12Cleanup.CleanHadesHub(_hadesHubScratchDir, proceed: false);
 
         Assert.False(claudeMdResult.Removed);
         Assert.False(manifestResult.Removed);
         Assert.False(mcpConfigResult.Removed);
         Assert.False(desktopConfigResult.Removed);
+        Assert.False(hadesHubResult.Removed);
 
         AssertUnchanged(ClaudeMdPath, claudeMdBefore);
         AssertUnchanged(ManifestPath, manifestBefore);
         AssertUnchanged(McpJsonPath, mcpJsonBefore);
         AssertUnchanged(desktopConfigPath, desktopConfigBefore);
+        AssertDirectoryUnchanged(_hadesHubScratchDir, hadesHubBefore);
     }
 
     [Fact]
     public void EachStep_IsIndependent_OneRefusingDoesNotBlockOthersSucceeding()
     {
         // CLAUDE.md is deliberately hand-written (Unmarked -> always refused), while the other
-        // three targets are all cleanly removable. Spec #10: every destructive step is
+        // four targets are all cleanly removable. Spec #10: every destructive step is
         // individually optional; one step's outcome must never depend on another's.
         WriteClaudeMd("# Team conventions\n\nHand-written, nothing to do with Hades.\n");
         WriteManifest("""{ "dependencies": { "com.arcforge.hades": "1.2.3" } }""");
         WriteMcpJson();
         var desktopConfigPath = WriteClaudeDesktopConfig("""{ "mcpServers": { "hades": { "command": "node" } } }""");
+        WriteHadesHubFixture();
 
         var claudeMdResult = V12Cleanup.CleanClaudeMd(_projectRoot, DetectClaudeMd(), proceed: true);
         var manifestResult = V12Cleanup.CleanManifest(_projectRoot, proceed: true);
         var mcpConfigResult = V12Cleanup.CleanMcpConfig(_projectRoot, proceed: true);
         var desktopConfigResult = V12Cleanup.CleanClaudeDesktopConfig(desktopConfigPath, proceed: true);
+        var hadesHubResult = V12Cleanup.CleanHadesHub(_hadesHubScratchDir, proceed: true);
 
         Assert.False(claudeMdResult.Removed);
         Assert.True(File.Exists(ClaudeMdPath));
@@ -911,11 +1067,12 @@ public sealed class V12CleanupTests : IDisposable
         Assert.True(manifestResult.Removed);
         Assert.True(mcpConfigResult.Removed);
         Assert.True(desktopConfigResult.Removed);
+        Assert.True(hadesHubResult.Removed);
     }
 
     public void Dispose()
     {
-        foreach (var dir in new[] { _projectRoot, _claudeDesktopScratchDir })
+        foreach (var dir in new[] { _projectRoot, _claudeDesktopScratchDir, _hadesHubScratchDir })
         {
             if (!Directory.Exists(dir)) continue;
             try { Directory.Delete(dir, recursive: true); }

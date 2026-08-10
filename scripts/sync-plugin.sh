@@ -33,8 +33,20 @@ fi
 mkdir -p "$TARGET"
 
 # Plugin manifest and MCP config (.mcp.json from a tracked template, not the
-# gitignored machine-specific runtime file at the repo root)
-cp -R "$REPO_ROOT/.claude-plugin" "$TARGET/"
+# gitignored machine-specific runtime file at the repo root).
+#
+# The manifest source is Legacy~/claude-plugin/, not the repo root. It used to live at
+# <root>/.claude-plugin/, which also made this repo itself installable as a Claude Code plugin -
+# and since both it and the current plugin are named "hades", pointing Claude Code at a checkout
+# silently bound to the retired in-Editor bridge instead of the standalone app. Moving it out
+# closed that path; this script still packages the same bytes into the plugin repo, where a
+# .claude-plugin/ directory is correct and expected.
+#
+# NOTE: this whole script still packages the *v1.2* plugin shape (Bridge~ dist, Scanner~ source,
+# scripts/plugin-mcp.json). It has no knowledge of Plugin-ClaudeCode~/, which is the v2 plugin.
+# Repointing it is a prerequisite for shipping v2 through the marketplace.
+mkdir -p "$TARGET/.claude-plugin"
+cp -R "$REPO_ROOT/Legacy~/claude-plugin/." "$TARGET/.claude-plugin/"
 cp "$REPO_ROOT/scripts/plugin-mcp.json" "$TARGET/.mcp.json"
 
 # Restore plugin-repo-only files

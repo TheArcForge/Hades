@@ -717,3 +717,38 @@ dependency on the checkout: the fallback code that WOULD reference it is never e
 **Test baselines - unchanged.** `swift test` in all three `Shell~` packages, run after every change
 above: HadesControl 66, HadesSupervision 10, HadesApp 198 - all passing, exactly matching the
 pre-existing baseline.
+
+---
+
+## 7. Pre-release: deleting the v1.2 tree
+
+**Decided, not yet executed.** `Editor/`, `Tests/`, `ThirdParty/`, `Fixtures~/`, `package.json`, and
+`Editor/Core/AppNapGuard.cs` with them - the entire v1.2 Unity package - is being kept in the repo
+until **after the internal testing round, but before release**. It is the only working v1.2
+reference for testing migration (spec #4 §5) against a real install; deleting it earlier would mean
+testing that migration against nothing.
+
+**Two things break the moment it goes. Handle both in the same commit as the deletion, not after:**
+
+1. **`App~/tests/Hades.Core.Tests/Indexing/RealProjectIndexSmokeTest.cs` goes red.** It asserts
+   `150 < FilesScanned < 230` against a real Unity project on this machine
+   (`/Users/mike/Projects/Hades-Unity-Client`), a window measured 2026-08-01 as 107 `Editor/` + 65
+   `Tests/` + 10 `ThirdParty/` files pulled in through that project's local `file:` package
+   reference to this repo, plus 16 files in the project's own `Assets/`. Once `Editor/`, `Tests/`,
+   and `ThirdParty/` are gone, the scan drops to roughly that 16-file `Assets/`-only floor - which
+   the test's own comment already names as the *lower* regression bound today (`"below ~150 →
+   local-package resolution broke (Assets/ alone yields 16)"`). Post-deletion that floor is no
+   longer a regression signal; it is the new correct answer. Re-baseline the window and the
+   comment's file-count accounting in the same commit that deletes the tree, against whatever the
+   real project actually scans to once the package is gone - don't leave it red, and don't widen
+   the window blind without re-measuring.
+2. **The user's live v1.2 install stops working.** Their Unity Editor loads this repo as a local
+   `file:` package via `Packages/manifest.json`, so removing `package.json` breaks that resolution
+   the instant this commit lands. That is not a bug to fix - it is the intended end of the v1.2
+   install this tree exists to keep testable - but it means confirming migration testing is
+   actually done before this commit goes in, not after.
+
+**`Editor/Core/AppNapGuard.cs` goes only as part of this same deletion, never separately or early.**
+`HadesBootstrap` acquires it in a static constructor; removing it alone breaks the legacy Editor's
+compile while the rest of `Editor/` - and the user's live v1.2 install - still depends on that
+Editor working.

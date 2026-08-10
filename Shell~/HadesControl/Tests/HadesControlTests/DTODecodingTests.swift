@@ -432,6 +432,19 @@ struct DTODecodingTests {
 /// `V12Cleanup.CleanClaudeMd`'s dry-run branch now produces for the hybrid shape, already proven
 /// byte-for-byte by `V12CleanupTests` and `MigrationEndpointHttpTests` against scratch files, so a
 /// live capture would exercise nothing this suite does not already cover elsewhere.
+///
+/// `migration_clean_hades_hub_not_found.json`, `migration_clean_hades_hub_no_go_ahead.json`, and
+/// `migration_clean_hades_hub_removed.json` (the fifth `V12Cleanup` target - closing the spec #4 §1
+/// gap where `~/.arcforge/hades-hub/launcher.js` was named among what v2 retires but no cleanup
+/// method ever removed it) are hand-authored exceptions for the identical reason as the
+/// claude_desktop_config.json ones above: each mirrors `Hades.Server.Control.MigrationHadesHubCleanupResult`'s
+/// wire shape and the exact literal strings `V12Cleanup.CleanHadesHub` produces (already proven for
+/// real, byte-for-byte, by `Hades.Core.Tests.Migration.V12CleanupTests` and
+/// `Hades.Server.Tests.Control.MigrationEndpointHttpTests` against scratch directories) rather than
+/// live-captured - a live capture would require pointing a running core's `hadesHubDirectory` at
+/// either a scratch directory (not meaningfully more "real" than hand-authoring the same JSON) or -
+/// the one thing this whole task explicitly forbids - the developer's own real
+/// `~/.arcforge/hades-hub/`.
 @Suite("Migration DTO decoding")
 struct MigrationDTODecodingTests {
     @Test("MigrationDetectionResult decodes a full v1.2 project - every item present")
@@ -561,5 +574,35 @@ struct MigrationDTODecodingTests {
         #expect(result.removed == false)
         #expect(result.occurrencesFound == 1)
         #expect(result.scopeWarning.localizedCaseInsensitiveContains("global"))
+    }
+
+    // MARK: - The fifth target: ~/.arcforge/hades-hub/ (spec #4 §1's launcher.js retirement gap)
+
+    @Test("MigrationHadesHubCleanupResult: absent directory - removed false, found false, no go-ahead needed")
+    func cleanHadesHubNotFound() throws {
+        let result = try Fixtures.decode(MigrationHadesHubCleanupResult.self, "migration_clean_hades_hub_not_found")
+
+        #expect(result.removed == false)
+        #expect(result.found == false)
+        #expect(result.message.contains("nothing to remove"))
+    }
+
+    @Test("MigrationHadesHubCleanupResult: found is populated on a proceed:false dry run too - the only presence signal this global-scope route has, with no per-project detect endpoint behind it")
+    func cleanHadesHubNoGoAhead() throws {
+        let result = try Fixtures.decode(MigrationHadesHubCleanupResult.self, "migration_clean_hades_hub_no_go_ahead")
+
+        #expect(result.removed == false)
+        #expect(result.found == true)
+        #expect(result.message.localizedCaseInsensitiveContains("no go-ahead"))
+    }
+
+    @Test("MigrationHadesHubCleanupResult decodes a real removal, naming the directory")
+    func cleanHadesHubRemoved() throws {
+        let result = try Fixtures.decode(MigrationHadesHubCleanupResult.self, "migration_clean_hades_hub_removed")
+
+        #expect(result.removed == true)
+        #expect(result.found == true)
+        #expect(result.message.contains("hades-hub"))
+        #expect(result.message.contains("Removed"))
     }
 }

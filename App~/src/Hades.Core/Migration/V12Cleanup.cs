@@ -69,14 +69,37 @@ public sealed record ClaudeDesktopConfigCleanupResult
     public required int OccurrencesFound { get; init; }
 }
 
+/// <summary>Outcome of <see cref="V12Cleanup.CleanHadesHub"/>.</summary>
+public sealed record HadesHubCleanupResult
+{
+    public required bool Removed { get; init; }
+    public required string Message { get; init; }
+
+    /// <summary>Whether <c>~/.arcforge/hades-hub/</c> existed at all - always populated, including
+    /// when <see cref="Removed"/> is false (no go-ahead, or there was nothing there to begin with).
+    /// A directory-existence check, not a count: unlike
+    /// <see cref="ManifestCleanupResult.OccurrencesFound"/> there is no JSON, and nothing inside
+    /// this directory for a caller to count - only whether the directory itself is there. Exists
+    /// for the same reason <see cref="ClaudeDesktopConfigCleanupResult.OccurrencesFound"/> does:
+    /// this target has no companion <see cref="V12Detector"/> scan (it is global, not per-project),
+    /// so this field is a caller's ONLY way to learn whether there is anything here worth offering
+    /// to clean up at all.</summary>
+    public required bool Found { get; init; }
+}
+
 /// <summary>
-/// The v1.2 config-cleanup steps spec #4 §5 lists as optional: the marked <c>CLAUDE.md</c> block,
-/// the <c>Packages/manifest.json</c> package entry, the generated project-level <c>.mcp.json</c>,
-/// and the <c>hades</c> entry in the global <c>claude_desktop_config.json</c>. Unlike
-/// <see cref="V12Detector"/> (read-only) and <see cref="V12Importer"/> (additive - copies into app
-/// storage, never touches the source), every method here can delete or rewrite a file in place.
+/// The v1.2 config-cleanup steps spec #4 §5 lists: the marked <c>CLAUDE.md</c> block, the
+/// <c>Packages/manifest.json</c> package entry, the generated project-level <c>.mcp.json</c>, and
+/// the <c>hades</c> entry in the global <c>claude_desktop_config.json</c> (all under §5, "optional")
+/// - plus one target §5's own "Clean config" row never names but §1 retires all the same:
+/// <c>~/.arcforge/hades-hub/</c>, the retired v1.2 stdio launcher and its hub state. §1's "what is
+/// not an install unit any more" list names <c>~/.arcforge/hades-hub/launcher.js</c> explicitly -
+/// see <see cref="CleanHadesHub"/>'s own doc comment for why cleanup here follows the launcher's
+/// whole directory, not just that one file. Unlike <see cref="V12Detector"/> (read-only) and
+/// <see cref="V12Importer"/> (additive - copies into app storage, never touches the source), every
+/// method here can delete or rewrite a file (or directory) in place.
 ///
-/// <para><b>Four independent methods, not one.</b> Spec #10: "Migration is always offered, never
+/// <para><b>Five independent methods, not one.</b> Spec #10: "Migration is always offered, never
 /// performed silently." There is deliberately no <c>CleanupAll</c> - each step is its own call, its
 /// own <paramref name="proceed"><c>proceed</c></paramref> parameter with no default, and its own
 /// result. Calling one never performs another; refusing one never blocks the rest from
@@ -90,11 +113,12 @@ public sealed record ClaudeDesktopConfigCleanupResult
 /// is never deleted by this class, under any value of <paramref name="proceed"/> - that is not a
 /// confirmation gate, it is a hard rule (spec #5: "ask, never delete").</para>
 ///
-/// <para><b>The other three targets get their own scans</b> - manifest.json and
+/// <para><b>The other four targets get their own scans</b> - manifest.json and
 /// claude_desktop_config.json for exactly where the package id / "hades" key sits in the JSON (byte
-/// offsets <see cref="V12Detector"/> never computes), .mcp.json for existence only (spec #4 §1: it
-/// is "not an install unit any more," written wholesale by v1.2 with no ambiguity about whose
-/// content it is - unlike CLAUDE.md there is nothing to preserve inside it).</para>
+/// offsets <see cref="V12Detector"/> never computes); .mcp.json and <c>~/.arcforge/hades-hub/</c>
+/// for existence only (neither is "an install unit any more" per spec #4 §1, both written wholesale
+/// by v1.2 with no ambiguity about whose content they are - unlike CLAUDE.md there is nothing to
+/// preserve inside either).</para>
 ///
 /// <para><b>JSON edits are byte-level surgery, never parse-and-reserialize.</b> Round-tripping
 /// through <see cref="JsonSerializer"/> (or <c>Newtonsoft.Json</c>, which is how v1.2's own
@@ -421,6 +445,96 @@ public static class V12Cleanup
             Message = "Removed the 'hades' entry from claude_desktop_config.json. Every other server entry is untouched.",
             ScopeWarning = scopeWarning,
             OccurrencesFound = spans.Count,
+        };
+    }
+
+    // ======================================================================
+    // 5. ~/.arcforge/hades-hub/ - the retired v1.2 Node launcher, removed wholesale
+    // ======================================================================
+
+    /// <summary>Where the v1.2 stdio launcher (<c>launcher.js</c>) and its hub state
+    /// (<c>hub.json</c>, <c>hub-path.json</c>, and whatever else the hub itself writes at runtime -
+    /// e.g. a <c>pending/</c> directory, confirmed present on the reference machine) live: directly
+    /// under the user's home directory, one level below <c>~/.arcforge/</c>. A pure path
+    /// computation - never reads or creates anything. <c>~/.arcforge/</c> ITSELF is not this
+    /// property's concern, and is never touched by <see cref="CleanHadesHub"/> below - it holds
+    /// other things unrelated to the v1.2 hub (confirmed on the reference machine:
+    /// <c>mcp-bridge.js</c>, a <c>servers/</c> directory) that this class has no business
+    /// deleting.</summary>
+    public static string HadesHubDirectory => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".arcforge", "hades-hub");
+
+    /// <summary>
+    /// Deletes <paramref name="hadesHubDirectory"/> wholesale, recursively. Spec #4 §1's "what is
+    /// not an install unit any more" list names <c>~/.arcforge/hades-hub/launcher.js</c> explicitly
+    /// - the v1.2 stdio launcher Claude Code's old <c>.mcp.json</c> pointed <c>command</c>/<c>args</c>
+    /// at (see this file's own test fixtures for a live example of that shape) - but the launcher
+    /// script is never alone there: <c>hub.json</c> (the running hub's port/pid/startedAt) and
+    /// <c>hub-path.json</c> (where its compiled entry point lives) sit alongside it, and the hub
+    /// itself writes further runtime state into the same directory (a <c>pending/</c> directory,
+    /// confirmed present on the reference machine, that neither spec #4 §1 nor this method's own
+    /// name mentions). Every one of those is wholesale-generated by the retired v1.2 Node
+    /// hub/launcher system - none of it is ever user-authored - so, exactly like
+    /// <see cref="CleanMcpConfig"/>'s own ".mcp.json goes whole or not at all" reasoning, there is no
+    /// "whose content is this" question to resolve file by file: the whole DIRECTORY goes, or none
+    /// of it does. Enumerating a fixed set of filenames instead would silently leave behind whatever
+    /// the hub wrote that this method does not happen to name - already proven necessary by
+    /// <c>pending/</c> alone.
+    ///
+    /// <para><b>Never the parent.</b> Only <paramref name="hadesHubDirectory"/> itself is removed -
+    /// never <c>Path.GetDirectoryName(hadesHubDirectory)</c> (<c>~/.arcforge/</c> in production),
+    /// which is shared with things this class has no business touching (see
+    /// <see cref="HadesHubDirectory"/>'s own doc comment). Nor is this ever confusable with a
+    /// PROJECT's own <c>.arcforge/memory/</c> - that directory sits under a project root and holds
+    /// authored, irreplaceable content (<see cref="V12Importer"/>'s whole reason for existing);
+    /// this one sits under the user's HOME directory and holds nothing but retired Node-hub scratch
+    /// state. <paramref name="hadesHubDirectory"/> is the only path this method ever touches - there
+    /// is no project-root parameter here for a project's memory path to be confused with,
+    /// structurally, the same guarantee <see cref="CleanClaudeDesktopConfig"/>'s own
+    /// <c>configPath</c> parameter gives ("structurally impossible for a test to reach the real file
+    /// by accident" - see that method's own doc comment).</para>
+    ///
+    /// <para>Takes an explicit directory rather than deriving one, for the identical reason
+    /// <see cref="CleanClaudeDesktopConfig"/> takes an explicit <c>configPath</c>: this is global
+    /// and per-user, not per-project, so it does not fit <see cref="V12Detector.Detect"/>'s
+    /// <c>Detect(projectRoot)</c> shape. Production callers pass <see cref="HadesHubDirectory"/>;
+    /// tests pass a scratch directory.</para>
+    /// </summary>
+    /// <param name="proceed">Must be explicitly true to delete anything. No default.</param>
+    public static HadesHubCleanupResult CleanHadesHub(string hadesHubDirectory, bool proceed)
+    {
+        const string what = "~/.arcforge/hades-hub/ - the retired v1.2 Node launcher and its hub state " +
+            "(launcher.js, hub.json, hub-path.json, and anything else left there)";
+
+        if (!Directory.Exists(hadesHubDirectory))
+        {
+            return new HadesHubCleanupResult
+            {
+                Removed = false,
+                Found = false,
+                Message = "No ~/.arcforge/hades-hub/ directory found; nothing to remove.",
+            };
+        }
+
+        if (!proceed)
+        {
+            return new HadesHubCleanupResult
+            {
+                Removed = false,
+                Found = true,
+                Message = $"Found {what}; not removed (no go-ahead). The whole directory would be " +
+                    "removed, but ~/.arcforge/ itself and everything else under it would be untouched.",
+            };
+        }
+
+        Directory.Delete(hadesHubDirectory, recursive: true);
+
+        return new HadesHubCleanupResult
+        {
+            Removed = true,
+            Found = true,
+            Message = $"Removed {what}. ~/.arcforge/ itself and everything else under it is untouched.",
         };
     }
 

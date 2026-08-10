@@ -26,6 +26,7 @@ public sealed class MigrationEndpointHttpTests : IDisposable
     readonly string _tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
     readonly string _projectRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
     readonly string _claudeDesktopScratchPath;
+    readonly string _hadesHubScratchDir;
     string ConnectionFilePath => Path.Combine(_tempDir, "control.token");
 
     readonly ProjectService _projects;
@@ -41,6 +42,7 @@ public sealed class MigrationEndpointHttpTests : IDisposable
         File.WriteAllText(Path.Combine(_projectRoot, "ProjectSettings", "ProjectSettings.asset"), $"  productGUID: {guid}\n");
 
         _claudeDesktopScratchPath = Path.Combine(_tempDir, "claude_desktop_config.json");
+        _hadesHubScratchDir = Path.Combine(_tempDir, "hades-hub");
 
         _projects = new ProjectService(new AppPaths(Path.Combine(_tempDir, "app")));
         var project = _projects.Adopt(_projectRoot);
@@ -80,6 +82,14 @@ public sealed class MigrationEndpointHttpTests : IDisposable
 
     void WriteClaudeDesktopConfig(string content) => File.WriteAllText(_claudeDesktopScratchPath, content);
 
+    void WriteHadesHubFixture()
+    {
+        Directory.CreateDirectory(_hadesHubScratchDir);
+        File.WriteAllText(Path.Combine(_hadesHubScratchDir, "launcher.js"), "// retired v1.2 stdio launcher\n");
+        File.WriteAllText(Path.Combine(_hadesHubScratchDir, "hub.json"), """{"port":64638,"pid":15503,"startedAt":1786166593681}""");
+        File.WriteAllText(Path.Combine(_hadesHubScratchDir, "hub-path.json"), """{"hubEntry":"/Users/mike/Projects/Hades/Bridge~/hub/dist/index.js"}""");
+    }
+
     static (byte[] Content, DateTime WriteTimeUtc) Snapshot(string path) =>
         (File.ReadAllBytes(path), File.GetLastWriteTimeUtc(path));
 
@@ -101,7 +111,7 @@ public sealed class MigrationEndpointHttpTests : IDisposable
     static HttpClient ClientFor(ControlListener listener) => new() { BaseAddress = new Uri($"http://127.0.0.1:{listener.Port}") };
 
     ControlListener StartListener() =>
-        new(ConnectionFilePath, projects: _projects, claudeDesktopConfigPath: _claudeDesktopScratchPath);
+        new(ConnectionFilePath, projects: _projects, claudeDesktopConfigPath: _claudeDesktopScratchPath, hadesHubDirectory: _hadesHubScratchDir);
 
     // ==================================================================
     // Detection - read-only, safe by construction
@@ -483,11 +493,14 @@ public sealed class MigrationEndpointHttpTests : IDisposable
         WriteManifest("""{ "dependencies": { "com.arcforge.hades": "file:/Users/mike/Projects/Hades", "com.unity.collab-proxy": "2.10.2" } }""");
         WriteMcpJson();
         WriteClaudeDesktopConfig("""{ "mcpServers": { "hades": { "command": "node" }, "other": { "command": "x" } } }""");
+        WriteHadesHubFixture();
 
         var claudeMdBefore = Snapshot(ClaudeMdPath);
         var manifestBefore = Snapshot(Path.Combine(_projectRoot, "Packages", "manifest.json"));
         var mcpJsonBefore = Snapshot(McpJsonPath);
         var desktopConfigBefore = Snapshot(_claudeDesktopScratchPath);
+        var hadesHubFilesBefore = Directory.EnumerateFiles(_hadesHubScratchDir, "*", SearchOption.AllDirectories)
+            .ToDictionary(f => Path.GetRelativePath(_hadesHubScratchDir, f), File.ReadAllBytes);
 
         using var listener = StartListener();
         listener.Start();
@@ -497,8 +510,9 @@ public sealed class MigrationEndpointHttpTests : IDisposable
         var manifestResponse = await client.SendAsync(Request(HttpMethod.Post, $"/control/migration/{_productGuid}/cleanManifest", listener.Token, jsonBody: new { proceed = false }));
         var mcpConfigResponse = await client.SendAsync(Request(HttpMethod.Post, $"/control/migration/{_productGuid}/cleanMcpConfig", listener.Token, jsonBody: new { proceed = false }));
         var desktopConfigResponse = await client.SendAsync(Request(HttpMethod.Post, "/control/migration/claudeDesktopConfig/clean", listener.Token, jsonBody: new { proceed = false }));
+        var hadesHubResponse = await client.SendAsync(Request(HttpMethod.Post, "/control/migration/hadesHub/clean", listener.Token, jsonBody: new { proceed = false }));
 
-        foreach (var response in new[] { claudeMdResponse, manifestResponse, mcpConfigResponse, desktopConfigResponse })
+        foreach (var response in new[] { claudeMdResponse, manifestResponse, mcpConfigResponse, desktopConfigResponse, hadesHubResponse })
         {
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -509,6 +523,14 @@ public sealed class MigrationEndpointHttpTests : IDisposable
         AssertUnchanged(Path.Combine(_projectRoot, "Packages", "manifest.json"), manifestBefore);
         AssertUnchanged(McpJsonPath, mcpJsonBefore);
         AssertUnchanged(_claudeDesktopScratchPath, desktopConfigBefore);
+        Assert.True(Directory.Exists(_hadesHubScratchDir));
+        var hadesHubFilesAfter = Directory.EnumerateFiles(_hadesHubScratchDir, "*", SearchOption.AllDirectories)
+            .ToDictionary(f => Path.GetRelativePath(_hadesHubScratchDir, f), File.ReadAllBytes);
+        Assert.Equal(hadesHubFilesBefore.Keys.OrderBy(k => k, StringComparer.Ordinal), hadesHubFilesAfter.Keys.OrderBy(k => k, StringComparer.Ordinal));
+        foreach (var (path, bytes) in hadesHubFilesBefore)
+        {
+            Assert.True(bytes.AsSpan().SequenceEqual(hadesHubFilesAfter[path]), $"'{path}' changed");
+        }
     }
 
     // ---- independence: one step refusing never blocks another from succeeding ----
@@ -517,12 +539,13 @@ public sealed class MigrationEndpointHttpTests : IDisposable
     public async Task EachCleanupStep_IsIndependentlyAuthorised_OneRefusingDoesNotBlockOthersSucceeding()
     {
         // CLAUDE.md is hand-written (Unmarked -> always refused, regardless of proceed); the other
-        // three targets are all cleanly removable. Spec #10: every destructive step is
+        // four targets are all cleanly removable. Spec #10: every destructive step is
         // individually optional - one step's outcome must never depend on another's.
         WriteClaudeMd("# Hand-written, nothing to do with Hades.\n");
         WriteManifest("""{ "dependencies": { "com.arcforge.hades": "1.2.3" } }""");
         WriteMcpJson();
         WriteClaudeDesktopConfig("""{ "mcpServers": { "hades": { "command": "node" } } }""");
+        WriteHadesHubFixture();
 
         using var listener = StartListener();
         listener.Start();
@@ -532,6 +555,7 @@ public sealed class MigrationEndpointHttpTests : IDisposable
         var manifestResponse = await client.SendAsync(Request(HttpMethod.Post, $"/control/migration/{_productGuid}/cleanManifest", listener.Token, jsonBody: new { proceed = true }));
         var mcpConfigResponse = await client.SendAsync(Request(HttpMethod.Post, $"/control/migration/{_productGuid}/cleanMcpConfig", listener.Token, jsonBody: new { proceed = true }));
         var desktopConfigResponse = await client.SendAsync(Request(HttpMethod.Post, "/control/migration/claudeDesktopConfig/clean", listener.Token, jsonBody: new { proceed = true }));
+        var hadesHubResponse = await client.SendAsync(Request(HttpMethod.Post, "/control/migration/hadesHub/clean", listener.Token, jsonBody: new { proceed = true }));
 
         using var claudeMdDoc = JsonDocument.Parse(await claudeMdResponse.Content.ReadAsStringAsync());
         Assert.False(claudeMdDoc.RootElement.GetProperty("removed").GetBoolean());
@@ -545,6 +569,9 @@ public sealed class MigrationEndpointHttpTests : IDisposable
 
         using var desktopConfigDoc = JsonDocument.Parse(await desktopConfigResponse.Content.ReadAsStringAsync());
         Assert.True(desktopConfigDoc.RootElement.GetProperty("removed").GetBoolean());
+
+        using var hadesHubDoc = JsonDocument.Parse(await hadesHubResponse.Content.ReadAsStringAsync());
+        Assert.True(hadesHubDoc.RootElement.GetProperty("removed").GetBoolean());
     }
 
     // ==================================================================
@@ -676,6 +703,97 @@ public sealed class MigrationEndpointHttpTests : IDisposable
         using var client = ClientFor(listener);
 
         var response = await client.SendAsync(Request(HttpMethod.Post, "/control/migration/claudeDesktopConfig/clean", token: null, jsonBody: new { proceed = true }));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    // ==================================================================
+    // ~/.arcforge/hades-hub/ - global, per-user, NOT per-project, removed wholesale (spec #4 §1)
+    // ==================================================================
+
+    [Fact]
+    public async Task CleanHadesHub_RouteCarriesNoProductGuid_WorksWithNoProjectInvolvedAtAll()
+    {
+        // Same proof as CleanClaudeDesktopConfig's own test above: a separate, completely empty
+        // ProjectService (no project ever adopted) proves this route has no dependency on any
+        // known project whatsoever - it is reached purely by its own literal path, never through a
+        // {productGuid} segment.
+        WriteHadesHubFixture();
+
+        var projects = new ProjectService(new AppPaths(Path.Combine(_tempDir, "empty-app-hades-hub")));
+        using var listener = new ControlListener(Path.Combine(_tempDir, "empty-hades-hub.token"), projects: projects, hadesHubDirectory: _hadesHubScratchDir);
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Post, "/control/migration/hadesHub/clean", listener.Token, jsonBody: new { proceed = true }));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.True(doc.RootElement.GetProperty("removed").GetBoolean());
+        Assert.False(Directory.Exists(_hadesHubScratchDir));
+    }
+
+    [Fact]
+    public async Task CleanHadesHub_NoGoAhead_ReportsFoundWithoutRemoving_LeavesDirectoryUntouched()
+    {
+        // This route has no companion per-project detect endpoint (it is global - see this class's
+        // own doc comment), so "found" on a proceed:false dry run is the only way a caller can tell
+        // "there is a hades-hub directory to offer cleaning up" from "there is nothing here at all".
+        WriteHadesHubFixture();
+
+        using var listener = StartListener();
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Post, "/control/migration/hadesHub/clean", listener.Token, jsonBody: new { proceed = false }));
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.False(doc.RootElement.GetProperty("removed").GetBoolean());
+        Assert.True(doc.RootElement.GetProperty("found").GetBoolean());
+        Assert.True(Directory.Exists(_hadesHubScratchDir));
+        Assert.True(File.Exists(Path.Combine(_hadesHubScratchDir, "launcher.js")));
+    }
+
+    [Fact]
+    public async Task CleanHadesHub_NoDirectory_FoundIsFalse()
+    {
+        using var listener = StartListener();
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Post, "/control/migration/hadesHub/clean", listener.Token, jsonBody: new { proceed = true }));
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.False(doc.RootElement.GetProperty("removed").GetBoolean());
+        Assert.False(doc.RootElement.GetProperty("found").GetBoolean());
+    }
+
+    [Fact]
+    public async Task CleanHadesHub_ProceedTrue_RemovesTheWholeDirectoryAndStatesSoInTheMessage()
+    {
+        WriteHadesHubFixture();
+
+        using var listener = StartListener();
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Post, "/control/migration/hadesHub/clean", listener.Token, jsonBody: new { proceed = true }));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.True(doc.RootElement.GetProperty("removed").GetBoolean());
+        Assert.Contains("hades-hub", doc.RootElement.GetProperty("message").GetString());
+        Assert.False(Directory.Exists(_hadesHubScratchDir));
+    }
+
+    [Fact]
+    public async Task CleanHadesHub_NoToken_IsRefused()
+    {
+        using var listener = StartListener();
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Post, "/control/migration/hadesHub/clean", token: null, jsonBody: new { proceed = true }));
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }

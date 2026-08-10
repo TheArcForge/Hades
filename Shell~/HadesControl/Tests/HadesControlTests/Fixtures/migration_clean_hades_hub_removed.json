@@ -1,0 +1,5 @@
+{
+  "removed": true,
+  "message": "Removed ~/.arcforge/hades-hub/ - the retired v1.2 Node launcher and its hub state (launcher.js, hub.json, hub-path.json, and anything else left there). ~/.arcforge/ itself and everything else under it is untouched.",
+  "found": true
+}

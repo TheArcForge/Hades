@@ -331,6 +331,24 @@ struct ControlClientTests {
         #expect(try JSONDecoder().decode(SentBody.self, from: sentBody).proceed == true)
     }
 
+    @Test("migrationCleanHadesHub POSTs to the GLOBAL route - no productGuid anywhere in the path")
+    func migrationCleanHadesHubPostsToGlobalRoute() async throws {
+        MockURLProtocol.handler = { _ in .init(status: 200, body: try! Fixtures.data("migration_clean_hades_hub_removed")) }
+        defer { MockURLProtocol.handler = nil }
+
+        let client = ControlClient(connection: Self.connection, session: MockURLProtocol.makeSession())
+        let result = try await client.migrationCleanHadesHub(proceed: true)
+
+        #expect(result.removed == true)
+        #expect(result.found == true)
+        #expect(MockURLProtocol.lastRequest?.httpMethod == "POST")
+        #expect(MockURLProtocol.lastRequest?.url?.path == "/control/migration/hadesHub/clean")
+
+        struct SentBody: Decodable { let proceed: Bool }
+        let sentBody = try #require(MockURLProtocol.lastRequestBody)
+        #expect(try JSONDecoder().decode(SentBody.self, from: sentBody).proceed == true)
+    }
+
     @Test("an unknown productGuid maps migrationDetect's 404 to .server with the real message")
     func migrationDetectUnknownProjectMapsToServerError() async throws {
         MockURLProtocol.handler = { _ in .init(status: 404, body: try! Fixtures.data("migration_detect_unknown_project_404")) }

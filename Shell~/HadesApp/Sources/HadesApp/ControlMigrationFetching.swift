@@ -14,17 +14,19 @@ import HadesControl
 /// `LiveMigrationOffering` bridges that gap with a fresh `GET /control/projects` lookup by path -
 /// see that type's own doc comment.
 ///
-/// **Now includes all four of `V12Cleanup`'s cleanup routes** - the per-item cleanup UI task's own
-/// addition. `MigrationCleanupViewModel` is the caller for `migrationCleanClaudeMd`/
+/// **Now includes all five of `V12Cleanup`'s cleanup routes** - the per-item cleanup UI task's own
+/// addition, plus `migrationCleanHadesHub` closing the later spec #4 §1 gap where
+/// `~/.arcforge/hades-hub/launcher.js` was named among what v2 retires but no cleanup method ever
+/// removed it. `MigrationCleanupViewModel` is the caller for `migrationCleanClaudeMd`/
 /// `migrationCleanManifest`/`migrationCleanMcpConfig` (each keyed by `productGuid`, rendered inside
 /// `ProjectDetailView`'s "v1.2 Cleanup" section); `SettingsViewModel` is the caller for
-/// `migrationCleanClaudeDesktopConfig` (no `productGuid` parameter exists to pass - see that
-/// method's own doc comment - rendered inside `SettingsView`, deliberately not a per-project
-/// surface). Each of the four is called with `proceed: false` first, as a non-destructive dry run
-/// that returns the same `Message`/warning fields a real removal would, then again with
-/// `proceed: true` only after the user has explicitly confirmed what that dry run showed - see
-/// `MigrationCleanupViewModel`'s own doc comment for why that, not Swift-authored warning text,
-/// is where every confirmation dialog's wording comes from.
+/// `migrationCleanClaudeDesktopConfig` AND `migrationCleanHadesHub` (neither has a `productGuid`
+/// parameter to pass - see each method's own doc comment - both rendered inside `SettingsView`,
+/// deliberately not a per-project surface). Each of the five is called with `proceed: false` first,
+/// as a non-destructive dry run that returns the same `Message`/warning fields a real removal
+/// would, then again with `proceed: true` only after the user has explicitly confirmed what that
+/// dry run showed - see `MigrationCleanupViewModel`'s own doc comment for why that, not
+/// Swift-authored warning text, is where every confirmation dialog's wording comes from.
 public protocol ControlMigrationFetching: Sendable {
     func projects() async throws(ControlClientError) -> ProjectsResult
 
@@ -53,6 +55,14 @@ public protocol ControlMigrationFetching: Sendable {
     /// per-project (spec #4 §5), and there is structurally no argument through which a caller could
     /// make this act on a single project.
     func migrationCleanClaudeDesktopConfig(proceed: Bool) async throws(ControlClientError) -> MigrationClaudeDesktopConfigCleanupResult
+
+    /// `POST /control/migration/hadesHub/clean` - the fifth `V12Cleanup` target, closing the spec
+    /// #4 §1 gap where `~/.arcforge/hades-hub/launcher.js` (the retired v1.2 stdio launcher) was
+    /// named among what v2 retires but no cleanup method ever removed it. Carries no `productGuid`
+    /// anywhere in its signature either, for the identical reason
+    /// `migrationCleanClaudeDesktopConfig(proceed:)` immediately above does not: `~/.arcforge/hades-hub/`
+    /// is global and per-user, not per-project.
+    func migrationCleanHadesHub(proceed: Bool) async throws(ControlClientError) -> MigrationHadesHubCleanupResult
 }
 
 extension ControlClient: ControlMigrationFetching {}

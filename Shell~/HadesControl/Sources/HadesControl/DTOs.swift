@@ -966,6 +966,25 @@ public struct MigrationClaudeDesktopConfigCleanupResult: Decodable, Equatable, S
     }
 }
 
+/// Mirrors `Hades.Server.Control.MigrationHadesHubCleanupResult` - the fifth `V12Cleanup` target,
+/// closing the spec #4 §1 gap where `~/.arcforge/hades-hub/launcher.js` (the retired v1.2 stdio
+/// launcher) was named among what v2 retires but no cleanup method ever removed it. `found` is
+/// always populated, including when `removed` is false - same reasoning as
+/// `MigrationClaudeDesktopConfigCleanupResult.occurrencesFound`: this route has no companion
+/// per-project detect endpoint, so this field is a caller's only way to learn whether there is
+/// anything here worth offering to clean up at all.
+public struct MigrationHadesHubCleanupResult: Decodable, Equatable, Sendable {
+    public let removed: Bool
+    public let message: String
+    public let found: Bool
+
+    public init(removed: Bool, message: String, found: Bool) {
+        self.removed = removed
+        self.message = message
+        self.found = found
+    }
+}
+
 /// Body of every migration cleanup POST route. Mirrors
 /// `Hades.Server.Control.MigrationCleanupRequest` - `proceed` has no default here either, matching
 /// `V12Cleanup`'s own required-no-default rule on the .NET side.

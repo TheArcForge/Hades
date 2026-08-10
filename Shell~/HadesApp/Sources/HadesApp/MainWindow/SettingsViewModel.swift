@@ -33,19 +33,23 @@ public typealias SettingsClientFactory = @Sendable (ControlConnection) -> any Co
 /// doc comment for why a thrown error is not the only failure mode this must guard against (the OS
 /// can also silently no-op).
 ///
-/// **Also owns the one GLOBAL migration-cleanup action, `cleanClaudeDesktopConfig`** (the per-item
-/// cleanup UI task's own addition) - deliberately here, not on `MigrationCleanupViewModel`, which
-/// owns the other three `V12Cleanup` actions instead. `migrationCleanClaudeDesktopConfig` carries no
-/// `productGuid` anywhere in its signature (see `ControlMigrationFetching`'s own doc comment),
-/// matching the route itself: `claude_desktop_config.json` is global and per-user, not per-project
-/// (spec #4 §5) - putting it anywhere reachable only through a selected project would misstate its
-/// scope. Settings is exactly that non-project-scoped surface already (see this type's own class doc
+/// **Also owns the two GLOBAL migration-cleanup actions, `cleanClaudeDesktopConfig` and
+/// `cleanHadesHub`** (the per-item cleanup UI task's own addition, plus `cleanHadesHub` closing the
+/// later spec #4 §1 gap where `~/.arcforge/hades-hub/launcher.js` was named among what v2 retires
+/// but no cleanup method ever removed it) - deliberately here, not on `MigrationCleanupViewModel`,
+/// which owns the other three `V12Cleanup` actions instead. `migrationCleanClaudeDesktopConfig`/
+/// `migrationCleanHadesHub` carry no `productGuid` anywhere in their signatures (see
+/// `ControlMigrationFetching`'s own doc comment), matching their routes: `claude_desktop_config.json`
+/// and `~/.arcforge/hades-hub/` are both global and per-user, not per-project (spec #4 §5, §1) -
+/// putting either anywhere reachable only through a selected project would misstate its scope.
+/// Settings is exactly that non-project-scoped surface already (see this type's own class doc
 /// comment on why it is not tied to any per-project state at all), so `claudeDesktopConfigCleanup`
-/// is refreshed unconditionally on every `refresh()` call, the same as `settings` itself. Like every
-/// other cleanup target, its dry-run preview (`proceed: false`) is fetched here and rendered verbatim
-/// by `SettingsView`; only `cleanClaudeDesktopConfig(confirmed:)` below ever calls
-/// `proceed: true` - see `MigrationCleanupViewModel`'s own doc comment for the full reasoning on why
-/// a dry run, not Swift-authored text, is where every cleanup confirmation's wording comes from.
+/// AND `hadesHubCleanup` are both refreshed unconditionally on every `refresh()` call, the same as
+/// `settings` itself. Like every other cleanup target, each dry-run preview (`proceed: false`) is
+/// fetched here and rendered verbatim by `SettingsView`; only `cleanClaudeDesktopConfig(confirmed:)`/
+/// `cleanHadesHub(confirmed:)` below ever call `proceed: true` - see `MigrationCleanupViewModel`'s
+/// own doc comment for the full reasoning on why a dry run, not Swift-authored text, is where every
+/// cleanup confirmation's wording comes from.
 @MainActor
 @Observable
 public final class SettingsViewModel {
@@ -61,6 +65,14 @@ public final class SettingsViewModel {
     /// doc comment for why this route needs that field at all (it has no companion per-project
     /// detect endpoint the other three cleanup targets get from `MigrationDetectionResult`).
     public private(set) var claudeDesktopConfigCleanup: MigrationClaudeDesktopConfigCleanupResult?
+
+    /// The most recent dry-run preview OR real result of the global `cleanHadesHub` action - `nil`
+    /// only before the first successful `refresh()`. `found == false` (no `~/.arcforge/hades-hub/`
+    /// directory at all) is `SettingsView`'s own "do not offer to clean something that is not
+    /// there" signal - see `MigrationHadesHubCleanupResult.found`'s own doc comment for why this
+    /// route needs that field at all (same reasoning as `claudeDesktopConfigCleanup` above: it has
+    /// no companion per-project detect endpoint).
+    public private(set) var hadesHubCleanup: MigrationHadesHubCleanupResult?
 
     private let discover: ConnectionProvider
     private let makeClient: SettingsClientFactory
@@ -105,6 +117,13 @@ public final class SettingsViewModel {
         } catch {
             // Self-heals next refresh, independently of the settings fetch above.
         }
+
+        do {
+            hadesHubCleanup = try await makeMigrationClient(connection).migrationCleanHadesHub(proceed: false)
+        } catch {
+            // Self-heals next refresh, independently of the settings and claudeDesktopConfigCleanup
+            // fetches above.
+        }
     }
 
     /// Requests a launch-at-login change, then immediately re-reads `launchAtLoginEnabled` from the
@@ -130,6 +149,19 @@ public final class SettingsViewModel {
             // nothing server-authored to show - self-heals, leaving the prior preview/result exactly
             // as it was, retryable. Unlike the per-project actions, there is no productGuid-scoped
             // "unknown project" failure mode this route can even hit.
+        }
+    }
+
+    /// The ONLY path that ever calls `migrationCleanHadesHub(proceed: true)`. `confirmed` is the
+    /// actual gate - `false` never reaches the network, matching `cleanClaudeDesktopConfig(confirmed:)`
+    /// immediately above and every other destructive action's own confirmation contract in this app.
+    public func cleanHadesHub(confirmed: Bool) async {
+        guard confirmed else { return }
+        guard let connection = await discover() else { return }
+        do {
+            hadesHubCleanup = try await makeMigrationClient(connection).migrationCleanHadesHub(proceed: true)
+        } catch {
+            // Self-heals, same reasoning as cleanClaudeDesktopConfig(confirmed:) above.
         }
     }
 }

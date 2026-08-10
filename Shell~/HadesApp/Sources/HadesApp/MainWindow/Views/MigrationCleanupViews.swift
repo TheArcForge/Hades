@@ -30,6 +30,14 @@ import SwiftUI
 /// route has (see `MigrationClaudeDesktopConfigCleanupResult.occurrencesFound`'s own doc comment for
 /// why - this route has no companion per-project detect endpoint the other three targets get from
 /// `MigrationDetectionResult`).
+///
+/// **`MigrationCleanHadesHubRow`** is the fifth such row, added to close the spec #4 §1 gap where
+/// `~/.arcforge/hades-hub/launcher.js` (the retired v1.2 stdio launcher) was named among what v2
+/// retires but no cleanup method ever removed it. Same shape and same surface as
+/// `MigrationCleanClaudeDesktopConfigRow` immediately below, and for the identical reason:
+/// `~/.arcforge/hades-hub/` is global and per-user, not per-project, so it is rendered from
+/// `SettingsView` too, gated on `found`, the only presence signal this route has (see
+/// `MigrationHadesHubCleanupResult.found`'s own doc comment).
 struct MigrationCleanClaudeMdRow: View {
     let productGuid: String
     let result: MigrationClaudeMdCleanupResult
@@ -165,6 +173,35 @@ struct MigrationCleanClaudeDesktopConfigRow: View {
                 Text(result.message)
                 Text(result.scopeWarning)
             }
+        }
+    }
+}
+
+struct MigrationCleanHadesHubRow: View {
+    let result: MigrationHadesHubCleanupResult
+    let viewModel: SettingsViewModel
+    @State private var isConfirming = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(result.message)
+                .font(.callout)
+                .textSelection(.enabled)
+            if !result.removed {
+                Button("Remove…", role: .destructive) { isConfirming = true }
+            }
+        }
+        .confirmationDialog(
+            "Remove ~/.arcforge/hades-hub/?",
+            isPresented: $isConfirming,
+            titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive) {
+                Task { await viewModel.cleanHadesHub(confirmed: true) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(result.message)
         }
     }
 }

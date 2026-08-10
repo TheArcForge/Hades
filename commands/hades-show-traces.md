@@ -1,15 +1,13 @@
 ---
 name: hades-show-traces
-description: "Open the Charon trace dashboard in a browser"
+description: "Point the user to Hades' trace explorer"
 ---
 
-Open the Charon dashboard for the user:
+Direct the user to the trace explorer. Two possible UIs, depending on what they have installed for this project:
 
-1. Call `hades_charon_status` to check if the dashboard is running and get its URL.
-2. If the dashboard is running, tell the user the URL to open in their browser.
-3. If the dashboard is not running, instruct the user to open it from Unity via the menu: **Hades > Open Charon Dashboard**.
+1. **Standalone app (v2, the default today):** open the Hades app (menu bar icon → **Open Hades**) and select **Traces** in the sidebar. Filter by project, tool, outcome, and duration; drill into a call's span detail.
+2. **Legacy Unity package (v1.2), if still installed in this project:** **Hades > Open Charon Dashboard** from Unity's menu bar opens a browser-based trace dashboard reading this project's `.arcforge/traces.db` directly.
 
-The dashboard shows:
-- Trace list with filters (date, status, name pattern)
-- Trace detail with span tree visualization
-- Span attribute inspection
+If unsure which the user has, ask, or default to describing (1) — every v2 Claude Code plugin install has the standalone app; the Unity menu item only exists if the legacy package is also still installed, which Claude cannot check from this session.
+
+Neither path is reachable through an MCP tool call — `hades_charon_status` reports Unity Editor attachment (is a live Editor connected, is it busy), not trace or dashboard state. There is no MCP tool that returns trace records; one of the two UIs above is the only way to see them.

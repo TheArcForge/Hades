@@ -126,6 +126,20 @@ public sealed record MigrationClaudeDesktopConfigCleanupResult
     [JsonPropertyName("occurrencesFound")] public required int OccurrencesFound { get; init; }
 }
 
+/// <summary>The response of <c>POST /control/migration/hadesHub/clean</c> - a wire mapping of
+/// <see cref="HadesHubCleanupResult"/>. <see cref="Found"/> is always populated, including when
+/// <see cref="Removed"/> is false - same reasoning as
+/// <see cref="MigrationClaudeDesktopConfigCleanupResult.OccurrencesFound"/>: this route has no
+/// companion per-project detect endpoint (see <see cref="MigrationDetectionResult"/>), so this
+/// field is a caller's only way to learn whether there is anything here worth offering to clean up
+/// at all.</summary>
+public sealed record MigrationHadesHubCleanupResult
+{
+    [JsonPropertyName("removed")] public required bool Removed { get; init; }
+    [JsonPropertyName("message")] public required string Message { get; init; }
+    [JsonPropertyName("found")] public required bool Found { get; init; }
+}
+
 /// <summary>Body of every cleanup POST route below. <see cref="Proceed"/> is <c>required</c>, no
 /// default - mirrors <see cref="V12Cleanup"/>'s own four methods, each of which takes a required
 /// <c>bool proceed</c> with no default. A request body that omits <c>"proceed"</c> fails to bind
@@ -154,13 +168,13 @@ public sealed record MigrationCleanupRequest
 /// reported as a skip, never overwritten. Spec #4 §5 marks memory import "Optional? No" for exactly
 /// this reason - there is nothing here that can lose data, so there is nothing to ask permission for.
 ///
-/// <b>Cleanup stays four independent routes, matching <see cref="V12Cleanup"/> exactly - there is no
+/// <b>Cleanup stays five independent routes, matching <see cref="V12Cleanup"/> exactly - there is no
 /// "clean everything" route here either.</b> <see cref="CleanClaudeMd"/>, <see cref="CleanManifest"/>,
-/// <see cref="CleanMcpConfig"/>, and <see cref="CleanClaudeDesktopConfig"/> each take their own
-/// <see cref="MigrationCleanupRequest"/> with its own required <see cref="MigrationCleanupRequest.Proceed"/> -
-/// calling one never performs another, and refusing one never blocks the rest, the identical
-/// contract <see cref="V12Cleanup"/>'s own class doc comment describes for its four methods. Spec
-/// #10: "Migration is always offered, never performed silently."
+/// <see cref="CleanMcpConfig"/>, <see cref="CleanClaudeDesktopConfig"/>, and <see cref="CleanHadesHub"/>
+/// each take their own <see cref="MigrationCleanupRequest"/> with its own required
+/// <see cref="MigrationCleanupRequest.Proceed"/> - calling one never performs another, and refusing
+/// one never blocks the rest, the identical contract <see cref="V12Cleanup"/>'s own class doc comment
+/// describes for its five methods. Spec #10: "Migration is always offered, never performed silently."
 ///
 /// <b><see cref="CleanClaudeMd"/> re-detects the file's marker state fresh on every call, rather than
 /// trusting a client-supplied one.</b> <see cref="V12Cleanup.CleanClaudeMd"/> takes a
@@ -178,6 +192,15 @@ public sealed record MigrationCleanupRequest
 /// always resolves <see cref="V12Cleanup.ClaudeDesktopConfigPath"/> itself (see
 /// <see cref="CleanClaudeDesktopConfig"/>'s own <c>configPath</c> parameter doc comment for the
 /// test-only seam that lets this be proven without ever touching the real file).
+///
+/// <b><see cref="CleanHadesHub"/> likewise carries no <c>{productGuid}</c>.</b>
+/// <c>~/.arcforge/hades-hub/</c> - the retired v1.2 stdio launcher and its hub state - is global and
+/// per-user, not per-project either: spec #4 §1 names <c>~/.arcforge/hades-hub/launcher.js</c>
+/// explicitly among what v2 retires, and <see cref="V12Cleanup.CleanHadesHub"/>'s own doc comment
+/// explains why cleanup here follows the launcher's whole directory rather than that one file alone.
+/// Production always resolves <see cref="V12Cleanup.HadesHubDirectory"/> itself (see
+/// <see cref="CleanHadesHub"/>'s own <c>hadesHubDirectory</c> parameter doc comment for the
+/// test-only seam that lets this be proven without ever touching the developer's real directory).
 /// </summary>
 public static class MigrationEndpoint
 {
@@ -288,6 +311,26 @@ public static class MigrationEndpoint
             Message = result.Message,
             ScopeWarning = result.ScopeWarning,
             OccurrencesFound = result.OccurrencesFound,
+        });
+    }
+
+    /// <summary><c>POST /control/migration/hadesHub/clean</c> - see this class's own doc comment for
+    /// why this route carries no <c>{productGuid}</c> at all.</summary>
+    /// <param name="request">The wire body - carries only <see cref="MigrationCleanupRequest.Proceed"/>,
+    /// never a path: a caller cannot redirect this call to a different directory.</param>
+    /// <param name="hadesHubDirectory">Test-only seam, threaded from <see cref="ControlListener"/>'s
+    /// own <c>hadesHubDirectory</c> constructor parameter. Production never supplies this (stays
+    /// null), so <see cref="V12Cleanup.HadesHubDirectory"/> - the real machine path - is what
+    /// actually gets touched; tests supply a scratch directory so this route can be proven end to
+    /// end over real HTTP without any risk to the developer's own <c>~/.arcforge/hades-hub/</c>.</param>
+    public static IResult CleanHadesHub(MigrationCleanupRequest request, string? hadesHubDirectory = null)
+    {
+        var result = V12Cleanup.CleanHadesHub(hadesHubDirectory ?? V12Cleanup.HadesHubDirectory, request.Proceed);
+        return Results.Json(new MigrationHadesHubCleanupResult
+        {
+            Removed = result.Removed,
+            Message = result.Message,
+            Found = result.Found,
         });
     }
 

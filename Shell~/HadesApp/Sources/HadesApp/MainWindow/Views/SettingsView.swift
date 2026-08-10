@@ -97,17 +97,28 @@ struct SettingsView: View {
         .frame(minWidth: 420, minHeight: 340)
     }
 
-    /// The one GLOBAL `V12Cleanup` action, `cleanClaudeDesktopConfig` - deliberately here, on the
-    /// one surface that is not project-scoped at all, never under Projects. Rendered only when
-    /// `viewModel.claudeDesktopConfigCleanup.occurrencesFound > 0` - "do not offer to clean a file
-    /// that is not there," the same discipline `ProjectDetailView`'s per-project "v1.2 Cleanup"
-    /// section holds to, applied here to the one target with no per-project detect endpoint behind
-    /// it (see `MigrationClaudeDesktopConfigCleanupResult.occurrencesFound`'s own doc comment).
+    /// The two GLOBAL `V12Cleanup` actions, `cleanClaudeDesktopConfig` and `cleanHadesHub` -
+    /// deliberately here, on the one surface that is not project-scoped at all, never under
+    /// Projects. Each row is rendered only when its own dry run found something to offer -
+    /// `claudeDesktopConfigCleanup.occurrencesFound > 0` / `hadesHubCleanup.found` - "do not offer
+    /// to clean something that is not there," the same discipline `ProjectDetailView`'s per-project
+    /// "v1.2 Cleanup" section holds to, applied here to the two targets with no per-project detect
+    /// endpoint behind them (see `MigrationClaudeDesktopConfigCleanupResult.occurrencesFound`'s and
+    /// `MigrationHadesHubCleanupResult.found`'s own doc comments). The section itself only appears
+    /// once at least one of the two has something to offer, so an all-clean v2-only machine shows
+    /// neither an empty section nor two separately-gated ones.
     @ViewBuilder
     private var migrationCleanup: some View {
-        if let cleanup = viewModel.claudeDesktopConfigCleanup, cleanup.occurrencesFound > 0 {
+        let showClaudeDesktopConfig = (viewModel.claudeDesktopConfigCleanup?.occurrencesFound ?? 0) > 0
+        let showHadesHub = viewModel.hadesHubCleanup?.found ?? false
+        if showClaudeDesktopConfig || showHadesHub {
             SwiftUI.Section("v1.2 Cleanup") {
-                MigrationCleanClaudeDesktopConfigRow(result: cleanup, viewModel: viewModel)
+                if showClaudeDesktopConfig, let cleanup = viewModel.claudeDesktopConfigCleanup {
+                    MigrationCleanClaudeDesktopConfigRow(result: cleanup, viewModel: viewModel)
+                }
+                if showHadesHub, let cleanup = viewModel.hadesHubCleanup {
+                    MigrationCleanHadesHubRow(result: cleanup, viewModel: viewModel)
+                }
             }
         }
     }

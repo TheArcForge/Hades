@@ -238,4 +238,93 @@ struct SettingsViewModelTests {
         #expect(await migrationFetcher.lastCleanClaudeDesktopConfigProceed == true)
         #expect(viewModel.claudeDesktopConfigCleanup == confirmed)
     }
+
+    // MARK: - v1.2 Cleanup: the global cleanHadesHub action - closes the spec #4 §1 gap where
+    // ~/.arcforge/hades-hub/launcher.js (the retired v1.2 stdio launcher) was named among what v2
+    // retires but no cleanup method ever removed it.
+    //
+    // Lives HERE for the identical reason cleanClaudeDesktopConfig does (see this file's own
+    // section above): migrationCleanHadesHub carries no productGuid anywhere in its signature,
+    // matching the route itself - ~/.arcforge/hades-hub/ is global and per-user, not per-project.
+
+    @Test("refresh() also dry-runs the global hades-hub cleanup and stores the result verbatim")
+    func refreshLoadsHadesHubCleanupPreview() async {
+        let preview = MigrationHadesHubCleanupResult(
+            removed: false,
+            message: "Found ~/.arcforge/hades-hub/ - the retired v1.2 Node launcher and its hub state (launcher.js, hub.json, hub-path.json, and anything else left there); not removed (no go-ahead). The whole directory would be removed, but ~/.arcforge/ itself and everything else under it would be untouched.",
+            found: true
+        )
+        let settingsFetcher = FakeSettingsFetcher([.success(Self.realSettings)])
+        let migrationFetcher = FakeMigrationFetcher(
+            projectsOutcome: .success(ProjectsResult(projects: [])), hadesHubCleanupOutcome: .success(preview))
+        let connections = FakeConnectionProvider([ControlConnection(port: 1, token: "t")], repeatLast: true)
+        let viewModel = SettingsViewModel(
+            discover: { await connections.provide() }, makeClient: { _ in settingsFetcher },
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false), resourceGuards: FakeResourceGuardReading(),
+            makeMigrationClient: { _ in migrationFetcher }
+        )
+
+        await viewModel.refresh()
+
+        #expect(viewModel.hadesHubCleanup == preview)
+        #expect(await migrationFetcher.cleanHadesHubCallCount == 1)
+        #expect(await migrationFetcher.lastCleanHadesHubProceed == false)
+    }
+
+    @Test("a failed hades-hub cleanup dry run self-heals, leaving prior state - and the unrelated settings fetch is unaffected")
+    func refreshHadesHubCleanupPreviewFailureSelfHeals() async {
+        let migrationFetcher = FakeMigrationFetcher(
+            projectsOutcome: .success(ProjectsResult(projects: [])), hadesHubCleanupOutcome: .failure(.staleToken))
+        let settingsFetcher = FakeSettingsFetcher([.success(Self.realSettings)])
+        let connections = FakeConnectionProvider([ControlConnection(port: 1, token: "t")], repeatLast: true)
+        let viewModel = SettingsViewModel(
+            discover: { await connections.provide() }, makeClient: { _ in settingsFetcher },
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false), resourceGuards: FakeResourceGuardReading(),
+            makeMigrationClient: { _ in migrationFetcher }
+        )
+
+        await viewModel.refresh()
+
+        #expect(viewModel.hadesHubCleanup == nil)
+        #expect(viewModel.settings == Self.realSettings)
+    }
+
+    @Test("cleanHadesHub(confirmed: false) never calls the API")
+    func cleanHadesHubDeclinedNeverCallsAPI() async {
+        let migrationFetcher = FakeMigrationFetcher(projectsOutcome: .success(ProjectsResult(projects: [])))
+        let connections = FakeConnectionProvider([ControlConnection(port: 1, token: "t")], repeatLast: true)
+        let viewModel = SettingsViewModel(
+            discover: { await connections.provide() }, makeClient: { _ in FakeSettingsFetcher([]) },
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false), resourceGuards: FakeResourceGuardReading(),
+            makeMigrationClient: { _ in migrationFetcher }
+        )
+
+        await viewModel.cleanHadesHub(confirmed: false)
+
+        #expect(await migrationFetcher.cleanHadesHubCallCount == 0)
+        #expect(viewModel.hadesHubCleanup == nil)
+    }
+
+    @Test("cleanHadesHub(confirmed: true) calls proceed:true and stores the result verbatim")
+    func cleanHadesHubConfirmedStoresResultVerbatim() async {
+        let confirmed = MigrationHadesHubCleanupResult(
+            removed: true,
+            message: "Removed ~/.arcforge/hades-hub/ - the retired v1.2 Node launcher and its hub state (launcher.js, hub.json, hub-path.json, and anything else left there). ~/.arcforge/ itself and everything else under it is untouched.",
+            found: true
+        )
+        let migrationFetcher = FakeMigrationFetcher(
+            projectsOutcome: .success(ProjectsResult(projects: [])), hadesHubCleanupOutcome: .success(confirmed))
+        let connections = FakeConnectionProvider([ControlConnection(port: 1, token: "t")], repeatLast: true)
+        let viewModel = SettingsViewModel(
+            discover: { await connections.provide() }, makeClient: { _ in FakeSettingsFetcher([]) },
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false), resourceGuards: FakeResourceGuardReading(),
+            makeMigrationClient: { _ in migrationFetcher }
+        )
+
+        await viewModel.cleanHadesHub(confirmed: true)
+
+        #expect(await migrationFetcher.cleanHadesHubCallCount == 1)
+        #expect(await migrationFetcher.lastCleanHadesHubProceed == true)
+        #expect(viewModel.hadesHubCleanup == confirmed)
+    }
 }

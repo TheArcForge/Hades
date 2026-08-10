@@ -306,6 +306,16 @@ public struct ControlClient: Sendable {
         try await post("/control/migration/claudeDesktopConfig/clean", body: MigrationCleanupRequest(proceed: proceed))
     }
 
+    /// `POST /control/migration/hadesHub/clean` - deliberately carries no productGuid anywhere in
+    /// its path or body, the same shape as `migrationCleanClaudeDesktopConfig(proceed:)` immediately
+    /// above and for the identical reason: `~/.arcforge/hades-hub/` (the retired v1.2 stdio launcher
+    /// and its hub state - spec #4 §1) is global and per-user, not per-project. See
+    /// `MigrationEndpoint.CleanHadesHub`'s own doc comment for how the core resolves the real
+    /// directory path itself, never from anything this client sends.
+    public func migrationCleanHadesHub(proceed: Bool) async throws(ControlClientError) -> MigrationHadesHubCleanupResult {
+        try await post("/control/migration/hadesHub/clean", body: MigrationCleanupRequest(proceed: proceed))
+    }
+
     // MARK: - Request plumbing
 
     private func get<Response: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws(ControlClientError) -> Response {
