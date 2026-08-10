@@ -132,9 +132,9 @@ Complete all items before creating a release tag.
 - [ ] `CHANGELOG.md` updated with all changes since last release
 - [ ] `README.md` (main repo) reflects current install flow and features
 - [ ] `scripts/plugin-README.md` reflects current plugin install flow
-- [ ] `Documentation/arcforge-hades-roadmap.md` — phase status updated, version history updated
-- [ ] `Documentation/arcforge-hades-architecture.md` — any architectural changes reflected
-- [ ] `Documentation/arcforge-hades-plugin.md` — plugin structure, install flow, skill/command counts current
+- [ ] `Documentation/Retired/arcforge-hades-roadmap.md` — phase status updated, version history updated
+- [ ] `Documentation/Retired/arcforge-hades-architecture.md` — any architectural changes reflected
+- [ ] `Documentation/Retired/arcforge-hades-plugin.md` — plugin structure, install flow, skill/command counts current
 - [ ] `docs/plugin-publish-pipeline.md` — expected counts still accurate
 
 ### Plugin sync
@@ -287,9 +287,9 @@ Read and verify these files are up to date:
 1. `CHANGELOG.md` — has an entry for the new version with all changes
 2. `README.md` — install instructions, feature counts, version references are current
 3. `scripts/plugin-README.md` — plugin install instructions are current
-4. `Documentation/arcforge-hades-roadmap.md` — phase statuses and version history reflect reality
-5. `Documentation/arcforge-hades-architecture.md` — no stale references
-6. `Documentation/arcforge-hades-plugin.md` — skill/command counts, install flow, compliance checklist
+4. `Documentation/Retired/arcforge-hades-roadmap.md` — phase statuses and version history reflect reality
+5. `Documentation/Retired/arcforge-hades-architecture.md` — no stale references
+6. `Documentation/Retired/arcforge-hades-plugin.md` — skill/command counts, install flow, compliance checklist
 
 Report: which docs are current, which need updates, what specifically is stale.
 

@@ -32,7 +32,7 @@ Open your Unity project and add the package via **Package Manager → Add packag
 | `commands/` | 6 slash commands (Markdown) |
 | `Plugin-ClaudeCode~/` | The Claude Code plugin — manifest, `.mcp.json`, and copies of the skills and commands above |
 | `Legacy~/` | Retired v1.2 delivery files, kept for reference only (see its README) |
-| `Documentation/` | Architecture docs, roadmap, guides |
+| `Documentation/` | Architecture docs, install guides, release pipeline. `Retired/` holds retired v1.2 docs (see its README) |
 
 Directories with a tilde suffix (`Bridge~/`, `Scanner~/`, `Plugin-ClaudeCode~/`, `Legacy~/`) are invisible to Unity's asset pipeline by design.
 
