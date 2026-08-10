@@ -507,7 +507,8 @@ public sealed class OperationsProgramWiringTests : IClassFixture<WebApplicationF
         await registry.WhenComplete(id);
 
         var listener = _factory.Services.GetRequiredService<ControlListener>();
-        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{listener.Port}") };
+        var port = await ProgramWiringPort.WaitAsync(listener);
+        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
         var request = new HttpRequestMessage(HttpMethod.Get, $"/control/operations/{id}");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", listener.Token);
 

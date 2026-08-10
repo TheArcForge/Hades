@@ -659,7 +659,8 @@ public sealed class EditorsProgramWiringTests(WebApplicationFactory<Program> fac
         var responder = AnswerOneAsync(reads, writes, JsonValue.Bool(true));
 
         var listener = Factory.Services.GetRequiredService<ControlListener>();
-        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{listener.Port}") };
+        var port = await ProgramWiringPort.WaitAsync(listener);
+        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
         var request = new HttpRequestMessage(HttpMethod.Get, "/control/editors");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", listener.Token);
 
@@ -691,7 +692,8 @@ public sealed class EditorsProgramWiringTests(WebApplicationFactory<Program> fac
         var responder = AnswerBusyProbeThenRespondAsync(reads, writes, LeaseResult(success: true));
 
         var listener = Factory.Services.GetRequiredService<ControlListener>();
-        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{listener.Port}") };
+        var port = await ProgramWiringPort.WaitAsync(listener);
+        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
         var request = new HttpRequestMessage(HttpMethod.Post, $"/control/leases/{ProjectGuid}/release");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", listener.Token);
 

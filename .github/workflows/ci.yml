@@ -50,3 +50,48 @@ jobs:
       - name: Run tests
         working-directory: Scanner~
         run: node --experimental-vm-modules node_modules/.bin/jest --testPathIgnorePatterns '/tests/integration\.test\.js$' && node --experimental-vm-modules node_modules/.bin/jest tests/integration.test.js
+
+  dotnet-tests:
+    name: App (.NET) Tests
+    # macos-latest, not ubuntu: this suite has only ever run on macOS and Hades itself ships
+    # macOS-only - portability is unverified, and guessing wrong here costs a day chasing an
+    # "Application Support" path assertion instead of whatever this job was meant to catch. Runs
+    # directly on the runner VM, deliberately not inside a container: several tests call
+    # File.SetUnixFileMode, and root inside a container ignores mode bits, which would make
+    # those assertions pass for the wrong reason.
+    runs-on: macos-latest
+    # Job-level, not per-step: Hades.Server.Tests already isolates itself via a
+    # [ModuleInitializer] (HadesHomeIsolation.cs) that defers to an already-set value, so this
+    # composes rather than conflicts with it - and Hades.Contract.Tests/Hades.Cli.Tests/
+    # Hades.Core.Tests have no such safety net, so without a job-level value they would fall back
+    # to this runner's real application-data directory instead of a throwaway one.
+    env:
+      HADES_HOME: ${{ runner.temp }}/hades-home
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          # Pinned to App~/global.json's own SDK (10.0.301, rollForward: latestFeature) rather
+          # than a dotnet-version input here - Directory.Build.props sets
+          # TreatWarningsAsErrors=true, so a rolled-forward SDK shipping new analyzer warnings
+          # would turn this job red for reasons unrelated to whatever it was actually meant to
+          # check.
+          global-json-file: App~/global.json
+
+      - name: Create HADES_HOME
+        run: mkdir -p "$HADES_HOME"
+
+      # Honesty note for whoever reads the passing count this job prints: at least nine test
+      # files (the RealProject*SmokeTest.cs family - six under Hades.Server.Tests, three under
+      # Hades.Core.Tests) plus individual tests inside a few more files (RealCorpusReaderTests.cs,
+      # MetaFileReaderTests.cs, PluginInstallerTests.cs) hardcode one developer's own project
+      # checkouts under /Users/mike/Projects/... and silently no-op - an early
+      # `if (!Directory.Exists(...)) return;` before any assertion - whenever that path is
+      # absent, which it always is on this runner. xUnit reports an early return as PASSED, not
+      # skipped, so this does not even surface as a skip count. That is by design (see those
+      # files' own comments) but it means the number below overstates what this job actually
+      # exercised - do not quote it as full coverage of this suite.
+      - name: dotnet test
+        working-directory: App~
+        run: dotnet test

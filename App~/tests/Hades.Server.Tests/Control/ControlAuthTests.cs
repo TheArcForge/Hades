@@ -241,10 +241,10 @@ public sealed class ControlListenerProgramWiringTests : IClassFixture<WebApplica
     public async Task Program_StartsARealControlListener_ReachableWithItsOwnToken()
     {
         var listener = _factory.Services.GetRequiredService<ControlListener>();
-        Assert.NotEqual(0, listener.Port);
+        var port = await ProgramWiringPort.WaitAsync(listener);
         Assert.False(string.IsNullOrEmpty(listener.Token));
 
-        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{listener.Port}") };
+        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
         var request = new HttpRequestMessage(HttpMethod.Get, "/control/ping");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", listener.Token);
 
@@ -265,7 +265,8 @@ public sealed class ControlListenerProgramWiringTests : IClassFixture<WebApplica
         var controlListener = _factory.Services.GetRequiredService<ControlListener>();
         Assert.NotEqual(editorListener.Token, controlListener.Token);
 
-        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{controlListener.Port}") };
+        var controlPort = await ProgramWiringPort.WaitAsync(controlListener);
+        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{controlPort}") };
         var request = new HttpRequestMessage(HttpMethod.Get, "/control/ping");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", editorListener.Token);
 

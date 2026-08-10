@@ -21,15 +21,20 @@ Purpose: catch regressions before merging.
 **`release.yml`** — runs when a version tag (`v*`) is pushed.
 
 Sequential steps:
-1. Builds Bridge from TypeScript to JavaScript.
-2. Runs `scripts/sync-plugin.sh` to produce the plugin repo content.
-3. Validates the output: 22 skills, 6 commands, valid JSON, no leaked Unity files, and presence of `Bridge~/launcher/dist/index.js` and `Bridge~/hub/dist/index.js`.
-4. Clones `TheArcForge/hades-plugin` using the `PLUGIN_REPO_TOKEN` secret.
-5. Copies the validated plugin content into the clone.
-6. Updates `marketplace.json` version to match the tag.
-7. Commits, tags, and pushes to the plugin repo.
+1. Runs `scripts/sync-plugin.sh` to assemble `Plugin-ClaudeCode~/` — the current Claude Code
+   plugin — into the plugin repo content. No build step: the plugin is a static manifest,
+   skills, commands, and an HTTP `.mcp.json`, so there is nothing to compile first.
+2. Validates the output: 22 skills, 6 commands, a valid `plugin.json`, an `.mcp.json` with a
+   plugin-root HTTP `hades` entry at `http://127.0.0.1:7823/mcp` (no `mcpServers` wrapper), no
+   leaked `.meta`/`.cs`/`node_modules`, and no `Bridge~`/`Scanner~` (the retired v1.2 shape).
+3. Clones `TheArcForge/hades-plugin` using the `PLUGIN_REPO_TOKEN` secret.
+4. Copies the validated plugin content into the clone.
+5. Updates `marketplace.json` version to match the tag.
+6. Commits, tags, and pushes to the plugin repo.
 
-Purpose: one tag push on the main repo automatically ships the plugin repo.
+Purpose: one tag push on the main repo automatically ships the current Claude Code plugin
+(`Plugin-ClaudeCode~/`) — not the retired v1.2 shape (Bridge dist, Scanner source, a
+stdio-launcher `.mcp.json`) it shipped before `sync-plugin.sh` and this workflow were repointed.
 
 **Secret required:** `PLUGIN_REPO_TOKEN` — a GitHub Personal Access Token with `repo` scope, stored in the main repo's GitHub Settings > Secrets > Actions. This gives the CI runner write access to the plugin repo. The token is never stored in files — GitHub injects it at runtime and masks it in logs.
 
@@ -46,13 +51,28 @@ Checks:
 
 Purpose: guard rail against sync bugs or accidental direct edits.
 
+> **Required follow-up, not done here.** The checks above describe the *retired v1.2* shape —
+> Bridge dist, Scanner source, and a `${CLAUDE_PLUGIN_ROOT}`-relative `.mcp.json` (the stdio
+> launcher form). Now that this repo's `release.yml` ships `Plugin-ClaudeCode~/` instead, the
+> synced content has no `Bridge~`/`Scanner~` directories at all, and `.mcp.json` is a
+> plugin-root HTTP entry (`http://127.0.0.1:7823/mcp`) with no `${CLAUDE_PLUGIN_ROOT}`
+> substitution anywhere in it. The next real sync will make `validate.yml` fail red, checking
+> for files that no longer exist. `validate.yml` lives in the *other* repo
+> (`TheArcForge/hades-plugin`), which this repo's tooling cannot see or edit — someone with
+> access to that repo needs to update it to match this new shape before (or immediately after)
+> the next tag push.
+
 ---
 
 ## 2. Version locations
 
-> **Sections 1–5 describe the v1.2 release flow** — the Unity package, the Node bridge, and the
-> `TheArcForge/hades-plugin` marketplace submission. Section 6 covers the standalone macOS app that
-> replaces them.
+> **`release.yml`'s description in Section 1 now reflects the current release flow** — it was
+> repointed at `Plugin-ClaudeCode~/`, and its own note there flags the one known gap
+> (`hades-plugin`'s `validate.yml` not yet updated to match). **Sections 2–5 still describe the
+> v1.2 release flow** — the Unity package, the Node bridge, and the pre-`Plugin-ClaudeCode~/`
+> shape of the `TheArcForge/hades-plugin` marketplace submission — and have not been revisited
+> yet; treat their Bridge/Scanner/`.claude-plugin`-at-repo-root details as stale until they are.
+> Section 6 covers the standalone macOS app that replaces all of it.
 >
 > **The root `.claude-plugin/plugin.json` and `.mcp.json` referenced below no longer exist at the
 > repo root.** They now live under `Legacy~/` — a root manifest made this checkout installable as a

@@ -670,7 +670,8 @@ public sealed class SummaryProgramWiringTests : IClassFixture<WebApplicationFact
         projects.AdoptAndIndex(_projectRoot);
 
         var listener = _factory.Services.GetRequiredService<ControlListener>();
-        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{listener.Port}") };
+        var port = await ProgramWiringPort.WaitAsync(listener);
+        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
         var request = new HttpRequestMessage(HttpMethod.Get, "/control/summary");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", listener.Token);
 
@@ -745,7 +746,8 @@ public sealed class SummaryLeaseClearedOnDisconnectTests(WebApplicationFactory<P
             .RecordHeld(ProjectGuid, "hades-script-editing", DateTimeOffset.UtcNow.AddSeconds(30));
 
         var listener = Factory.Services.GetRequiredService<ControlListener>();
-        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{listener.Port}") };
+        var port = await ProgramWiringPort.WaitAsync(listener);
+        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
 
         // Before disconnect: the lease row is present, same as HeldLease_... proves at the
         // Resolve layer above, now confirmed over the real route with a real attached Editor.

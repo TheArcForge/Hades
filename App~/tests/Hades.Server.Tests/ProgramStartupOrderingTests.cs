@@ -88,7 +88,7 @@ public sealed class ProgramStartupOrderingTests
         var (process, hadesHome) = LaunchServer($"http://127.0.0.1:{occupiedPort}");
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             try
             {
                 await process.WaitForExitAsync(cts.Token);
@@ -100,7 +100,7 @@ public sealed class ProgramStartupOrderingTests
             }
 
             Assert.True(process.HasExited,
-                "the doomed core must exit on its own (Environment.Exit(1)) within 10s, never hang");
+                "the doomed core must exit on its own (Environment.Exit(1)) within 30s, never hang");
             Assert.Equal(1, process.ExitCode);
 
             var tokenPath = Path.Combine(hadesHome, "control.token");
@@ -129,7 +129,7 @@ public sealed class ProgramStartupOrderingTests
         try
         {
             var tokenPath = Path.Combine(hadesHome, "control.token");
-            var appeared = await WaitForFile(tokenPath, TimeSpan.FromSeconds(10));
+            var appeared = await WaitForFile(tokenPath, TimeSpan.FromSeconds(30));
             Assert.True(appeared, "a healthy core must eventually advertise readiness");
             Assert.False(process.HasExited, "a healthy core must not have exited");
 

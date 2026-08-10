@@ -1334,7 +1334,8 @@ public sealed class ProjectsProgramWiringTests : IClassFixture<WebApplicationFac
         projects.AdoptAndIndex(_projectRoot);
 
         var listener = _factory.Services.GetRequiredService<ControlListener>();
-        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{listener.Port}") };
+        var port = await ProgramWiringPort.WaitAsync(listener);
+        using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
         var request = new HttpRequestMessage(HttpMethod.Get, "/control/projects");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", listener.Token);
 

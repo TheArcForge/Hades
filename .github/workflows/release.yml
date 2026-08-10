@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Dry run — build, sync, validate, and auth-check the push without updating the plugin repo"
+        description: "Dry run — sync, validate, and auth-check the push without updating the plugin repo"
         type: boolean
         default: true
       version:
@@ -33,15 +33,6 @@ jobs:
           fi
           echo "Triggered by: ${{ github.event_name }}"
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: "Bridge~/package-lock.json"
-
-      - name: Install and build Bridge
-        run: cd Bridge~ && npm ci && npm run build
-
       - name: Sync plugin to output directory
         run: bash scripts/sync-plugin.sh ./plugin-output
 
@@ -59,6 +50,15 @@ jobs:
 
           python3 -c "import json; json.load(open('./plugin-output/.claude-plugin/plugin.json'))" || { echo "FAIL: plugin.json is not valid JSON"; exit 1; }
 
+          python3 -c "
+          import json
+          d = json.load(open('./plugin-output/.mcp.json'))
+          assert 'mcpServers' not in d
+          hades = d['hades']
+          assert hades['type'] == 'http'
+          assert hades['url'] == 'http://127.0.0.1:7823/mcp'
+          " && echo "PASS: .mcp.json is a plugin-root HTTP entry, no mcpServers wrapper" || { echo "FAIL: .mcp.json is not the expected HTTP hades entry"; exit 1; }
+
           METAS=$(find ./plugin-output -name "*.meta" -not -path "./.git/*" | wc -l | tr -d ' ')
           [ "$METAS" -eq 0 ] || { echo "FAIL: found $METAS .meta files in plugin output"; exit 1; }
 
@@ -68,8 +68,8 @@ jobs:
           NM=$(find ./plugin-output -name "node_modules" -type d -not -path "./.git/*" | wc -l | tr -d ' ')
           [ "$NM" -eq 0 ] || { echo "FAIL: found node_modules in plugin output"; exit 1; }
 
-          test -f ./plugin-output/Bridge~/launcher/dist/index.js || { echo "FAIL: Bridge launcher dist missing"; exit 1; }
-          test -f ./plugin-output/Bridge~/hub/dist/index.js || { echo "FAIL: Bridge hub dist missing"; exit 1; }
+          [ ! -e ./plugin-output/Bridge~ ] || { echo "FAIL: Bridge~ present in plugin output (retired v1.2 shape)"; exit 1; }
+          [ ! -e ./plugin-output/Scanner~ ] || { echo "FAIL: Scanner~ present in plugin output (retired v1.2 shape)"; exit 1; }
 
           echo "All validation checks passed."
 
