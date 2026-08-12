@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Hades.Core;
 using Hades.Core.Graph;
+using Hades.Core.Observation;
 using Hades.Core.Storage;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -137,6 +138,61 @@ public class QueryToolsTests : IClassFixture<WebApplicationFactory<Program>>, ID
         Assert.Equal(500, structured.GetProperty("totalReturned").GetInt32());
         Assert.True(structured.GetProperty("truncated").GetBoolean(),
             "600 real matches exist but only 500 were requested - truncated must be true");
+    }
+
+    // ---------------------------------------------------------------- an over-max limit collapses the sentinel too
+    //
+    // A second, related defect on top of the one above: graph_query passed a raw, caller-supplied
+    // limit + 1 straight to ProjectService.QueryGraph without first clamping it to graph_query's
+    // own documented maximum (500) - so a limit ABOVE 500 skipped that clamp entirely, and
+    // truncated was computed against the UNCLAMPED limit instead of the documented one. Both the
+    // structured-filter branch and the separate fileType branch (BuildFileTypeResult) shared the
+    // same raw-limit shape, so both get their own test here.
+
+    [Fact]
+    public async Task GraphQuery_AnOverMaxLimit_StillReportsTruncatedHonestly()
+    {
+        var paths = _factory.Services.GetRequiredService<AppPaths>();
+        using (var db = GraphDatabase.Open(paths.GraphDb(ProjectGuid)))
+        {
+            db.UpsertNodes(Enumerable.Range(0, 600)
+                .Select(i => new GraphNode { Kind = "Class", Name = $"Bulk{i}", Path = $"Assets/Bulk/Bulk{i}.cs", FileId = 0 })
+                .ToList());
+        }
+
+        var structured = Structured(await McpTestClient.CallTool(_factory, "graph_query",
+            new { pathPrefix = "Assets/Bulk", limit = 5000 }));
+
+        // totalReturned must never exceed graph_query's own documented maximum, regardless of what
+        // the caller asked for - the sentinel is for detection, not delivery.
+        Assert.Equal(500, structured.GetProperty("totalReturned").GetInt32());
+        Assert.True(structured.GetProperty("truncated").GetBoolean(),
+            "600 real matches exist but the documented max is 500 - truncated must be true even though the caller asked for 5000");
+    }
+
+    [Fact]
+    public async Task GraphQuery_FileTypeBranch_AnOverMaxLimit_StillReportsTruncatedHonestly()
+    {
+        // fileType is a SEPARATE code path (file_state-backed, via FindAssetsByFileState) from the
+        // structured-filter branch above - see QueryTools.GraphQuery's own doc comment - so it needs
+        // its own proof it was not missed. 600 file_state rows are seeded directly (plus the fixture's
+        // own pre-existing Assets/Data/Config.asset - 601 real ScriptableObject matches under
+        // Assets/Data in total, still comfortably over the documented max of 500), same technique as
+        // SummaryToolTests' own get_recently_changed truncation tests, which read the same table.
+        var paths = _factory.Services.GetRequiredService<AppPaths>();
+        using (var db = GraphDatabase.Open(paths.GraphDb(ProjectGuid)))
+        {
+            db.UpsertFileState(Enumerable.Range(0, 600)
+                .Select(i => new FileState { Path = $"Assets/Data/Bulk{i}.asset", MTimeUtcMs = i, Size = 1 })
+                .ToList());
+        }
+
+        var structured = Structured(await McpTestClient.CallTool(_factory, "graph_query",
+            new { fileType = "ScriptableObject", pathPrefix = "Assets/Data", limit = 5000 }));
+
+        Assert.Equal(500, structured.GetProperty("totalReturned").GetInt32());
+        Assert.True(structured.GetProperty("truncated").GetBoolean(),
+            "600 real file_state rows exist but the documented max is 500 - truncated must be true even though the caller asked for 5000");
     }
 
     // ---------------------------------------------------------------- the 6 absorbed searches, enumerated
@@ -624,7 +680,6 @@ public class QueryToolsTests : IClassFixture<WebApplicationFactory<Program>>, ID
         // itself is disposed - which must happen before the recursive delete below, not after.
         _factory.Dispose();
 
-        foreach (var dir in new[] { _appRoot, _projectRoot })
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        TeardownDiagnostics.Delete(_appRoot, _projectRoot);
     }
 }

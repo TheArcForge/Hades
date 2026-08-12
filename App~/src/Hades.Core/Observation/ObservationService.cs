@@ -69,14 +69,34 @@ public sealed class ObservationService(ProjectService projects) : IDisposable
             if (projects.SyncChanges(productGuid) is { } sweep && sweep.AnythingChanged)
                 ProjectSynced?.Invoke(productGuid, sweep);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception)
         {
-            // A project on an unmounted volume, or briefly unreadable. The next sweep retries;
-            // failing here must not take down observation for every other project.
+            // Deliberately unconditional - same stance as, and explicitly citing,
+            // ToolCallTracer.RecordSafely's documented "nothing this method does is allowed to
+            // escape it" rule. A narrower "catch (Exception ex) when (ex is IOException or
+            // UnauthorizedAccessException)" (a project on an unmounted volume, or briefly
+            // unreadable) used to live here, but projects.SyncChanges -> GraphDatabase.Open can
+            // also throw InvalidOperationException (WAL mode refused - another process, e.g.
+            // cloud sync/AV/Time Machine, briefly holds the file) or SqliteException (SQLITE_BUSY),
+            // neither of which that filter covers. This runs on a Timer/watcher background thread,
+            // where an unhandled exception is not "this sync failed" but an unhandled-exception
+            // process crash for every project Hades knows about. The next sweep retries; failing
+            // here must not take down observation for every other project.
         }
         finally
         {
-            _indexGate.Release();
+            // Guards against the known Dispose()/Sync() teardown race: Dispose() can run - and
+            // dispose _indexGate - while this call is still between the Wait() above and this
+            // finally, on another thread (or synchronously, if disposing is itself triggered from
+            // a ProjectSynced handler). Guarding the release (rather than reordering Dispose to
+            // wait out every in-flight Sync first) is the minimal fix: Dispose already tears down
+            // _watchers and _periodicSweep unconditionally without waiting for them either, and
+            // making Dispose block on a sync that can itself wait up to two minutes for the gate
+            // would trade a rare, harmless race for a routine, user-visible stall. Once _indexGate
+            // is disposed there is nothing left to release into - the semaphore it would have
+            // signalled is already gone - so there is nothing to do here but let it pass.
+            try { _indexGate.Release(); }
+            catch (ObjectDisposedException) { }
         }
     }
 

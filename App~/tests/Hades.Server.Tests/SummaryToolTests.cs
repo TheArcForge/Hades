@@ -179,6 +179,31 @@ public class SummaryToolTests : IClassFixture<WebApplicationFactory<Program>>, I
             "600 real file_state rows exist but only 500 were requested - truncated must be true");
     }
 
+    [Fact]
+    public async Task GetRecentlyChanged_AnOverMaxLimit_StillReportsTruncatedHonestly()
+    {
+        // A second, related defect on top of the one above: get_recently_changed passed a raw,
+        // caller-supplied limit + 1 straight to ProjectService.RecentlyChanged without first
+        // clamping it to get_recently_changed's own documented maximum (500) - so a limit ABOVE
+        // 500 skipped that clamp entirely, and truncated was computed against the UNCLAMPED limit
+        // instead of the documented one.
+        var paths = _factory.Services.GetRequiredService<AppPaths>();
+        using (var db = GraphDatabase.Open(paths.GraphDb(ProjectGuid)))
+        {
+            db.UpsertFileState(Enumerable.Range(0, 600)
+                .Select(i => new FileState { Path = $"Assets/Bulk/Bulk{i}.cs", MTimeUtcMs = i, Size = 1 })
+                .ToList());
+        }
+
+        var structured = Structured(await McpTestClient.CallTool(_factory, "get_recently_changed", new { limit = 5000 }));
+
+        // totalReturned must never exceed get_recently_changed's own documented maximum,
+        // regardless of what the caller asked for - the sentinel is for detection, not delivery.
+        Assert.Equal(500, structured.GetProperty("totalReturned").GetInt32());
+        Assert.True(structured.GetProperty("truncated").GetBoolean(),
+            "600 real file_state rows exist but the documented max is 500 - truncated must be true even though the caller asked for 5000");
+    }
+
     // ---------------------------------------------------------------- hades_rebuild_graph
 
     [Fact]

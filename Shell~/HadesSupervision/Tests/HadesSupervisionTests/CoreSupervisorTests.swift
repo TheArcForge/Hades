@@ -274,4 +274,144 @@ struct CoreSupervisorTests {
             #expect(gone)
         }
     }
+
+    // MARK: - Stale "healthy" UI during a real outage (Defect C1)
+
+    @Test("a STABLE core's death moves state off .running immediately, before the respawn completes - the menu bar must not keep showing the old healthy summary through a real outage")
+    func stableDeathMovesOffRunningBeforeRespawnCompletes() async throws {
+        let home = try makeTempHome()
+        let configuration = testConfiguration(
+            home: home,
+            extraEnvironment: ["FAKECORE_LISTEN_DELAY_MS": "300"],
+            backoff: { _ in .milliseconds(30) },
+            pingTimeout: .seconds(5),
+            pingPollInterval: .milliseconds(20),
+            minimumStableUptime: .milliseconds(50)
+        )
+        let supervisor = CoreSupervisor(configuration: configuration)
+
+        try await withSupervisor(supervisor) {
+            await supervisor.start()
+            let cameUp = await waitUntil(timeout: .seconds(5)) {
+                if case .running(.spawned) = await supervisor.state { return true }
+                return false
+            }
+            #expect(cameUp)
+
+            // Comfortably past minimumStableUptime, so the upcoming death resets the attempt
+            // budget and reproduces exactly the "attempt 1 of a fresh cycle" path the defect
+            // lived in - spawnWithRetries only ever set .restarting for attempt > 1 (see that
+            // method's own doc comment). This is also why the pre-existing
+            // restartsSpawnedCoreOnDeath test could never have caught this: it kills immediately,
+            // so the budget is NOT reset and the respawn lands on attempt 2, which already worked.
+            try await Task.sleep(for: .milliseconds(150))
+
+            let firstPID = try #require(readFakeCorePID(home: home))
+            kill(firstPID, SIGKILL)
+
+            // The respawned FakeCore is deliberately held back from ever answering ping for
+            // 300ms, opening a wide, deterministic window in which state must ALREADY be off
+            // .running if CoreSupervisor is fixed - not a narrow race against however fast a real
+            // respawn happens to complete.
+            let sawRestarting = await waitUntil(timeout: .milliseconds(250), interval: .milliseconds(5)) {
+                await supervisor.state == .restarting(attempt: 1)
+            }
+            #expect(sawRestarting, "state must move to .restarting(attempt: 1) immediately on a stable core's death, before the respawn completes - not stay .running for up to pingTimeout")
+
+            let recovered = await waitUntil(timeout: .seconds(5)) {
+                if case .running(.spawned) = await supervisor.state { return true }
+                return false
+            }
+            #expect(recovered, "the fix must not prevent eventual recovery")
+        }
+    }
+
+    // MARK: - Reentrancy: a stale termination handler must never start a second loop (S1)
+
+    @Test("an abandoned, timed-out spawn attempt's termination handler firing after a LATER attempt already succeeded does not start a second concurrent restart loop or leak the abandoned attempt's process")
+    func staleTerminationHandlerDuringRespawnDoesNotStartSecondLoop() async throws {
+        let home = try makeTempHome()
+        let configuration = testConfiguration(
+            home: home,
+            maxRestartAttempts: 5,
+            backoff: { _ in .milliseconds(20) },
+            pingTimeout: .seconds(1),
+            pingPollInterval: .milliseconds(20),
+            minimumStableUptime: .milliseconds(50)
+        )
+        let supervisor = CoreSupervisor(configuration: configuration)
+
+        try await withSupervisor(supervisor) {
+            await supervisor.start()
+            #expect(await supervisor.state == .running(.spawned))
+            try await Task.sleep(for: .milliseconds(150)) // past minimumStableUptime
+
+            // Arms exactly the NEXT FakeCore launch to hang forever instead of answering ping.
+            // This forces spawnOnce's own pingTimeout path to terminate() it - a REAL abandoned
+            // attempt with its own termination handler, which is the actual mechanism S1
+            // identifies (not a simulated stand-in for it): HadesCoreReaper's response to
+            // terminate() (a SIGTERM-notice poll, then a full second of grace before SIGKILL -
+            // see its own killCoreProcessGroup) reliably takes far longer than the NEXT attempt
+            // (spawned immediately afterward, with no such delay) takes to succeed - so that
+            // handler necessarily fires well after `reaperProcess` has already moved on.
+            try Data().write(to: home.appendingPathComponent(".fakecore_hang_once"))
+
+            let firstPID = try #require(readFakeCorePID(home: home))
+            kill(firstPID, SIGKILL)
+
+            let recovered = await waitUntil(timeout: .seconds(8)) {
+                if case .running(.spawned) = await supervisor.state { return true }
+                return false
+            }
+            #expect(recovered, "must recover past the abandoned hung attempt to a genuinely new, healthy core")
+
+            // Give the abandoned attempt's termination handler every real opportunity to fire
+            // late and, without the correlation guard, kick off a spurious second restart loop.
+            try await Task.sleep(for: .seconds(3))
+
+            #expect(await supervisor.state == .running(.spawned), "a stale handler for an abandoned attempt must not knock state off .running after recovery")
+
+            let launches = readLaunchLog(home: home)
+            // Exactly 3: the original stable core, the abandoned hung attempt, and the one
+            // recovery that succeeded. A spurious second loop (the bug) spawns at least one more.
+            #expect(launches.count == 3, "expected exactly 3 FakeCore launches (original, abandoned hung attempt, recovery); saw \(launches.count) - a stale handler likely started a second concurrent restart loop")
+
+            await supervisor.stop()
+            let allDead = await waitUntil(timeout: .seconds(3)) {
+                launches.allSatisfy { !processIsAlive($0) }
+            }
+            #expect(allDead, "no abandoned or orphaned FakeCore process may survive stop() - in production this is exactly an orphan left holding the control port")
+        }
+    }
+
+    // MARK: - Quit races: a late handler must never respawn after stop() (S2/S3)
+
+    @Test("stop() sets a terminal state before terminating the reaper, so a termination handler that fires after stop() has already returned cannot respawn a core as the app quits")
+    func stopThenLateHandlerDoesNotRespawn() async throws {
+        let home = try makeTempHome()
+        let supervisor = CoreSupervisor(configuration: testConfiguration(home: home))
+
+        await supervisor.start()
+        #expect(await supervisor.state == .running(.spawned))
+        let port = try #require(readPortFromDiscoveryFile(home: home))
+
+        await supervisor.stop()
+
+        // Must already be off .running the instant stop() returns - well before the reaper's own
+        // teardown (a SIGTERM-notice poll, then a full second of grace before SIGKILL) can
+        // possibly have let its termination handler fire, proving this is not just a lucky race.
+        #expect(await supervisor.state != .running(.spawned))
+
+        // Give the REAL reaper process every opportunity to actually exit and fire its
+        // (necessarily late, per the timing above) termination handler.
+        let respawned = await waitUntil(timeout: .seconds(3)) {
+            if case .running = await supervisor.state { return true }
+            return false
+        }
+        #expect(!respawned, "no respawn may occur after stop(), however late the reaper's own termination handler fires")
+
+        let launches = readLaunchLog(home: home)
+        #expect(launches.count == 1, "stop() followed by a late handler must not spawn a replacement core")
+        #expect(canBindLoopback(port: port), "no orphan may be left holding the port after stop()")
+    }
 }

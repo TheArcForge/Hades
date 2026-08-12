@@ -88,6 +88,27 @@ public class UnityYamlReaderModificationTests
     }
 
     [Fact]
+    public void TheModificationsSequenceIsNotTreatedAsBareSequenceElements()
+    {
+        // Regression guard for the bare-sequence-element capture path (see
+        // UnityYamlReaderTests.CapturesABareFlowMappingDirectlyUnderABlockSequence): each
+        // m_Modifications entry is a BLOCK mapping ("- target: {...}\n  propertyPath: ...")
+        // wrapping its own keyed flow mappings, never a bare flow mapping itself, so the new
+        // capture branch's Flow-style-only guard must keep routing it through the structured
+        // Modifications path exactly as before - not double it into a loose reference too.
+        var instance = Assert.Single(Read(Instance));
+
+        Assert.Equal(2, instance.Modifications.Count);
+
+        // Exactly the two keyed flow-mapping values this document has always exposed as loose
+        // references (m_TransformParent, m_SourcePrefab) - neither is a bare sequence element,
+        // so the new capture path must add nothing to and remove nothing from this list.
+        Assert.Equal(2, instance.References.Count);
+        Assert.Contains(instance.References, r => r.PropertyPath == "m_Modification.m_TransformParent");
+        Assert.Contains(instance.References, r => r.PropertyPath == "m_SourcePrefab");
+    }
+
+    [Fact]
     public void OrdinaryObjectsHaveNoModifications()
     {
         Assert.Empty(Assert.Single(Read("--- !u!1 &1\nGameObject:\n  m_Name: Plain\n")).Modifications);

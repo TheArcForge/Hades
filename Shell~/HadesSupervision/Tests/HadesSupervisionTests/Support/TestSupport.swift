@@ -42,6 +42,16 @@ func processIsAlive(_ pid: pid_t) -> Bool {
     kill(pid, 0) == 0
 }
 
+/// Reads the append-only launch history `FakeCore` writes to `fakecore_launches.log` - one pid
+/// per line, covering every process ever spawned against this home, including one deliberately
+/// held back by `.fakecore_hang_once` that never gets as far as writing `fakecore.pid`. Lets a
+/// test prove exactly how many FakeCore processes were spawned, not just which one is current.
+func readLaunchLog(home: URL) -> [pid_t] {
+    guard let content = try? String(contentsOf: home.appendingPathComponent("fakecore_launches.log"), encoding: .utf8)
+    else { return [] }
+    return content.split(separator: "\n").compactMap { pid_t($0) }
+}
+
 /// Whether a NEW listener could bind `127.0.0.1:port` right now. This is the most direct possible
 /// check for "does an orphan still hold this port": it does not depend on the control API's HTTP
 /// framing or auth being correct, only on whether the OS still considers the port occupied by a

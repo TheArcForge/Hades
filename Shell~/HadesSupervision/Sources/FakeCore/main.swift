@@ -17,6 +17,38 @@ let home = ProcessInfo.processInfo.environment["HADES_HOME"]
     ?? (NSHomeDirectory() + "/Library/Application Support/Hades")
 try? FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
 
+// Every launch appends its own pid here (one per line) before doing anything else - unlike
+// fakecore.pid below (the CURRENT core's pid, a single value overwritten each launch), this is an
+// append-only history covering EVERY process ever spawned against this home, including one
+// deliberately held back by FAKECORE_HANG_ONCE below that never gets as far as writing
+// fakecore.pid/control.token at all. Exists so a test proving CoreSupervisor never lets an
+// abandoned, timed-out spawn attempt start a second concurrent restart loop (or survive stop())
+// can see every process that was actually spawned, not just the ones that came up successfully.
+let launchLogPath = home + "/fakecore_launches.log"
+if let handle = FileHandle(forWritingAtPath: launchLogPath) {
+    handle.seekToEndOfFile()
+    handle.write(Data("\(ProcessInfo.processInfo.processIdentifier)\n".utf8))
+    handle.closeFile()
+} else {
+    FileManager.default.createFile(
+        atPath: launchLogPath, contents: Data("\(ProcessInfo.processInfo.processIdentifier)\n".utf8))
+}
+
+// Lets a test arm exactly ONE future launch to hang instead of ever answering ping - self-
+// consuming (deleted the instant it is seen) so it affects precisely one launch regardless of
+// exact timing, and deterministically reproduces "a spawn attempt that never answers ping"
+// without racing a real hang. This is what lets CoreSupervisor's own pingTimeout path be the
+// thing that terminates it, producing a REAL abandoned attempt with its own termination handler -
+// the actual mechanism behind that handler firing well after a LATER attempt has already
+// succeeded (see CoreSupervisorTests' own doc comment on why that ordering matters).
+let hangOnceMarkerPath = home + "/.fakecore_hang_once"
+if FileManager.default.fileExists(atPath: hangOnceMarkerPath) {
+    try? FileManager.default.removeItem(atPath: hangOnceMarkerPath)
+    FileHandle.standardError.write(
+        Data("FakeCore: hang-once marker consumed, pid \(getpid()) will never answer ping\n".utf8))
+    dispatchMain() // Never returns: binds nothing, writes neither fakecore.pid nor control.token.
+}
+
 // A fresh token every launch, exactly like the real core - this is what makes CoreSupervisor's
 // "re-read the discovery file after every spawn, never cache a token" requirement observable in
 // tests: a restarted FakeCore answers with a DIFFERENT token than its predecessor.
@@ -114,5 +146,11 @@ listener.stateUpdateHandler = { state in
     }
 }
 
+// Lets a test hold this launch back from ever answering ping for a controlled window - creates a
+// deterministic, non-racy gap in which CoreSupervisor must already have moved off .running if it
+// is going to (Defect C1), rather than racing however fast a real respawn happens to complete.
+if let delayMs = ProcessInfo.processInfo.environment["FAKECORE_LISTEN_DELAY_MS"].flatMap({ Int($0) }) {
+    Thread.sleep(forTimeInterval: TimeInterval(delayMs) / 1000)
+}
 listener.start(queue: .main)
 dispatchMain()

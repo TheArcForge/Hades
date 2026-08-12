@@ -354,6 +354,77 @@ public sealed class LeaseRegistryTests : IDisposable
         Assert.Null(registry.Get(ProjectGuid)); // lease-1 is definitely gone - clear, don't silently adopt a stranger's lease
     }
 
+    // ---------------------------------------------------------------- reconcile races a concurrent RecordHeld/Clear
+
+    [Fact]
+    public async Task ReconcileAsync_ANewLeaseIsRecordedDuringTheRoundTrip_PluginReportsTheOldOneGone_DoesNotClobberTheFreshBelief()
+    {
+        // The race the unconditional Clear() must not win: this reads lease-1 as "believed", awaits
+        // the round trip, and only THEN learns lease-1 is gone - but a concurrent 'begin' (a fresh
+        // acquire, e.g. right after the very reconnect that triggered this reconcile) recorded
+        // lease-2 locally while that request was still in flight. Clearing unconditionally on the
+        // way back out would wipe lease-2 too, even though it has nothing to do with the lease-1
+        // renewal this call actually asked about - reported status would then under-report a
+        // genuinely-held lease until TTL.
+        var (session, unityReads, unityWrites) = await ConnectAsync();
+        var registry = new LeaseRegistry();
+        registry.RecordHeld(ProjectGuid, "lease-1", DateTimeOffset.UtcNow.AddSeconds(30));
+
+        var reconcile = registry.ReconcileAsync(ProjectGuid, session);
+        var line = await unityReads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(JsonRpcRequest.TryParse(line, out var request, out _));
+        Assert.True(request!.Params!.TryGetProperty("leaseId", out var idValue));
+        Assert.Equal("lease-1", idValue!.AsString());
+
+        // The race: a fresh, unrelated lease is recorded locally WHILE the lease-1 renewal is
+        // still awaiting its response.
+        registry.RecordHeld(ProjectGuid, "lease-2", DateTimeOffset.UtcNow.AddSeconds(60));
+
+        // The plugin's answer, arriving late: lease-1 is genuinely gone.
+        await unityWrites.WriteLineAsync(MiniJson.Write(
+            JsonRpcResponse.Success(request.Id!, LeaseResult(false, null, null)).ToJson()));
+
+        await reconcile.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var believed = registry.Get(ProjectGuid);
+        Assert.NotNull(believed);
+        Assert.Equal("lease-2", believed!.LeaseId);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_ANewLeaseIsRecordedDuringTheRoundTrip_PluginConfirmsTheOldOne_DoesNotOverwriteTheFreshBelief()
+    {
+        // The mirror image of the Clear() race: the plugin's answer confirms lease-1 survived, but
+        // by the time it arrives, a concurrent operation has already replaced the local belief with
+        // an unrelated lease-2. RecordHeld-ing lease-1's renewed expiry back in at that point would
+        // silently resurrect a lease this app has independent, fresher information is no longer
+        // current - reporting the WRONG lease as held, not merely a stale one.
+        var (session, unityReads, unityWrites) = await ConnectAsync();
+        var registry = new LeaseRegistry();
+        registry.RecordHeld(ProjectGuid, "lease-1", DateTimeOffset.UtcNow.AddSeconds(30));
+
+        var reconcile = registry.ReconcileAsync(ProjectGuid, session);
+        var line = await unityReads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(JsonRpcRequest.TryParse(line, out var request, out _));
+
+        // The race: lease-1 is cleared and a genuinely different lease-2 is recorded locally WHILE
+        // the lease-1 renewal is still awaiting its response.
+        registry.Clear(ProjectGuid);
+        registry.RecordHeld(ProjectGuid, "lease-2", DateTimeOffset.UtcNow.AddSeconds(60));
+
+        // The plugin's answer, arriving late: lease-1 (the one this call actually asked about) is
+        // confirmed to have survived.
+        var newExpiry = DateTimeOffset.FromUnixTimeMilliseconds(DateTimeOffset.UtcNow.AddSeconds(30).ToUnixTimeMilliseconds());
+        await unityWrites.WriteLineAsync(MiniJson.Write(
+            JsonRpcResponse.Success(request!.Id!, LeaseResult(true, "lease-1", newExpiry)).ToJson()));
+
+        await reconcile.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var believed = registry.Get(ProjectGuid);
+        Assert.NotNull(believed);
+        Assert.Equal("lease-2", believed!.LeaseId); // still lease-2 - the stale lease-1 confirmation must not overwrite it
+    }
+
     public void Dispose()
     {
         _listener.Stop();

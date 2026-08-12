@@ -528,7 +528,26 @@ public static class V12Cleanup
             };
         }
 
-        Directory.Delete(hadesHubDirectory, recursive: true);
+        try
+        {
+            Directory.Delete(hadesHubDirectory, recursive: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A locked file (another process has it open) or a permissions problem can leave this
+            // partway through - possibly with some, but not all, of the directory already gone.
+            // Reported as a normal result, never a bare unhandled exception: Found stays true
+            // (Directory.Delete throwing means the top-level directory itself was NOT removed, so
+            // it necessarily still exists - no extra Directory.Exists re-check needed), which is
+            // exactly what keeps a later dry-run honest about there still being something here.
+            return new HadesHubCleanupResult
+            {
+                Removed = false,
+                Found = true,
+                Message = $"Could not fully remove {what}: {ex.Message} The directory may be "
+                    + "partially removed; check what is still using it and try again.",
+            };
+        }
 
         return new HadesHubCleanupResult
         {
@@ -628,17 +647,19 @@ public static class V12Cleanup
     }
 
     /// <summary>Applies <see cref="ComputeDeletionRange"/> to every span (all computed against the
-    /// original, untouched bytes) and splices them out from rightmost to leftmost, so removing one
-    /// never invalidates the offsets of another still to be applied.</summary>
+    /// original, untouched bytes), coalesces any that overlap (see <see cref="CoalesceOverlapping"/>
+    /// for why two ADJACENT matching entries need this), and splices the result out from rightmost
+    /// to leftmost, so removing one never invalidates the offsets of another still to be
+    /// applied.</summary>
     static byte[] RemoveJsonEntries(byte[] json, List<(int Start, int End)> spans)
     {
-        var deletions = spans
+        var deletions = CoalesceOverlapping(spans
             .Select(s => ComputeDeletionRange(json, s.Start, s.End))
-            .OrderByDescending(d => d.Start)
-            .ToList();
+            .OrderBy(d => d.Start)
+            .ToList());
 
         var result = json;
-        foreach (var (start, end) in deletions)
+        foreach (var (start, end) in deletions.OrderByDescending(d => d.Start))
         {
             var next = new byte[result.Length - (end - start)];
             Array.Copy(result, 0, next, 0, start);
@@ -646,6 +667,36 @@ public static class V12Cleanup
             result = next;
         }
         return result;
+    }
+
+    /// <summary>
+    /// Merges overlapping (or merely touching) deletion ranges into one. Two matching entries
+    /// sitting next to each other in the same array each independently extend to reach the ONE
+    /// comma between them - the first's own <see cref="ComputeDeletionRange"/> range extends
+    /// forward over it (removing its own trailing comma), the second's extends backward over the
+    /// SAME comma (removing its own leading comma) - so their ranges overlap on that shared byte.
+    /// Splicing both independently (each still computed against, and applied to, offsets that
+    /// assume the OTHER splice never happened) double-counts the overlap and eats past wherever
+    /// the two ranges disagree - observed eating the JSON's own closing bracket. Coalescing first
+    /// makes the two-entries-in-a-row case, and any longer run of adjacent matches, splice out as
+    /// ONE contiguous range instead - correct by construction, since a single range can never
+    /// disagree with itself. A no-op whenever ranges do not actually touch, which is every existing
+    /// non-adjacent case - see this method's own callers' tests for proof those stay byte-identical.
+    /// <paramref name="ranges"/> must already be sorted by <c>Start</c>.
+    /// </summary>
+    static List<(int Start, int End)> CoalesceOverlapping(List<(int Start, int End)> ranges)
+    {
+        var merged = new List<(int Start, int End)>();
+
+        foreach (var range in ranges)
+        {
+            if (merged.Count > 0 && range.Start <= merged[^1].End)
+                merged[^1] = (merged[^1].Start, Math.Max(merged[^1].End, range.End));
+            else
+                merged.Add(range);
+        }
+
+        return merged;
     }
 
     /// <summary>

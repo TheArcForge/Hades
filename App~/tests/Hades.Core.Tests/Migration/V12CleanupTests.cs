@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Hades.Core.Migration;
 
 namespace Hades.Core.Tests.Migration;
@@ -618,6 +619,107 @@ public sealed class V12CleanupTests : IDisposable
     }
 
     // ==================================================================
+    // Adjacent duplicate array entries: RemoveJsonEntries/ComputeDeletionRange defect. Two
+    // matching "testables" elements sitting next to each other each independently compute a
+    // deletion range that reaches for the SAME shared comma between them (the first extends
+    // forward over it, the second extends backward over it) - overlapping ranges the splice loop
+    // did not coalesce, so the second splice's own offsets - still measured against the ORIGINAL
+    // bytes, per RemoveJsonEntries' own doc comment - land past where the first splice already
+    // cut, eating into whatever followed (here, the closing bracket). Hand-traced on the minimal
+    // compact case in the bug report: {"t":["X","X"]} -> {"t":[} before the fix.
+    // ==================================================================
+
+    [Fact]
+    public void CleanManifest_AdjacentDuplicateTestablesEntries_Compact_RemovesBothAndStaysValidJson()
+    {
+        WriteManifest("""{"testables":["com.arcforge.hades","com.arcforge.hades"]}""");
+
+        var result = V12Cleanup.CleanManifest(_projectRoot, proceed: true);
+
+        Assert.True(result.Removed);
+        Assert.Equal(2, result.OccurrencesFound);
+
+        var written = ReadManifest();
+        using var doc = JsonDocument.Parse(written); // throws on invalid JSON - the crux of the bug
+        Assert.Equal(0, doc.RootElement.GetProperty("testables").GetArrayLength());
+    }
+
+    [Fact]
+    public void CleanManifest_AdjacentDuplicateTestablesEntries_PrettyPrinted_RemovesBothAndStaysValidJson()
+    {
+        WriteManifest(
+            "{\n" +
+            "  \"testables\": [\n" +
+            "    \"com.arcforge.hades\",\n" +
+            "    \"com.arcforge.hades\"\n" +
+            "  ]\n" +
+            "}\n");
+
+        var result = V12Cleanup.CleanManifest(_projectRoot, proceed: true);
+
+        Assert.True(result.Removed);
+        Assert.Equal(2, result.OccurrencesFound);
+
+        var written = ReadManifest();
+        using var doc = JsonDocument.Parse(written); // throws on invalid JSON - the crux of the bug
+        Assert.Equal(0, doc.RootElement.GetProperty("testables").GetArrayLength());
+
+        // Exact content, not just validity: the two overlapping ranges here happen to still
+        // produce PARSEABLE JSON even uncoalesced ("testables": [ ] on one line, item2's range
+        // eating item1's own trailing comma+newline while item1's range separately eats item2's
+        // leading indentation+item - two wrongs that happen to cancel out on THIS shape) - so only
+        // pinning the correct, coalesced-single-range output actually distinguishes fixed from
+        // buggy here. See the compact-JSON tests above for the shape where the same overlap is
+        // NOT parseable at all.
+        Assert.Equal(
+            "{\n" +
+            "  \"testables\": [\n" +
+            "\n" +
+            "  ]\n" +
+            "}\n",
+            written);
+    }
+
+    [Fact]
+    public void CleanManifest_ThreeAdjacentDuplicateTestablesEntries_RemovesAllAndStaysValidJson()
+    {
+        // Not just a two-way overlap: three-in-a-row means the middle entry's own computed range
+        // overlaps BOTH of its neighbours', so the fix must coalesce a whole run, not just pairs.
+        WriteManifest("""{"testables":["com.arcforge.hades","com.arcforge.hades","com.arcforge.hades"]}""");
+
+        var result = V12Cleanup.CleanManifest(_projectRoot, proceed: true);
+
+        Assert.True(result.Removed);
+        Assert.Equal(3, result.OccurrencesFound);
+
+        var written = ReadManifest();
+        using var doc = JsonDocument.Parse(written);
+        Assert.Equal(0, doc.RootElement.GetProperty("testables").GetArrayLength());
+    }
+
+    [Fact]
+    public void CleanManifest_AdjacentDuplicatesAmongOtherEntries_RemovesOnlyTheDuplicatesLeavesNeighboursIntact()
+    {
+        // The overlap is specifically between the two ADJACENT hades entries; a non-adjacent
+        // neighbour on either side must survive untouched, proving the coalesce is scoped to the
+        // genuinely-overlapping pair and does not over-reach into unrelated entries.
+        WriteManifest("""{"testables":["com.example.before","com.arcforge.hades","com.arcforge.hades","com.example.after"]}""");
+
+        var result = V12Cleanup.CleanManifest(_projectRoot, proceed: true);
+
+        Assert.True(result.Removed);
+        Assert.Equal(2, result.OccurrencesFound);
+
+        var written = ReadManifest();
+        using var doc = JsonDocument.Parse(written);
+        var remaining = doc.RootElement.GetProperty("testables").EnumerateArray().Select(e => e.GetString()).ToList();
+        Assert.Equal(2, remaining.Count);
+        Assert.Contains("com.example.before", remaining);
+        Assert.Contains("com.example.after", remaining);
+        Assert.DoesNotContain("com.arcforge.hades", remaining);
+    }
+
+    // ==================================================================
     // .mcp.json: the generated project-level config - removed wholesale
     // ==================================================================
 
@@ -930,6 +1032,56 @@ public sealed class V12CleanupTests : IDisposable
 
         Assert.True(result.Removed);
         Assert.False(Directory.Exists(_hadesHubScratchDir));
+    }
+
+    // ---- Directory.Delete can throw (a locked file, possibly after partially deleting the rest) -
+    // that must come back as a normal, honest result, never a bare unhandled exception ----
+
+    [Fact]
+    public void CleanHadesHub_ADirectoryEntryCannotBeDeleted_ReturnsAFailureResultInsteadOfThrowing()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            // File.SetUnixFileMode below is POSIX-only. This suite's CI runs ubuntu-latest and
+            // macos-latest only (see .github/workflows/ci.yml) - never Windows - so reproducing
+            // "Directory.Delete fails partway through" via denied write permission on a directory
+            // (the portable way; an open file handle alone does not block deletion on macOS/Linux
+            // the way it does on Windows) is this test's job everywhere it actually runs.
+            return;
+        }
+
+        WriteHadesHubFixture();
+        var lockedDir = Path.Combine(_hadesHubScratchDir, "pending");
+        Directory.CreateDirectory(lockedDir);
+        File.WriteAllText(Path.Combine(lockedDir, "stuck.json"), "{}");
+
+        // POSIX requires WRITE permission on a directory to delete an entry inside it (unlike
+        // Windows, an open file handle alone does not block deletion on macOS/Linux) - denying
+        // write on "pending" makes the recursive delete fail partway through without depending on
+        // any Windows-only "file in use" semantics.
+        var originalMode = File.GetUnixFileMode(lockedDir);
+        File.SetUnixFileMode(lockedDir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        try
+        {
+            var result = V12Cleanup.CleanHadesHub(_hadesHubScratchDir, proceed: true);
+
+            Assert.False(result.Removed);
+            Assert.True(result.Found); // the directory could not be fully removed, so it is still there
+            Assert.False(string.IsNullOrWhiteSpace(result.Message));
+
+            // The next dry-run stays honest: Found still reflects reality rather than a cached
+            // "it's gone now" belief from the failed attempt.
+            var again = V12Cleanup.CleanHadesHub(_hadesHubScratchDir, proceed: false);
+            Assert.True(again.Found);
+        }
+        finally
+        {
+            // Restore permissions so this test's own teardown (Dispose deletes _hadesHubScratchDir)
+            // does not itself fail for the identical reason this test just proved CleanHadesHub
+            // must handle.
+            File.SetUnixFileMode(lockedDir, originalMode);
+        }
     }
 
     // ---- Found: this target has no companion V12Detector scan (it is global, not per-project -

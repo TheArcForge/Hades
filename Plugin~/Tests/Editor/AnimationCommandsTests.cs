@@ -372,6 +372,36 @@ namespace Hades.Tests.Editor
         }
 
         [Test]
+        public void CreateController_ParameterWithNonNumericDefault_RecordsAnErrorInsteadOfThrowing_NoOrphanedAsset()
+        {
+            // Bug: AddParameter's RequireNumber threw straight past CreateController's own
+            // per-entry error handling (the bad-type/missing-name checks beside it already
+            // degrade to an errors-array entry rather than throwing) - by the time it ran, the
+            // .controller asset was already created on disk (CreateAnimatorControllerAtPath,
+            // above), so the whole call faulting orphaned it: a retry at the same path then hits
+            // "already exists" (CreateController_AlreadyExists_ThrowsActionableError, below).
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var path = ScratchDir + "/BadDefault.controller";
+            var parameters = JsonValue.NewArray().Add(
+                JsonValue.NewObject().SetProperty("name", JsonValue.String("Speed")).SetProperty("type", JsonValue.String("Float"))
+                    .SetProperty("default", JsonValue.String("not-a-number")));
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String(path)).SetProperty("parameters", parameters);
+
+            var result = CommandTable.Dispatch(gate, Request("animation.create_controller", @params));
+
+            Assert.IsTrue(result.TryGetProperty("errors", out var errors));
+            Assert.AreEqual(1, errors.Items.Count);
+            StringAssert.Contains("Speed", errors.Items[0].AsString());
+
+            var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(path);
+            Assert.IsNotNull(controller, "the controller asset must still be usable, with the bad parameter degraded rather than the whole call thrown away and the asset orphaned");
+            Assert.AreEqual(1, controller.parameters.Length);
+            Assert.AreEqual("Speed", controller.parameters[0].name);
+        }
+
+        [Test]
         public void CreateController_PathNotEndingInController_ThrowsActionableError()
         {
             using var pump = new MainThreadPump();
@@ -495,6 +525,41 @@ namespace Hades.Tests.Editor
 
                 AssertNeverTouchedLease(fake, gate);
             }
+        }
+
+        [Test]
+        public void EditController_ParameterWithNonNumericDefault_RecordsAnErrorAndStillAppliesTheOtherOperations()
+        {
+            // Same bug as CreateController_ParameterWithNonNumericDefault_..., one call further:
+            // DoEditController's own addParameters loop had no per-entry error handling either, so
+            // RequireNumber throwing here aborted the WHOLE batch - a later, perfectly valid entry
+            // (Health, added second here) never got applied, and the removals/additions already
+            // computed before the throw were lost along with it.
+            var path = ScratchDir + "/EditBadDefault.controller";
+            var controller = AnimatorController.CreateAnimatorControllerAtPath(path);
+            AssetDatabase.SaveAssets();
+
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var addParameters = JsonValue.NewArray()
+                .Add(JsonValue.NewObject().SetProperty("name", JsonValue.String("Speed")).SetProperty("type", JsonValue.String("Float"))
+                    .SetProperty("default", JsonValue.String("not-a-number")))
+                .Add(JsonValue.NewObject().SetProperty("name", JsonValue.String("Health")).SetProperty("type", JsonValue.String("Int")));
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String(path)).SetProperty("addParameters", addParameters);
+
+            var result = CommandTable.Dispatch(gate, Request("animation.edit_controller", @params));
+
+            Assert.IsTrue(result.TryGetProperty("errors", out var errors));
+            Assert.AreEqual(1, errors.Items.Count);
+
+            Assert.IsTrue(result.TryGetProperty("added", out var added));
+            var addedStrings = added.Items.Select(v => v.AsString()).ToList();
+            Assert.Contains("parameter:Speed", addedStrings);
+            Assert.Contains("parameter:Health", addedStrings); // proves the batch did not abort after the bad entry
+
+            Assert.IsTrue(controller.parameters.Any(p => p.name == "Speed"));
+            Assert.IsTrue(controller.parameters.Any(p => p.name == "Health"));
         }
 
         [Test]

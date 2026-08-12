@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Hades.Core;
+using Hades.Core.Graph;
 using Hades.Core.Storage;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -71,6 +72,37 @@ public class ToolCallTests : IClassFixture<WebApplicationFactory<Program>>, IDis
 
         Assert.Equal(1, structured.GetProperty("totalReturned").GetInt32());
         Assert.True(structured.GetProperty("truncated").GetBoolean());
+    }
+
+    [Fact]
+    public async Task SearchByName_AnOverMaxLimit_StillReportsTruncatedHonestly()
+    {
+        // Defect: search_by_name passed a raw, caller-supplied limit + 1 straight to
+        // ProjectService.Search without first clamping it to search_by_name's own documented
+        // maximum (200) - so a limit ABOVE 200 (e.g. an agent ignoring, or not knowing, the
+        // documented range) skipped that clamp entirely, and truncated was computed against the
+        // UNCLAMPED limit instead. 300 real matches (over the documented max of 200) are seeded
+        // directly into this test's already-adopted project's graph database, bypassing the
+        // (unrelated, already-proven-correct) Roslyn indexer, since this is pure limit/clamp
+        // arithmetic, not an indexing question - same technique as QueryToolsTests'/
+        // SummaryToolTests' own "at the documented max" truncation tests for graph_query/
+        // get_recently_changed.
+        var paths = _factory.Services.GetRequiredService<AppPaths>();
+        using (var db = GraphDatabase.Open(paths.GraphDb("aaaabbbbccccddddeeeeffff00001111")))
+        {
+            db.UpsertNodes(Enumerable.Range(0, 300)
+                .Select(i => new GraphNode { Kind = "Class", Name = $"Bulk{i}", Path = $"Assets/Bulk/Bulk{i}.cs" })
+                .ToList());
+        }
+
+        var structured = Structured(await McpTestClient.CallTool(
+            _factory, "search_by_name", new { namePattern = "Bulk", limit = 10000 }));
+
+        // totalReturned must never exceed search_by_name's own documented maximum, regardless of
+        // what the caller asked for - the sentinel is for detection, not delivery.
+        Assert.Equal(200, structured.GetProperty("totalReturned").GetInt32());
+        Assert.True(structured.GetProperty("truncated").GetBoolean(),
+            "300 real matches exist but the documented max is 200 - truncated must be true even though the caller asked for 10000");
     }
 
     [Fact]
@@ -201,7 +233,6 @@ public class ToolCallTests : IClassFixture<WebApplicationFactory<Program>>, IDis
         // the recursive delete below.
         _factory.Dispose();
 
-        foreach (var dir in new[] { _appRoot, _projectRoot })
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        TeardownDiagnostics.Delete(_appRoot, _projectRoot);
     }
 }

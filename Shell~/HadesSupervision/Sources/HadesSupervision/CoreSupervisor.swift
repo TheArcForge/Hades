@@ -208,6 +208,28 @@ public actor CoreSupervisor {
         guard ownership == .spawned, let process = reaperProcess, process.isRunning else { return }
         isStopping = true
         defer { isStopping = false }
+
+        // Set BEFORE terminate() below, synchronously, with no `await` in between - this closes
+        // S2 (a late-firing termination handler respawning a core as the app quits). `isStopping`
+        // alone was not enough: it resets back to `false` in the `defer` above the instant this
+        // method returns, but the reaper's own teardown (a SIGTERM-notice poll, then a full
+        // second of grace before SIGKILL - see HadesCoreReaper's own killCoreProcessGroup) can
+        // easily outlast that, so a handler firing after stop() already returned would sail past
+        // an already-reset isStopping. `state` leaving `.running` makes handleCoreProcessExit's
+        // own state guard reject that handler regardless of timing; clearing `reaperProcess` also
+        // makes its identity guard (see that method's own comment) reject it even if `state`
+        // somehow read `.running` again by then (e.g. a subsequent `start()`). `ownership` is
+        // cleared too, matching what `refresh()` does when it notices an adopted core is gone -
+        // `currentOwnership` should not keep reporting `.spawned` for a core this call just told
+        // to die.
+        //
+        // Never runs for an ADOPTED core: the guard above already returned before any of this, so
+        // adopt-never-kill still holds exactly as before - this method still does not touch
+        // `ownership`/`state`/`reaperProcess` at all when `ownership == .adopted`.
+        state = .notStarted
+        ownership = nil
+        reaperProcess = nil
+
         process.terminate() // SIGTERM to the reaper; it kills the core's process group, then exits.
         await waitUntilExit(process, timeout: .seconds(5))
     }
@@ -254,8 +276,9 @@ public actor CoreSupervisor {
         if let home = configuration.home { environment["HADES_HOME"] = home }
         process.environment = environment
 
-        process.terminationHandler = { [weak self] _ in
-            Task { await self?.handleCoreProcessExit() }
+        process.terminationHandler = { [weak self] terminatedProcess in
+            let exitedPID = terminatedProcess.processIdentifier
+            Task { await self?.handleCoreProcessExit(exitedPID: exitedPID) }
         }
 
         do {
@@ -290,10 +313,16 @@ public actor CoreSupervisor {
         return false
     }
 
-    /// Fires when the reaper process (and thus, by construction, the core underneath it - see
-    /// `HadesCoreReaper`) exits, for any reason, at any point after a successful spawn. Ignored
-    /// while `stop()` is deliberately causing exactly this exit, and never wired up at all for an
-    /// adopted core (which has no `reaperProcess`).
+    /// Fires when a reaper process this supervisor itself spawned exits, for any reason, at any
+    /// point after `process.run()` succeeded - including one `spawnOnce()` has already abandoned
+    /// (see its own `process.terminate()` on the ping-timeout path), since a termination handler
+    /// is registered before that fate is known. `exitedPID` says who this firing is actually
+    /// about; the very first guard below is what makes a stale firing for an already-abandoned
+    /// attempt harmless - see that guard's own comment for why the `case .running = state` guard
+    /// alone cannot substitute for it. Ignored while `stop()` is deliberately causing exactly this
+    /// exit (`isStopping`, and - after `stop()`'s own fix - `state`/`reaperProcess` too, see that
+    /// method's own doc comment), and never wired up at all for an adopted core (which has no
+    /// `reaperProcess`).
     ///
     /// Whether this death gets a fresh attempt budget depends on how long the core had been
     /// `.running` - see `attemptsUsedInCurrentCycle`'s own doc comment for the bug this closes.
@@ -304,16 +333,37 @@ public actor CoreSupervisor {
     /// what stops any OTHER fast-crash cause from reproducing the same runaway - never proved
     /// itself, so it keeps consuming the SAME budget `spawnWithRetries()` is already working
     /// through, rather than resetting it back to zero.
-    private func handleCoreProcessExit() async {
+    private func handleCoreProcessExit(exitedPID: pid_t) async {
         guard !isStopping, ownership == .spawned else { return }
+
+        // The real reentrancy guard (S1) - proven necessary, not just belt-and-suspenders
+        // alongside the state check below. A termination handler is registered on EVERY spawn
+        // attempt, including ones `spawnOnce()` itself abandons after a ping timeout. Because
+        // `HadesCoreReaper`'s response to that `terminate()` call (a SIGTERM-notice poll, then a
+        // full second of grace before SIGKILL - see its own `killCoreProcessGroup`) can easily
+        // outlast the NEXT attempt succeeding, THIS firing can arrive well after `reaperProcess`
+        // has already moved on to a newer, healthy attempt - at which point `state` legitimately
+        // reads `.running` again, for that OTHER process. The state guard alone cannot tell "the
+        // current core just died" apart from "an abandoned attempt finally finished dying" in
+        // that case; only identity can, which is exactly what this compares.
+        guard let reaperProcess, reaperProcess.processIdentifier == exitedPID else { return }
         guard case .running = state else { return } // an in-progress spawnOnce() handles its own failure path
 
+        // Moves state off .running BEFORE any respawn attempt - synchronously, with no `await`
+        // between here and the assignment, so there is no window in which a poller (or another
+        // exit event) can observe a stale `.running(.spawned)` while a real outage is in
+        // progress. This is Defect C1's actual fix: the OLD code left this to spawnWithRetries's
+        // own `attempt > 1` check, which never fires for attempt 1 of a fresh cycle - exactly the
+        // case a STABLE core's death always hits, since the budget resets to zero below whenever
+        // the death already proved itself stable. `attemptsUsedInCurrentCycle + 1` is the attempt
+        // spawnWithRetries is about to make next, so the number shown here is never off by one.
         let stableEnough = lastSpawnBecameRunningAt.map {
             ContinuousClock.now - $0 >= configuration.minimumStableUptime
         } ?? false
         if stableEnough {
             attemptsUsedInCurrentCycle = 0
         }
+        state = .restarting(attempt: attemptsUsedInCurrentCycle + 1)
 
         await spawnWithRetries()
     }

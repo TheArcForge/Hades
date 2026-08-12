@@ -1,6 +1,7 @@
 using Hades.Core;
 using Hades.Core.Observation;
 using Hades.Core.Storage;
+using Microsoft.Data.Sqlite;
 
 namespace Hades.Core.Tests.Observation;
 
@@ -90,6 +91,54 @@ public class ObservationServiceTests : IDisposable
         observation.Start();
 
         Assert.Equal(0, synced);
+    }
+
+    [Fact]
+    public void ASyncFailureOutsideTheNarrowIoFilterIsSwallowedNotFatal()
+    {
+        // GraphDatabase.Open throws InvalidOperationException (WAL refused) or SqliteException
+        // (SQLITE_BUSY) for a locked/refusing database - neither is an IOException or
+        // UnauthorizedAccessException, so the pre-fix catch filter let it straight through, and
+        // on a Timer/watcher background thread that is an unhandled exception -> process death
+        // for every project, not just this one. Replacing the already-created graph.db with a
+        // directory reproduces an exception in that same uncaught family (SqliteException,
+        // "unable to open database file") deterministically, without depending on a real
+        // file-locking race. ClearAllPools is required, not decorative: Microsoft.Data.Sqlite
+        // pools native connections by connection string, so without it the next Open() would
+        // silently hand back a pooled handle from MakeProject's own earlier, successful open of
+        // this exact path instead of genuinely re-opening the now-corrupted file.
+        var service = MakeProject();
+        var dbPath = new AppPaths(_appRoot).GraphDb(Guid);
+        File.Delete(dbPath);
+        Directory.CreateDirectory(dbPath);
+        SqliteConnection.ClearAllPools();
+
+        using var observation = new ObservationService(service);
+
+        var ex = Record.Exception(() => observation.Sync(Guid));
+
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void SyncsFinallyReleaseSurvivesADisposeThatRacedInDuringProjectSynced()
+    {
+        // The production face of the known teardown race: Dispose() (main thread, or another
+        // background callback) disposes _indexGate while a Sync() call on a Timer/watcher thread
+        // is still between _indexGate.Wait() and its own finally. Firing Dispose() synchronously
+        // from inside the ProjectSynced handler reproduces the identical ordering deterministically
+        // - by the time Invoke() returns and Sync() falls through to `finally { _indexGate.Release(); }`,
+        // _indexGate has already been disposed, exactly as a genuinely racing Dispose() on another
+        // thread would leave it - with no dependence on real thread timing.
+        var service = MakeProject();
+        var observation = new ObservationService(service);
+        Write("Assets/TriggersASync.cs", "public class TriggersASync { }");
+
+        observation.ProjectSynced += (_, _) => observation.Dispose();
+
+        var ex = Record.Exception(() => observation.Sync(Guid));
+
+        Assert.Null(ex);
     }
 
     [Fact]

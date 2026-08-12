@@ -342,28 +342,44 @@ namespace Hades.Tools
             var defaultValue = JsonParams.OptionalValue(paramDef, "default");
             if (defaultValue != null && defaultValue.Kind != JsonValueKind.Null)
             {
-                // AnimatorController.parameters returns a FRESH COPY of the array on every read -
-                // measured directly: indexing into controller.parameters[i] = param (the old
-                // package's own pattern) silently discards the write, because the array that got
-                // mutated is not the same instance the controller holds. The whole array must be
-                // read once, mutated, and written back through the setter for it to stick.
-                var allParams = controller.parameters;
-                var index = allParams.Length - 1;
-                var param = allParams[index];
-                switch (paramType)
+                try
                 {
-                    case AnimatorControllerParameterType.Float:
-                        param.defaultFloat = (float)RequireNumber(defaultValue, name);
-                        break;
-                    case AnimatorControllerParameterType.Int:
-                        param.defaultInt = (int)RequireNumber(defaultValue, name);
-                        break;
-                    case AnimatorControllerParameterType.Bool:
-                        param.defaultBool = defaultValue.Kind == JsonValueKind.Boolean && defaultValue.AsBoolean();
-                        break;
+                    // AnimatorController.parameters returns a FRESH COPY of the array on every read -
+                    // measured directly: indexing into controller.parameters[i] = param (the old
+                    // package's own pattern) silently discards the write, because the array that got
+                    // mutated is not the same instance the controller holds. The whole array must be
+                    // read once, mutated, and written back through the setter for it to stick.
+                    var allParams = controller.parameters;
+                    var index = allParams.Length - 1;
+                    var param = allParams[index];
+                    switch (paramType)
+                    {
+                        case AnimatorControllerParameterType.Float:
+                            param.defaultFloat = (float)RequireNumber(defaultValue, name);
+                            break;
+                        case AnimatorControllerParameterType.Int:
+                            param.defaultInt = (int)RequireNumber(defaultValue, name);
+                            break;
+                        case AnimatorControllerParameterType.Bool:
+                            param.defaultBool = defaultValue.Kind == JsonValueKind.Boolean && defaultValue.AsBoolean();
+                            break;
+                    }
+                    allParams[index] = param;
+                    controller.parameters = allParams;
                 }
-                allParams[index] = param;
-                controller.parameters = allParams;
+                catch (ArgumentException ex)
+                {
+                    // RequireNumber throws for a non-numeric 'default' on a Float/Int parameter.
+                    // The parameter itself is already added above (with its type's own zero-value
+                    // default) - only ITS requested default failed - so this degrades exactly like
+                    // the bad-type/missing-name checks above (record into errors, keep going)
+                    // rather than throwing past CreateController's/DoEditController's own per-entry
+                    // handling: by the time this runs, CreateController has already created the
+                    // .controller asset on disk, and DoEditController has already applied earlier
+                    // removals/additions, so letting this escape would abort the whole batch and,
+                    // for CreateController, orphan the asset it already created.
+                    errors.Add(JsonValue.String(ex.Message));
+                }
             }
 
             return true;

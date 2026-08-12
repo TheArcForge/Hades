@@ -355,7 +355,6 @@ public class MemoryToolsTests : IClassFixture<WebApplicationFactory<Program>>, I
         // the first full-suite run during this fix's own verification.
         _factory.Dispose();
 
-        foreach (var dir in new[] { _appRoot, _projectRoot })
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        TeardownDiagnostics.Delete(_appRoot, _projectRoot);
     }
 }

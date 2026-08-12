@@ -172,6 +172,15 @@ public sealed class QueryTools(ProjectService projects)
         [Description("Maximum nodes to return (1-500, default 100)")] int limit = 100,
         [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
     {
+        // Clamped to graph_query's own documented maximum BEFORE either branch below adds its "+1"
+        // sentinel - see InspectTool.FindUnsetReferences' identical clampedLimit pattern. Without
+        // this, a caller-supplied limit above 500 skips the clamp entirely, and 'truncated' - built
+        // from the UNCLAMPED limit - can go right on reporting false while real matches beyond the
+        // documented max are silently cut (or, in the fileType branch, delivered utterly unbounded:
+        // FindAssetsByFileState's own ceiling is a 20,000-row constant unrelated to graph_query's
+        // documented range).
+        var clampedLimit = Math.Clamp(limit, 1, 500);
+
         if (!string.IsNullOrWhiteSpace(kind) && !string.IsNullOrWhiteSpace(kindPattern))
         {
             throw new McpException(
@@ -204,8 +213,8 @@ public sealed class QueryTools(ProjectService projects)
             }
 
             var fileTypeProject = ToolSupport.ResolveProject(projects, project);
-            var assets = projects.FindAssetsByFileState(fileTypeProject, fileType, pathPrefix, limit + 1);
-            return BuildFileTypeResult(assets, limit);
+            var assets = projects.FindAssetsByFileState(fileTypeProject, fileType, pathPrefix, clampedLimit + 1);
+            return BuildFileTypeResult(assets, clampedLimit);
         }
 
         if (string.IsNullOrWhiteSpace(kindPattern))
@@ -230,10 +239,10 @@ public sealed class QueryTools(ProjectService projects)
         var productGuid = ToolSupport.ResolveProject(projects, project);
 
         var found = projects.QueryGraph(productGuid, kind, namePattern, pathPrefix, edgeKind,
-            edgeDirection.ToLowerInvariant(), limit + 1, edgeTargetPath, edgeTargetNamePattern, edgeAbsent,
+            edgeDirection.ToLowerInvariant(), clampedLimit + 1, edgeTargetPath, edgeTargetNamePattern, edgeAbsent,
             kindPattern, edgeTargetKind);
 
-        return BuildResult(found, limit);
+        return BuildResult(found, clampedLimit);
     }
 
     static void ValidateFilters(string? kind, string? namePattern, string? pathPrefix, string? edgeKind, string toolName)

@@ -115,12 +115,20 @@ public sealed class HadesTools(ProjectService projects)
 
         var productGuid = ToolSupport.ResolveProject(projects, project);
 
+        // Clamped to this tool's own documented maximum BEFORE the "+1" below - see
+        // InspectTool.FindUnsetReferences' identical clampedLimit pattern. Without this, a
+        // caller-supplied limit above 200 skips the clamp entirely: the raw limit + 1 is what
+        // reaches the database's own shared ceiling (GraphDatabase.MaxSearchFetch), and
+        // 'truncated' below - computed against the UNCLAMPED limit - can go right on reporting
+        // false while thousands of real matches are silently cut.
+        var clampedLimit = Math.Clamp(limit, 1, 200);
+
         // One more than the cap, so truncation is reported honestly rather than the agent
         // silently believing it has seen everything.
-        var found = projects.Search(productGuid, namePattern, kind, limit + 1);
-        var truncated = found.Count > limit;
+        var found = projects.Search(productGuid, namePattern, kind, clampedLimit + 1);
+        var truncated = found.Count > clampedLimit;
 
-        var hits = found.Take(limit).Select(node => new SearchHit
+        var hits = found.Take(clampedLimit).Select(node => new SearchHit
         {
             Name = node.Name,
             Kind = node.Kind,

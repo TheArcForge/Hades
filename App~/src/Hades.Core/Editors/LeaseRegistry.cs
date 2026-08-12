@@ -98,6 +98,50 @@ public sealed class LeaseRegistry(Func<DateTimeOffset>? utcNow = null)
         lock (_gate) { _leases.Remove(productGuid); }
     }
 
+    /// <summary>
+    /// Compare-and-swap clear, for a caller (<see cref="ReconcileAsync"/>,
+    /// <c>EditorsEndpoint.ReleaseAsync</c>) that read a belief, then awaited a round trip about
+    /// THAT specific lease id before deciding to clear. Removes the entry only if it is still
+    /// exactly <paramref name="expectedLeaseId"/> - the id observed before the await. A belief
+    /// that has since moved on (a concurrent <see cref="RecordHeld"/> for a different lease, e.g.
+    /// a fresh 'begin' landing mid-round-trip, or an intervening <see cref="Clear"/>) is left
+    /// untouched: it is not the belief this caller resolved anything about, so an unconditional
+    /// <see cref="Clear"/> here would silently wipe a genuinely-held lease this call never asked
+    /// about. A no-op, like <see cref="Clear"/>, for a project with nothing recorded.
+    /// </summary>
+    public void ClearIfCurrent(string productGuid, string expectedLeaseId)
+    {
+        if (string.IsNullOrEmpty(productGuid)) return;
+
+        lock (_gate)
+        {
+            if (_leases.TryGetValue(productGuid, out var current) && current.LeaseId == expectedLeaseId)
+                _leases.Remove(productGuid);
+        }
+    }
+
+    /// <summary>
+    /// Compare-and-swap renewal, for <see cref="ReconcileAsync"/>'s own success path: applies the
+    /// SAME "still the belief I started with?" guard <see cref="ClearIfCurrent"/> uses, but
+    /// extends the expiry (preserving <see cref="LeaseStatus.AcquiredAtUtc"/>, exactly like
+    /// <see cref="RecordHeld"/> renewing the same lease id) instead of removing the entry. A
+    /// belief that has since moved on to a different lease id is left untouched, for the identical
+    /// reason <see cref="ClearIfCurrent"/> leaves one untouched: a stale, late-arriving
+    /// confirmation for <paramref name="expectedLeaseId"/> must not overwrite - and so silently
+    /// resurrect - a belief that is no longer about that lease at all.
+    /// </summary>
+    public void RecordHeldIfCurrent(string productGuid, string expectedLeaseId, DateTimeOffset expiresAtUtc)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(productGuid);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedLeaseId);
+
+        lock (_gate)
+        {
+            if (_leases.TryGetValue(productGuid, out var current) && current.LeaseId == expectedLeaseId)
+                _leases[productGuid] = current with { ExpiresAtUtc = expiresAtUtc };
+        }
+    }
+
     /// <summary>The believed-held lease for one project, or null when this app believes nothing
     /// is held there - INCLUDING a belief whose own recorded <see cref="LeaseStatus.ExpiresAtUtc"/>
     /// has already passed (see class doc comment's "went stale with no reconnect" paragraph):
@@ -155,6 +199,15 @@ public sealed class LeaseRegistry(Func<DateTimeOffset>? utcNow = null)
     /// attempt is not evidence either way, so the safest thing this method can do is leave the
     /// existing belief untouched and let the caller decide whether to retry (e.g. on the next
     /// successful reconnect), rather than guessing.
+    ///
+    /// <paramref name="believed"/> is read here, then <see cref="EditorSession.RenewLeaseAsync"/>
+    /// is awaited - a real round trip a concurrent <see cref="RecordHeld"/> (a fresh 'begin' on
+    /// this same, just-reconnected session) can land in the middle of. Confirming or clearing
+    /// through <see cref="RecordHeldIfCurrent"/>/<see cref="ClearIfCurrent"/> rather than
+    /// <see cref="RecordHeld"/>/<see cref="Clear"/> is what makes this call about
+    /// <paramref name="believed"/>'s lease id specifically, not "whatever is currently recorded for
+    /// <paramref name="productGuid"/> by the time this happens to return" - a belief that moved on
+    /// during the await is left exactly as the concurrent caller left it.
     /// </summary>
     public async Task ReconcileAsync(string productGuid, EditorSession session, CancellationToken cancellationToken = default)
     {
@@ -168,11 +221,11 @@ public sealed class LeaseRegistry(Func<DateTimeOffset>? utcNow = null)
 
         if (outcome.Success && outcome.LeaseId == believed.LeaseId && outcome.ExpiresAtUtc is { } expiresAtUtc)
         {
-            RecordHeld(productGuid, believed.LeaseId, expiresAtUtc);
+            RecordHeldIfCurrent(productGuid, believed.LeaseId, expiresAtUtc);
         }
         else
         {
-            Clear(productGuid);
+            ClearIfCurrent(productGuid, believed.LeaseId);
         }
     }
 

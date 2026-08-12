@@ -136,10 +136,18 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
 
         var productGuid = ToolSupport.ResolveProject(projects, project);
 
-        var found = projects.RecentlyChanged(productGuid, sinceParsed, limit + 1);
-        var truncated = found.Count > limit;
+        // Clamped to this tool's own documented maximum BEFORE the "+1" below - see
+        // InspectTool.FindUnsetReferences' identical clampedLimit pattern. Without this, a
+        // caller-supplied limit above 500 skips the clamp entirely: the raw limit + 1 is what
+        // reaches the database's own shared ceiling (GraphDatabase.MaxSearchFetch), and
+        // 'truncated' below - computed against the UNCLAMPED limit - can go right on reporting
+        // false while real matches beyond the documented max are silently cut.
+        var clampedLimit = Math.Clamp(limit, 1, 500);
 
-        var hits = found.Take(limit).Select(f => new RecentlyChangedHit
+        var found = projects.RecentlyChanged(productGuid, sinceParsed, clampedLimit + 1);
+        var truncated = found.Count > clampedLimit;
+
+        var hits = found.Take(clampedLimit).Select(f => new RecentlyChangedHit
         {
             Path = f.Path,
             MtimeUtc = DateTimeOffset.FromUnixTimeMilliseconds(f.MTimeUtcMs),

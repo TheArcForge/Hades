@@ -232,10 +232,14 @@ public static class EditorsEndpoint
 
         var success = result.TryGetProperty("success", out var s) && s!.Kind == WireKind.Boolean && s.AsBoolean();
 
-        // Whichever branch below: this app's belief about THIS specific lease id is no longer
-        // trustworthy either way (released, or proven to be someone else's lease now) - see this
-        // class's own doc comment on the three idempotency layers.
-        leases.Clear(productGuid);
+        // Whichever branch below: this app's belief about believed.LeaseId specifically is no
+        // longer trustworthy either way (released, or proven to be someone else's lease now) - see
+        // this class's own doc comment on the three idempotency layers. ClearIfCurrent, not Clear:
+        // the "lease.release" round trip just awaited is real network activity a concurrent 'begin'
+        // can land in the middle of (see LeaseRegistry.ReconcileAsync's own doc comment for the
+        // identical race one layer down) - clearing unconditionally would wipe a genuinely fresh
+        // lease this call never asked about, not merely the stale one it did.
+        leases.ClearIfCurrent(productGuid, believed.LeaseId);
 
         if (!success)
         {

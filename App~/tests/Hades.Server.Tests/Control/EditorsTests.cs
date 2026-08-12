@@ -427,6 +427,45 @@ public sealed class EditorsReleaseTests : IDisposable
         Assert.Null(_leases.Get(ProjectGuid));
     }
 
+    // ---------------------------------------------------------------- races a concurrent RecordHeld
+
+    [Fact]
+    public async Task Release_ANewLeaseIsRecordedDuringTheRoundTrip_DoesNotClobberTheFreshBelief()
+    {
+        // Same race as LeaseRegistry.ReconcileAsync (see LeaseRegistryTests.cs's own tests for the
+        // identical shape one layer down): this reads the believed lease, awaits the wire round
+        // trip to release THAT lease specifically, and only then clears - but a concurrent 'begin'
+        // can record a genuinely different, fresh lease while that round trip is still in flight.
+        // Unconditionally clearing on the way back out would wipe the fresh belief too, even though
+        // it has nothing to do with the stale lease this call actually asked the plugin to release.
+        _leases.RecordHeld(ProjectGuid, "hades-script-editing", DateTimeOffset.UtcNow.AddSeconds(30));
+        var (reads, writes) = await RegisterFakeEditorAsync();
+
+        var releaseTask = EditorsEndpoint.ReleaseAsync(_projects, _leases, _editorProxy, ProjectGuid);
+
+        // EditorProxy.SendCommandAsync's own two-step cadence: answer the busy probe first.
+        var probeLine = await reads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(JsonRpcRequest.TryParse(probeLine, out var probe, out var probeError), probeError);
+        await writes.WriteLineAsync(MiniJson.Write(JsonRpcResponse.Success(probe!.Id!, JsonValue.Bool(true)).ToJson()));
+
+        var realLine = await reads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(JsonRpcRequest.TryParse(realLine, out var real, out var realError), realError);
+        Assert.Equal("lease.release", real!.Method);
+
+        // The race: a concurrent 'begin' acquires a brand-new, unrelated lease while this
+        // release's own "lease.release" for the OLD lease is still in flight.
+        _leases.RecordHeld(ProjectGuid, "fresh-lease-from-a-concurrent-begin", DateTimeOffset.UtcNow.AddSeconds(30));
+
+        await writes.WriteLineAsync(MiniJson.Write(
+            JsonRpcResponse.Success(real.Id!, LeaseResult(success: true)).ToJson()));
+
+        await releaseTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var stillBelieved = _leases.Get(ProjectGuid);
+        Assert.NotNull(stillBelieved);
+        Assert.Equal("fresh-lease-from-a-concurrent-begin", stillBelieved!.LeaseId);
+    }
+
     // ---------------------------------------------------------------- idempotent: release twice
 
     [Fact]

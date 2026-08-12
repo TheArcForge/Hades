@@ -71,9 +71,13 @@ public sealed class ToolCallTracer(string databasePath)
     /// <summary>
     /// The entire safety net lives here: nothing this method does is allowed to escape it,
     /// deliberately including exception types the rest of this codebase does not normally catch
-    /// broadly (see this class's doc comment - unlike e.g. ObservationService.Sync, which lets an
-    /// unexpected exception type surface on purpose, tracing has no such exception because it is
-    /// not the operation the caller asked for).
+    /// broadly (see this class's doc comment). An operation a caller actually asked for can have a
+    /// real reason to let an unusual exception type surface rather than swallow it; tracing never
+    /// has that reason, because it is not the operation the caller asked for, only a bystander to
+    /// it - see <see cref="Hades.Core.Observation.ObservationService.Sync"/> for that contrast from
+    /// the other side: it now ALSO catches unconditionally, but for its own reason (a background
+    /// thread's unhandled exception is process death for every project, not just a failed trace),
+    /// not this method's "nothing here was ever the caller's request" one.
     /// </summary>
     void RecordSafely(string toolName, string? argumentsJson, long startUtcMs, long durationMs, bool ok,
         string? errorMessage, object? result)

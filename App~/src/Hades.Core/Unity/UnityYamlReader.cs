@@ -86,6 +86,12 @@ public static class UnityYamlReader
         // produced paths like "GameObject.component" alongside "GameObject.m_Component.component".
         var pushedSegment = new Stack<bool>();
 
+        // Kind of each currently open container, in lockstep with pushedSegment (true =
+        // Sequence, false = Mapping). A key-less flow MappingStart needs this to tell "I am a
+        // bare sequence element" (m_Materials's own entries) apart from "I am the document's
+        // own body mapping" (also key-less) — depth alone cannot make that distinction.
+        var containerIsSequence = new Stack<bool>();
+
         string? pendingKey = null;
         var depth = 0;
 
@@ -102,17 +108,36 @@ public static class UnityYamlReader
                         fileId = parsedAnchor;
                     }
 
-                    // A flow mapping under a key is a candidate reference triple. This is what
-                    // catches the 76% of references that wrap across lines: the parser has
-                    // already reassembled them, so there is nothing line-shaped to miss.
-                    if (pendingKey is not null && mappingStart.Style == MappingStyle.Flow)
+                    // A flow mapping under a key ("m_Script: {...}") is one reference shape. The
+                    // other is a flow mapping with NO key, sitting directly inside a sequence
+                    // ("m_Materials:\n  - {...}") — SequenceStart already consumed the key onto
+                    // `path`, so containerIsSequence is what tells this apart from the equally
+                    // key-less document body mapping. Either way this is what catches the 76% of
+                    // references that wrap across lines: the parser has already reassembled
+                    // them, so there is nothing line-shaped to miss.
+                    var isDirectSequenceElement = pendingKey is null
+                        && containerIsSequence.Count > 0 && containerIsSequence.Peek();
+
+                    if (mappingStart.Style == MappingStyle.Flow && (pendingKey is not null || isDirectSequenceElement))
                     {
-                        var propertyPath = Join(path, pendingKey);
+                        var propertyPath = pendingKey is not null ? Join(path, pendingKey) : string.Join('.', path);
                         pendingKey = null;
 
                         if (TryReadFlowScalars(parser, out var flow))
                         {
                             var reference = ToReference(flow, propertyPath);
+
+                            // A bare sequence element with no guid is a same-file structural
+                            // back-reference — m_Children, SceneRoots.m_Roots, a renderer's own
+                            // m_RendererFeatures — the mirror image of a keyed field (m_Father)
+                            // that already records the relationship from the other end.
+                            // Recording it here too would double the hierarchy edges for every
+                            // one of them without adding a fact the graph does not already have.
+                            // The keyed path above is untouched — it still records every local
+                            // reference it always did (m_Father, m_GameObject,
+                            // m_CorrespondingSourceObject, m_Modification.m_TransformParent...).
+                            if (isDirectSequenceElement && reference is { IsExternal: false })
+                                reference = null;
 
                             if (inModifications && propertyPath.EndsWith(".target", StringComparison.Ordinal))
                                 modTarget = reference;
@@ -133,6 +158,7 @@ public static class UnityYamlReader
                     var pushes = pendingKey is not null;
                     if (pushes) { path.Add(pendingKey!); pendingKey = null; }
                     pushedSegment.Push(pushes);
+                    containerIsSequence.Push(false);
                     depth++;
                     break;
                 }
@@ -153,8 +179,12 @@ public static class UnityYamlReader
                         modTarget = null; modPropertyPath = null; modValue = null; modObjectReference = null;
                     }
 
-                    if (pushedSegment.Count > 0 && pushedSegment.Pop() && path.Count > 0)
-                        path.RemoveAt(path.Count - 1);
+                    if (pushedSegment.Count > 0)
+                    {
+                        containerIsSequence.Pop();
+                        if (pushedSegment.Pop() && path.Count > 0)
+                            path.RemoveAt(path.Count - 1);
+                    }
                     if (depth <= 0) goto done;
                     break;
 
@@ -186,14 +216,19 @@ public static class UnityYamlReader
                     var pushes = pendingKey is not null;
                     if (pushes) { path.Add(pendingKey!); pendingKey = null; }
                     pushedSegment.Push(pushes);
+                    containerIsSequence.Push(true);
                     if (string.Join('.', path) == "m_Modification.m_Modifications") inModifications = true;
                     break;
                 }
 
                 case SequenceEnd:
                     if (string.Join('.', path) == "m_Modification.m_Modifications") inModifications = false;
-                    if (pushedSegment.Count > 0 && pushedSegment.Pop() && path.Count > 0)
-                        path.RemoveAt(path.Count - 1);
+                    if (pushedSegment.Count > 0)
+                    {
+                        containerIsSequence.Pop();
+                        if (pushedSegment.Pop() && path.Count > 0)
+                            path.RemoveAt(path.Count - 1);
+                    }
                     break;
 
                 case DocumentEnd:

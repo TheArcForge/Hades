@@ -91,6 +91,24 @@ enum Reaper {
         // since CoreSupervisor spawns this process directly.
         let originalParentPID = getppid()
 
+        // (S3) If the parent is ALREADY gone at this very first read, reparenting happened
+        // somewhere between fork and this line - before startup even finished. The poll loop
+        // below only detects a CHANGE in getppid() (see this file's own doc comment on why that
+        // closes the ordinary race); it can never detect THIS case, because there is nothing left
+        // to change FROM once the wrong value is already latched into `originalParentPID` -
+        // getppid() would keep returning the same (already-reparented) value forever, so
+        // `getppid() != originalParentPID` never fires and this process polls forever, an orphan
+        // that never gets cleaned up. Whoever spawns this process (CoreSupervisor's own host -
+        // HadesApp, a test harness, never launchd itself) is by construction never launchd, so
+        // seeing launchd here at all is unambiguous proof of that. Verified empirically, not
+        // assumed: a macOS process orphaned before its first scheduled instruction reparents
+        // directly to pid 1 (`/sbin/launchd` on this system - confirmed both with a direct
+        // fork()-then-immediately-exit probe and `ps -p 1 -o comm=`). No core has been spawned
+        // yet at this point, so there is nothing to kill beyond exiting cleanly.
+        guard originalParentPID != 1 else {
+            fail("parent was already gone at startup (reparented to launchd) - exiting without spawning a core", exitCode: 0)
+        }
+
         // New process group, before the core is spawned, so the core (and anything IT forks, no
         // matter how deep - see the dotnet-run-forks-a-grandchild note above) inherits this group
         // rather than the app's. That turns "kill everything under the core" into one

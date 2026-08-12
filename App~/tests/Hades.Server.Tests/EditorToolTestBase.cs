@@ -220,7 +220,6 @@ public abstract class EditorToolTestBase : IClassFixture<WebApplicationFactory<P
         // leaked host's background work and which test's own teardown happened to collide).
         Factory.Dispose();
 
-        foreach (var dir in new[] { _appRoot, _projectRoot })
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        TeardownDiagnostics.Delete(_appRoot, _projectRoot);
     }
 }

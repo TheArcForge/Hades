@@ -787,6 +787,43 @@ public sealed class MigrationEndpointHttpTests : IDisposable
     }
 
     [Fact]
+    public async Task CleanHadesHub_ADirectoryEntryCannotBeDeleted_Returns200WithAnHonestResult_NotABare500()
+    {
+        // The bug this proves fixed: Directory.Delete inside V12Cleanup.CleanHadesHub can throw
+        // (locked file, possibly after partial deletion), and nothing over HTTP used to catch it -
+        // a bare 500 the Swift UI would swallow and show stale state for. Same POSIX
+        // permission-denial technique as V12CleanupTests' own CleanHadesHub_ADirectoryEntryCannotBeDeleted_...
+        // - CI here runs ubuntu-latest/macos-latest only, never Windows (.github/workflows/ci.yml).
+        if (OperatingSystem.IsWindows()) return;
+
+        WriteHadesHubFixture();
+        var lockedDir = Path.Combine(_hadesHubScratchDir, "pending");
+        Directory.CreateDirectory(lockedDir);
+        File.WriteAllText(Path.Combine(lockedDir, "stuck.json"), "{}");
+        var originalMode = File.GetUnixFileMode(lockedDir);
+        File.SetUnixFileMode(lockedDir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        try
+        {
+            using var listener = StartListener();
+            listener.Start();
+            using var client = ClientFor(listener);
+
+            var response = await client.SendAsync(Request(HttpMethod.Post, "/control/migration/hadesHub/clean", listener.Token, jsonBody: new { proceed = true }));
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.False(doc.RootElement.GetProperty("removed").GetBoolean());
+            Assert.True(doc.RootElement.GetProperty("found").GetBoolean());
+            Assert.False(string.IsNullOrWhiteSpace(doc.RootElement.GetProperty("message").GetString()));
+        }
+        finally
+        {
+            File.SetUnixFileMode(lockedDir, originalMode);
+        }
+    }
+
+    [Fact]
     public async Task CleanHadesHub_NoToken_IsRefused()
     {
         using var listener = StartListener();
