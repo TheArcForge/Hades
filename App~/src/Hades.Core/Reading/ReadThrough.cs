@@ -879,7 +879,13 @@ public static class ReadThrough
     /// <see cref="ReadAllDocumentTrees"/>'s one external caller) so this guard is written, and
     /// reasoned about, exactly once.
     /// </summary>
-    /// <exception cref="ArgumentException">The path escapes the project's scan roots.</exception>
+    /// <exception cref="ArgumentException">
+    /// The path escapes the project's scan roots, or names a directory rather than a file (F11: a
+    /// directory always fails a plain <see cref="File.Exists"/> check, so without this branch it
+    /// fell through to the SAME "no longer on disk" message a genuinely deleted file gets, even
+    /// though the path is right there on disk - the rebuild-graph advice that message gives can
+    /// never fix a category mismatch, only a stale index).
+    /// </exception>
     /// <exception cref="FileNotFoundException">The file is no longer on disk.</exception>
     /// <exception cref="InvalidDataException">
     /// The file is not text Unity YAML, or does not parse cleanly all the way through.
@@ -887,6 +893,14 @@ public static class ReadThrough
     internal static string LoadValidatedContent(string projectRoot, string relativePath)
     {
         var absolutePath = ResolveAssetPath(projectRoot, relativePath);
+
+        if (Directory.Exists(absolutePath))
+        {
+            throw new ArgumentException(
+                $"'{relativePath}' is a directory, not a file - this tool needs a prefab or scene "
+                + "file. Point it at a specific .prefab or .unity file inside this directory.",
+                nameof(relativePath));
+        }
 
         if (!File.Exists(absolutePath))
         {

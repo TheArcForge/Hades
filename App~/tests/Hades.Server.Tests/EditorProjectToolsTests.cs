@@ -92,6 +92,22 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
         Assert.Equal("Test Framework package not installed.", structured.GetProperty("error").GetString());
     }
 
+    [Fact]
+    public async Task ProjectRunTests_DescriptionDisclosesBothEditModeReloadAndPlayModeSceneSave()
+    {
+        // F12: entering PlayMode saves every open scene to disk - a side effect worth disclosing
+        // up front the same way EditMode's own domain-reload trigger already is, so unsaved scene
+        // state reaching disk is never a surprise.
+        var tools = (await McpTestClient.ListTools(Factory)).GetProperty("result").GetProperty("tools");
+        var tool = Assert.Single(tools.EnumerateArray(), t => t.GetProperty("name").GetString() == "project_run_tests");
+        var description = tool.GetProperty("description").GetString()!;
+
+        Assert.Contains("domain reload", description, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("PlayMode", description);
+        Assert.Contains("saves", description, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("open scene", description, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ---------------------------------------------------------------- project_get_console_log
     //
     // Class 4 (live-state read - Plan 9 Task 5): same "params sent, result mapped" scope as every
@@ -426,42 +442,145 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
     // Naming/parameter merge of hades_regression_record (action='start'|'stop') and
     // hades_regression_replay ('calls') into one tool, action='start'|'stop'|'replay' - same scope
     // as the tests for the two originals above: params sent, result mapped, via a fake Unity Editor.
+    //
+    // F15: action='start'/'stop' no longer talk to the Editor at all (see EditorProjectTools'
+    // own class doc comment and RegressionRecorder) - the two tests that used to prove a wire round
+    // trip for them are replaced below by tests proving the new, editor-independent contract
+    // instead. action='replay' is unchanged for entries with no 'format' field (see
+    // HadesRegression_ActionReplay_EntryWithNoFormatField_... below) and gains a second path for
+    // 'format':'tool' entries.
 
     [Fact]
-    public async Task HadesRegression_ActionStart_SendsStartWireMethod_MapsRecording()
+    public async Task HadesRegression_ActionStart_NoEditorNeeded_BeginsEmptyRecording()
     {
-        var (reads, writes) = await ConnectAsFakeUnityAsync();
-        var responder = AnswerBusyProbeThenRespondAsync(reads, writes, Obj(("recording", JsonValue.Bool(true))));
-
         var structured = Structured(await McpTestClient.CallTool(Factory, "hades_regression", new { action = "start" }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
-
-        Assert.Equal("hades.regression_record_start", request.Method);
         Assert.True(structured.GetProperty("recording").GetBoolean());
+
+        // Stopping with nothing recorded in between is the same safe no-op the pre-F15 Editor-side
+        // session always was - see RegressionRecorder.Stop's own doc comment.
+        var stopped = Structured(await McpTestClient.CallTool(Factory, "hades_regression", new { action = "stop" }));
+        Assert.Equal(0, stopped.GetProperty("count").GetInt32());
+        Assert.Empty(stopped.GetProperty("calls").EnumerateArray());
     }
 
     [Fact]
-    public async Task HadesRegression_ActionStop_SendsStopWireMethod_MapsCallsInReplayCompatibleShape()
+    public async Task HadesRegression_ActionStart_AlreadyRecording_RefusesWithActionableError_NoEditorNeeded()
+    {
+        await McpTestClient.CallTool(Factory, "hades_regression", new { action = "start" });
+
+        var envelope = await McpTestClient.CallTool(Factory, "hades_regression", new { action = "start" });
+
+        Assert.Contains("already active", McpTestClient.ErrorText(envelope));
+    }
+
+    // ---- F15: the graph/disk observability gap this plan closes ------------------------------
+    //
+    // Before this change, a recording session only ever saw tool calls the attached Unity Editor
+    // itself executed (Plugin~'s CommandTable.Dispatch offering each one to
+    // ProjectCommands.CaptureIfRecording) - graph- and disk-served tools such as search_by_name,
+    // find_references_to, graph_query, and project_settings never reached the Editor at all, so a
+    // session recording six mixed calls captured only the two Editor-routed ones. These two tests
+    // are the failing-then-passing proof that capturing now happens one layer up, at Program.cs's
+    // own CallToolFilters, which sees every tool dispatch regardless of how it answers.
+
+    [Fact]
+    public async Task HadesRegression_Start_CapturesAGraphServedToolCall_AndStopResultReplaysGreen()
+    {
+        await McpTestClient.CallTool(Factory, "hades_regression", new { action = "start" });
+
+        // search_by_name is graph-served - answered entirely from the indexed project, never
+        // touching the attached Editor - exactly the kind of call the pre-F15 recorder could not
+        // see at all.
+        await McpTestClient.CallTool(Factory, "search_by_name", new { namePattern = "NothingShouldMatchThisPattern" });
+
+        var stopped = Structured(await McpTestClient.CallTool(Factory, "hades_regression", new { action = "stop" }));
+        Assert.Equal(1, stopped.GetProperty("count").GetInt32());
+
+        var call = stopped.GetProperty("calls")[0];
+        Assert.Equal("search_by_name", call.GetProperty("method").GetString());
+        Assert.Equal("tool", call.GetProperty("format").GetString());
+        Assert.Equal("NothingShouldMatchThisPattern", call.GetProperty("params").GetProperty("namePattern").GetString());
+
+        // 'stop's own 'calls' hands straight into 'replay' with no translation step - the same
+        // invariant the record/replay shape has always kept, now proven for the new shape too.
+        var replayed = Structured(await McpTestClient.CallTool(Factory, "hades_regression",
+            new { action = "replay", calls = stopped.GetProperty("calls") }));
+
+        Assert.Equal(1, replayed.GetProperty("total").GetInt32());
+        Assert.Equal(1, replayed.GetProperty("passed").GetInt32());
+        Assert.Equal(0, replayed.GetProperty("failed").GetInt32());
+        var replayResult = replayed.GetProperty("results")[0];
+        Assert.True(replayResult.GetProperty("passed").GetBoolean());
+        Assert.Equal("search_by_name", replayResult.GetProperty("method").GetString());
+    }
+
+    [Fact]
+    public async Task HadesRegression_MixedSession_CapturesBothEditorRoutedAndGraphServedCalls()
     {
         var (reads, writes) = await ConnectAsFakeUnityAsync();
 
-        var pluginResult = Obj(
-            ("calls", JsonValue.NewArray().Add(Obj(
-                ("method", JsonValue.String("scene.create_gameobject")),
-                ("params", Obj(("name", JsonValue.String("Recorded")))),
-                ("expected", Obj(("name", JsonValue.String("Recorded")), ("fileId", JsonValue.Integer(123))))))),
-            ("count", JsonValue.Integer(1)));
-        var responder = AnswerBusyProbeThenRespondAsync(reads, writes, pluginResult);
+        await McpTestClient.CallTool(Factory, "hades_regression", new { action = "start" });
 
-        var structured = Structured(await McpTestClient.CallTool(Factory, "hades_regression", new { action = "stop" }));
+        var responder = AnswerBusyProbeThenRespondAsync(reads, writes, Obj(("requested", JsonValue.Bool(true))));
+        await McpTestClient.CallTool(Factory, "project_recompile_scripts", new { });
+        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await McpTestClient.CallTool(Factory, "search_by_name", new { namePattern = "StillNothingShouldMatch" });
+
+        var stopped = Structured(await McpTestClient.CallTool(Factory, "hades_regression", new { action = "stop" }));
+
+        Assert.Equal(2, stopped.GetProperty("count").GetInt32());
+        var methods = stopped.GetProperty("calls").EnumerateArray()
+            .Select(c => c.GetProperty("method").GetString())
+            .ToList();
+        Assert.Contains("project_recompile_scripts", methods);
+        Assert.Contains("search_by_name", methods);
+
+        // Both captured as the SAME new shape - format="tool" - regardless of the fact that one of
+        // them happens to be Editor-routed internally. Capture no longer knows or cares.
+        Assert.All(stopped.GetProperty("calls").EnumerateArray(),
+            call => Assert.Equal("tool", call.GetProperty("format").GetString()));
+    }
+
+    // ---- F15: fixture-shape backward compatibility ----------------------------------------------
+    //
+    // scripts/regression/fixtures/editor-routed.json - and every fixture recorded before this
+    // change - has no 'format' field on any entry. This is the proof that shape keeps replaying
+    // exactly as it did before: dispatched by Plugin~ wire method name through the attached Editor,
+    // in ONE batched hades.regression_replay wire call, never treated as an MCP tool name.
+
+    [Fact]
+    public async Task HadesRegression_ActionReplay_EntryWithNoFormatField_StillDispatchesByWireMethodThroughTheEditor()
+    {
+        var (reads, writes) = await ConnectAsFakeUnityAsync();
+        var responder = AnswerBusyProbeThenRespondAsync(reads, writes, Obj(
+            ("results", JsonValue.NewArray().Add(Obj(
+                ("method", JsonValue.String("scene.create_gameobject")),
+                ("passed", JsonValue.Bool(true)),
+                ("actual", Obj(("name", JsonValue.String("RegSuiteHost"))))))),
+            ("total", JsonValue.Integer(1)), ("passed", JsonValue.Integer(1)), ("failed", JsonValue.Integer(0))));
+
+        var structured = Structured(await McpTestClient.CallTool(Factory, "hades_regression", new
+        {
+            action = "replay",
+            calls = new[]
+            {
+                new
+                {
+                    method = "scene.create_gameobject",
+                    @params = new Dictionary<string, object?> { ["name"] = "RegSuiteHost" },
+                    expected = (object?)null,
+                },
+            },
+        }));
         var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Equal("hades.regression_record_stop", request.Method);
-        Assert.Equal(1, structured.GetProperty("count").GetInt32());
-        var call = structured.GetProperty("calls")[0];
-        Assert.Equal("scene.create_gameobject", call.GetProperty("method").GetString());
-        Assert.Equal("Recorded", call.GetProperty("params").GetProperty("name").GetString());
-        Assert.Equal("Recorded", call.GetProperty("expected").GetProperty("name").GetString());
+        Assert.Equal("hades.regression_replay", request.Method);
+        Assert.True(request.Params!.TryGetProperty("calls", out var wireCalls)
+            && wireCalls!.Kind == WireKind.Array && wireCalls.Items.Count == 1);
+        Assert.Equal(1, structured.GetProperty("total").GetInt32());
+        Assert.Equal(1, structured.GetProperty("passed").GetInt32());
+        Assert.True(structured.GetProperty("results")[0].GetProperty("passed").GetBoolean());
     }
 
     [Fact]

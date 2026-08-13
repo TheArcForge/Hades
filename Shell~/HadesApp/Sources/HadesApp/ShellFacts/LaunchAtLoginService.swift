@@ -27,6 +27,21 @@ public protocol LaunchAtLoginReading {
     func setEnabled(_ enabled: Bool) throws
 }
 
+extension LaunchAtLoginReading {
+    /// Requests a launch-at-login change, then re-reads `isEnabled` from the SAME OS source -
+    /// never the requested value - so a request the OS refuses OR silently ignores can never be
+    /// reported back as having succeeded. See `setEnabled`'s own doc comment for exactly why a
+    /// thrown error alone is not the only failure mode this must guard against. Shared by every
+    /// caller that toggles this OS fact (`SettingsViewModel.toggleLaunchAtLogin`,
+    /// `OnboardingViewModel.toggleLaunchAtLogin`) so the "always re-read after writing" contract
+    /// lives in exactly one place instead of being copied at each call site.
+    @discardableResult
+    func settingEnabled(to requested: Bool) -> Bool {
+        try? setEnabled(requested)
+        return isEnabled
+    }
+}
+
 /// The real `LaunchAtLoginReading`, backed by `SMAppService.mainApp` directly. Not unit tested
 /// itself - there is nothing to unit test: it is a one-line pass-through to a system API that
 /// genuinely registers a login item with launchd. `SettingsViewModelTests` fakes the protocol

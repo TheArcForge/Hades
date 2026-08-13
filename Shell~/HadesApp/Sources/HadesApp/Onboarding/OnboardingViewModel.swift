@@ -28,6 +28,17 @@ public final class OnboardingViewModel {
     /// proves and what it only assumes.
     public private(set) var claudeCodeVerification: ClaudeCodeVerification = .notVerified
 
+    /// The OS's own current launch-at-login registration, read once at construction - the Claude
+    /// Code step's own opt-in (see that step's view for why THAT step, not any other: Claude Code
+    /// does not retry an MCP server that was unreachable at session start, so this is offered at
+    /// exactly the step where the user is setting up that connection). Same
+    /// `LaunchAtLoginReading` seam `SettingsViewModel.launchAtLoginEnabled` already reads - never a
+    /// second OS-facts abstraction - but read once here rather than on a repeating `refresh()`:
+    /// unlike the Settings window, onboarding is never reopened once constructed (see
+    /// `OnboardingWindowController`'s own doc comment), so there is no "reopened later, might be
+    /// stale" case to guard against beyond `toggleLaunchAtLogin(to:)`'s own re-read.
+    public private(set) var launchAtLoginEnabled: Bool
+
     /// The one project `addProject(path:)` most recently found to look like a v1.2 install, offered
     /// but not yet acted on - `nil` whenever nothing is currently offered. Cleared by either
     /// `confirmMigration()` or `declineMigration()`, never by anything else, so the offer stays on
@@ -50,16 +61,26 @@ public final class OnboardingViewModel {
     /// offered-never-silently-performed contract without a real control-API round trip.
     private let migrationOffering: (any MigrationOffering)?
 
+    /// See `launchAtLoginEnabled`'s own doc comment. `AppDelegate` never passes this explicitly,
+    /// relying on the same real-`LaunchAtLoginService()` default `SettingsViewModel` also falls
+    /// back to; every test below injects `FakeLaunchAtLoginReading` instead - the real
+    /// `LaunchAtLoginService` must never run as a side effect of the test suite (see that type's
+    /// own doc comment for why).
+    private let launchAtLogin: any LaunchAtLoginReading
+
     public init(
         projectsViewModel: ProjectsViewModel = ProjectsViewModel(),
         completionStore: any OnboardingCompletionTracking = UserDefaultsOnboardingStore(),
         claudeCodeVerifier: any ClaudeCodeVerifying = LiveClaudeCodeVerifier(),
-        migrationOffering: (any MigrationOffering)? = nil
+        migrationOffering: (any MigrationOffering)? = nil,
+        launchAtLogin: any LaunchAtLoginReading = LaunchAtLoginService()
     ) {
         self.projectsViewModel = projectsViewModel
         self.completionStore = completionStore
         self.claudeCodeVerifier = claudeCodeVerifier
         self.migrationOffering = migrationOffering
+        self.launchAtLogin = launchAtLogin
+        self.launchAtLoginEnabled = launchAtLogin.isEnabled
     }
 
     /// Moves to the next step, or - from the last step (`.unityPlugin`) - completes onboarding and
@@ -118,5 +139,14 @@ public final class OnboardingViewModel {
     /// "Not Now" button.
     public func declineMigration() {
         migrationOfferedProjectPath = nil
+    }
+
+    /// Requests a launch-at-login change, then immediately re-reads `launchAtLoginEnabled` from
+    /// the SAME OS source - never the requested value - so a request the OS refuses OR silently
+    /// ignores can never display as on. Identical contract to, and built on the same
+    /// `LaunchAtLoginReading.settingEnabled(to:)` seam as, `SettingsViewModel.toggleLaunchAtLogin` -
+    /// see that method's own doc comment.
+    public func toggleLaunchAtLogin(to requested: Bool) {
+        launchAtLoginEnabled = launchAtLogin.settingEnabled(to: requested)
     }
 }

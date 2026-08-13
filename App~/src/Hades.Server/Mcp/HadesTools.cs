@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text.Json.Serialization;
 using Hades.Core;
 using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
 namespace Hades.Server.Mcp;
@@ -100,11 +101,12 @@ public sealed class HadesTools(ProjectService projects)
     [Description("Find C# types in the project graph by name (case-insensitive substring). Use "
                + "this instead of grep: it is indexed and understands the project structure."
                + ToolSupport.SavedStateClause)]
-    public SearchResult SearchByName(
+    public async Task<SearchResult> SearchByName(
         [Description("Substring to match, case-insensitive")] string namePattern,
         [Description("Optional declaration-kind filter: Class, Struct, Interface, Enum, Record")] string? kind = null,
         [Description("Maximum results to return (1-200, default 50)")] int limit = 50,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         if (string.IsNullOrWhiteSpace(namePattern))
         {
@@ -113,7 +115,7 @@ public sealed class HadesTools(ProjectService projects)
                 + "e.g. {\"namePattern\": \"PlayerController\"}. Add it and call again.");
         }
 
-        var productGuid = ToolSupport.ResolveProject(projects, project);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
 
         // Clamped to this tool's own documented maximum BEFORE the "+1" below - see
         // InspectTool.FindUnsetReferences' identical clampedLimit pattern. Without this, a
@@ -145,11 +147,16 @@ public sealed class HadesTools(ProjectService projects)
                + "instantiate a prefab, which prefabs use a script, what would break if it were "
                + "removed. Results are grouped by file, most-used first, with a count per file. "
                + "Takes the project-relative path exactly as search_by_name returns it, "
-               + "e.g. \"Assets/Scripts/PlayerController.cs\"." + ToolSupport.SavedStateClause)]
-    public ReferencesResult FindReferencesTo(
+               + "e.g. \"Assets/Scripts/PlayerController.cs\". A path that exists on disk but is "
+               + "an asset kind Hades does not (yet) index as a graph node cannot be resolved here "
+               + "even though the file is right there — the error distinguishes that case from a "
+               + "path that genuinely does not exist."
+               + ToolSupport.SavedStateClause)]
+    public async Task<ReferencesResult> FindReferencesTo(
         [Description("Project-relative asset path, as returned by search_by_name")] string assetPath,
         [Description("Maximum FILES to return (1-500, default 100)")] int limit = 100,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         if (string.IsNullOrWhiteSpace(assetPath))
         {
@@ -159,14 +166,33 @@ public sealed class HadesTools(ProjectService projects)
                 + "search_by_name returns paths in exactly this form.");
         }
 
-        var productGuid = ToolSupport.ResolveProject(projects, project);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
 
-        var result = projects.FindReferencesTo(productGuid, assetPath, limit)
-            ?? throw new McpException(
+        var result = projects.FindReferencesTo(productGuid, assetPath, limit);
+        if (result is null)
+        {
+            // F6-honesty: "not in the graph" used to cover two very different situations under
+            // one message — a path that genuinely does not exist, and one that exists right on
+            // disk but is an asset kind this graph does not index as a node at all (a shrinking
+            // set now that textures, models, audio, fonts, shaders, and animation clips are
+            // indexed too — see Hades.Core.Unity.ImportedAssetKind). Checked only here, on the
+            // failure path that already needs a filesystem touch anyway (ExistsOnDisk itself
+            // never runs on the common, in-graph case above).
+            if (projects.ExistsOnDisk(productGuid, assetPath))
+            {
+                throw new McpException(
+                    $"'{assetPath}' exists on disk but is an asset type Hades does not index as a "
+                    + "graph node, so nothing can be said about what references it here. "
+                    + "inspect_asset can often still resolve a specific referencing file's own "
+                    + "GUID link to it directly.");
+            }
+
+            throw new McpException(
                 $"'{assetPath}' is not in the graph, so nothing can be said about what references "
                 + "it. Check the path with search_by_name — it must be project-relative "
                 + "(\"Assets/...\" or \"Packages/...\"), not absolute. Note that an asset with "
                 + "no .meta file cannot be referenced by anything and will not resolve.");
+        }
 
         return new ReferencesResult
         {
@@ -196,10 +222,11 @@ public sealed class HadesTools(ProjectService projects)
                + "membership. Code gated on a symbol outside this list - a platform define, a "
                + "csc.rsp-only symbol, or a versionDefine keyed to a built-in Unity module rather "
                + "than an installed package - is not in the graph at all.")]
-    public ProjectSummary GetProjectSummary(
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+    public async Task<ProjectSummary> GetProjectSummary(
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
-        var productGuid = ToolSupport.ResolveProject(projects, project);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
 
         return projects.Summary(productGuid)
             ?? throw new McpException(

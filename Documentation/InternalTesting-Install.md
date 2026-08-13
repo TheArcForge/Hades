@@ -30,7 +30,8 @@
    skippable.
 4. In a terminal: `claude --plugin-dir <path-to-your-Hades-checkout>/Plugin-ClaudeCode~`
 5. In that Claude Code session, run `/mcp` and confirm `hades` reports **32 tools**. If it's
-   closer to 90, stop — see [Confirm you're testing the new Hades](#confirm-youre-testing-the-new-hades-not-old-v12).
+   closer to 90, or if it connects with **0 tools**, stop — see [Confirm you're testing the new
+   Hades](#confirm-youre-testing-the-new-hades-not-old-v12).
 
 Everything past this point is detail and troubleshooting.
 
@@ -190,6 +191,22 @@ Check both:
    - **Old v1.2 package: 90 tools.** (counted directly from `[MCPTool]` attributes in
      `Editor/MCP/Tools/*.cs`; the old plugin manifest's own description also says "90 MCP
      tools")
+   - **Connected, but 0 tools.** Neither of the above — and a real outcome, not a hypothetical
+     one. It reads like a botched install, but it has two distinct causes with an easy tell:
+     look at what `/mcp` shows as the `hades` entry's command/URL.
+     - **The new plugin, hitting a client-side schema bug.** The entry shows the HTTP URL
+       (`http://127.0.0.1:7823/mcp`) and an error like *"tools fetch failed — Invalid input (at
+       tools.N.outputSchema…)"*. Claude Code's schema validator rejects a boolean-form JSON
+       Schema subschema exported by one tool's output schema; the server's own `tools/list` is
+       fine — this is Claude Code's validator rejecting the response, not the server failing to
+       produce it — so it's a client-side rejection, not a server fault. Fixed in builds after
+       this testing round — if you hit it, note the exact `tools.N…` path from the error when
+       you report it.
+     - **The retired v1.2 stdio plugin, timing out.** The entry shows a `node` command instead
+       of an HTTP URL — something like `node …/Bridge~/launcher/dist/index.js` — and the error
+       is a timeout (*"MCP error -32001: Request timed out"*), not a schema rejection. That's
+       the old plugin's stdio launcher waiting on a Unity Editor that was never attached. You're
+       on the old surface, not the new one — see "If you're on the old server" below.
 
 2. **Server version.** Ask Claude to call the `hades_status` tool. Check the `version` field.
    - **New app reports `2.0.0-dev`** — a fixed constant (`HadesTools.cs`, `ServerVersion`).
@@ -239,6 +256,13 @@ newer plugin version, connecting the Editor should **degrade with a warning, not
 If a Unity project's `Packages/manifest.json` has a `com.arcforge.hades` dependency, the app
 detects it the moment you add that project and offers migration.
 
+**A clean `Packages/manifest.json` does not mean a clean machine.** v1.2 leftovers can live
+entirely outside the Unity project — a marketplace-installed old plugin recorded in your global
+Claude Code settings (`enabledPlugins`), a stray project-root `.mcp.json`, or
+`~/.arcforge/hades-hub/` — and the app's per-project detector cannot see any of these. Check
+`/plugin` in Claude Code for an installed old-plugin entry, and use the app's Settings cleanup
+actions for the rest.
+
 **The one rule that matters here: `.arcforge/memory/` is authored, irreplaceable content.**
 It's the decisions and conventions your project has accumulated — nothing regenerates it if
 it's lost. Migration copies it into the app's own storage; the source is **never modified or
@@ -263,23 +287,31 @@ v1.2 keeps working the whole time. Nothing here is forced or automatic.
 
 ## Known issues (read before you report these as new)
 
-**`prefab_apply` with a `create` op produces a flattened, disconnected prefab instead of a
-nested one.** Re-verified directly in source immediately before writing this doc —
-`Plugin~/Assets/Hades/Tools/PrefabCommands.cs`, `DoCreate` (line 81) still calls
-`PrefabUtility.SaveAsPrefabAsset`, Unity's *disconnected* save, not the `...AndConnect`
-variant used elsewhere in the same file for variants.
+**The asset-type indexing boundary.** Textures, models, audio clips, fonts, shaders, and
+animation clips are not graph nodes — see `Documentation/Architecture.md` §4.3, "What is not
+indexed," for the full list and why. `inspect_asset` still resolves GUIDs for these types
+correctly; it's `search_by_name`, `find_references_to`, and `trace_dependencies` that will
+report them as absent, or their dependencies as empty, even when a reference demonstrably
+exists and resolves. This is a design boundary, not a stale index — rebuilding the graph does
+not change it. Expect it rather than reporting it fresh; do report which specific workflow it
+blocked for you, since narrowing this boundary is one of the fixes this testing round is
+feeding into.
 
-- **Repro:** create `Leaf.prefab` from a GameObject → reparent that now-orphaned GameObject
-  under a new object → create `Outer.prefab` from it. `Outer.prefab` ends up holding a
-  flattened, disconnected copy of `Leaf`, not a nested `PrefabInstance`. Every step reports
-  success — nothing errors.
-- **Workaround:** instantiate the leaf prefab as a child first, *then* create the parent from
-  that hierarchy. That produces a genuine nested prefab instance.
-- This is the single most likely place to "find a bug" that's actually already known — check
-  here first.
+**Hades wasn't running yet when the Claude Code session started.** Claude Code does not retry
+an MCP server that was unreachable at session start (confirmed against Claude Code's own docs)
+— the `hades` entry shows as failed, not the same as the 0-tools cases above, and it will not
+recover on its own. Run `/mcp` and reconnect, or start a new Claude Code session, once
+Hades.app is running. Enabling launch-at-login for Hades — the Claude Code onboarding step's
+own toggle, or Settings → Login — prevents this class of failure entirely, since Hades is then
+already running before any Claude Code session starts.
 
-*(Source: `docs/backlog/mutation-tool-defects.md` — most of that file is now fixed and stale;
-this is the one item confirmed still live as of this doc.)*
+Fixes for the findings raised during this testing round are in progress and not yet reflected
+here. If something you hit isn't described above, it's more likely new than already known —
+report it.
+
+*(The previously-listed `prefab_apply create` flattening issue is fixed — both a black-box
+repro and the shipped plugin source confirm a nested prefab is produced — and has been removed
+from this list.)*
 
 ---
 
@@ -299,8 +331,9 @@ Roughly in priority order — this is where problems are most likely to be:
    `material_apply`, `animation_apply`, `prefab_apply`, `asset_manage`, `project_settings_apply`.
    These are the newest and least-exercised surface (consolidated down from 103 older tools to
    32). For anything that mutates a scene/prefab/material/asset, **check the actual saved YAML
-   on disk, not just whether the tool call reported success** — that's literally how the known
-   prefab bug above was found; a tool's own "success" message is not proof.
+   on disk, not just whether the tool call reported success** — that's exactly how a previously
+   reported flattened-prefab bug was caught, and later confirmed fixed, in earlier rounds; a
+   tool's own "success" message is not proof.
 6. **Port conflicts** — if you still have the old v1.2 package attached to a project, or run
    two instances, confirm the app fails loudly with an actionable message rather than silently
    binding a different port.
@@ -328,9 +361,12 @@ Include:
   subsystem `com.arcforge.hades.shell`, category `CoreLaunch` (`AppDelegate.swift`). View in
   **Console.app** (filter by process or subsystem) or:
   ```
-  log show --predicate 'subsystem == "com.arcforge.hades.shell"' --last 1h
-  log stream --predicate 'subsystem == "com.arcforge.hades.shell"'
+  log show --predicate 'subsystem == "com.arcforge.hades.shell"' --last 1h --info --debug
+  log stream --predicate 'subsystem == "com.arcforge.hades.shell"' --info --debug
   ```
+  The `--info --debug` flags are not optional — this subsystem logs at info/debug level, and
+  macOS's unified logging suppresses both by default. Without them, both commands run cleanly
+  and show nothing, which reads like "no logs" rather than "wrong verbosity."
 - **`~/Library/Application Support/Hades/logs/` is a reserved path, not a populated one** —
   `AppPaths.LogsDir` is declared in source but nothing currently writes to it (confirmed: it
   doesn't exist on disk on a machine actively running the app). Don't spend time looking for

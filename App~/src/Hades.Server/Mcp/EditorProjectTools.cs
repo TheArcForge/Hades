@@ -3,7 +3,10 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Hades.Core;
 using Hades.Core.Editors;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using WireJson = Hades.Contract.Wire.JsonValue;
 using WireKind = Hades.Contract.Wire.JsonValueKind;
@@ -32,31 +35,46 @@ public sealed record RegressionReplayEntryResult
     [JsonPropertyName("error")] public string? Error { get; init; }
 }
 
-/// <summary>One entry of hades_regression's 'replay' action's 'calls' parameter: a Plugin~ wire
-/// method name (e.g. "scene.create_gameobject", "component.set_property" - CommandTable's own
-/// dispatch name, NOT this server's snake_case MCP tool name - see EditorComponentTools' own doc
-/// comment for why the two differ), its params, and an optional expected result to diff against.</summary>
+/// <summary>One entry of hades_regression's 'replay' action's 'calls' parameter, shaped by
+/// <see cref="Format"/>: when Format is <see cref="RegressionRecorder.ToolFormat"/> ("tool" - what
+/// hades_regression's own 'stop' now produces, see RegressionRecorder's own class doc comment for
+/// why), Method is an MCP tool name (e.g. "search_by_name", "graph_query") and Params is that
+/// tool's own arguments, replayed by calling the tool directly, in-process. Otherwise - Format null
+/// or anything else, the shape every fixture recorded before F15 uses, including the shipped
+/// editor-routed.json - Method is a Plugin~ wire method name (e.g. "scene.create_gameobject",
+/// "component.set_property" - CommandTable's own dispatch name, NOT this server's snake_case MCP
+/// tool name - see EditorComponentTools' own doc comment for why the two differ), replayed by
+/// dispatching to the attached Editor exactly as before F15. Either way, Expected is an optional
+/// expected result to diff against.</summary>
 public sealed record RegressionCallSpec
 {
     [JsonPropertyName("method")] public required string Method { get; init; }
     [JsonPropertyName("params")] public IReadOnlyDictionary<string, JsonElement>? Params { get; init; }
     [JsonPropertyName("expected")] public JsonElement? Expected { get; init; }
+
+    /// <summary>See this record's own class doc comment. Optional and backward-compatible by
+    /// construction: a fixture recorded before F15 (including the shipped editor-routed.json) simply
+    /// has no 'format' key, which deserializes to null here - indistinguishable from an entry that
+    /// named "wire" explicitly - and is treated exactly as it always was.</summary>
+    [JsonPropertyName("format")] public string? Format { get; init; }
 }
 
 /// <summary>One entry hades_regression's 'stop' action returns - the SAME {method, params,
-/// expected} JSON shape as <see cref="RegressionCallSpec"/> (hades_regression's OWN 'replay' input
-/// shape), so a caller can hand this result's 'calls' straight into a later 'replay' action's
-/// 'calls' parameter with no translation step. A separate type rather than literally
-/// RegressionCallSpec because that type's fields are JsonElement-typed for MCP's own INPUT
-/// binding - this is an OUTPUT, built from a plugin response, so Params/Expected follow the same
-/// plain-CLR-object convention every other read-through result in this codebase already uses (see
-/// WireJsonBridge.ToClr and e.g. RegressionReplayEntryResult.Actual above) rather than
-/// constructing a JsonElement by hand.</summary>
+/// expected, format} JSON shape as <see cref="RegressionCallSpec"/> (hades_regression's OWN
+/// 'replay' input shape), so a caller can hand this result's 'calls' straight into a later
+/// 'replay' action's 'calls' parameter with no translation step. A separate type rather than
+/// literally RegressionCallSpec because that type's fields are JsonElement-typed for MCP's own
+/// INPUT binding - this is an OUTPUT, built from a captured tool call (see RegressionRecorder), so
+/// Params/Expected follow the same plain-CLR-object convention every other read-through result in
+/// this codebase already uses (see WireJsonBridge.ToClr and e.g. RegressionReplayEntryResult.Actual
+/// above) rather than constructing a JsonElement by hand. Every entry 'stop' returns now carries
+/// Format = <see cref="RegressionRecorder.ToolFormat"/> - see that field's own doc comment.</summary>
 public sealed record RegressionRecordedCallResult
 {
     [JsonPropertyName("method")] public required string Method { get; init; }
     [JsonPropertyName("params")] public object? Params { get; init; }
     [JsonPropertyName("expected")] public object? Expected { get; init; }
+    [JsonPropertyName("format")] public string? Format { get; init; }
 }
 
 /// <summary>script_editing_session's result - shaped by 'action': 'leaseId'/'expiresAtUtc'
@@ -165,17 +183,35 @@ public sealed record TestResultsResult
 ///
 /// <para><b>hades_regression</b> (action='start'|'stop'|'replay') replaces this class's three
 /// former standalone tools, hades_regression_record (action='start'|'stop') and
-/// hades_regression_replay (a 'calls' array) - sending the EXACT SAME three wire methods
-/// (hades.regression_record_start/_stop, hades.regression_replay) those used to. Record's output and
-/// replay's input keep agreeing BY CONSTRUCTION: action='stop' returns
-/// <see cref="RegressionRecordedCallResult"/> entries - the SAME {method, params, expected} shape
-/// <see cref="RegressionCallSpec"/> (action='replay's own 'calls' element type) accepts - so a
-/// caller can hand THIS tool's own 'stop' result straight into a later 'replay' call on this SAME
-/// tool with no translation step. There is deliberately no dataset store on either side of that
-/// hand-off.</para>
+/// hades_regression_replay (a 'calls' array). Record's output and replay's input keep agreeing BY
+/// CONSTRUCTION: action='stop' returns <see cref="RegressionRecordedCallResult"/> entries - the
+/// SAME {method, params, expected, format} shape <see cref="RegressionCallSpec"/> (action='replay's
+/// own 'calls' element type) accepts - so a caller can hand THIS tool's own 'stop' result straight
+/// into a later 'replay' call on this SAME tool with no translation step. There is deliberately no
+/// dataset store on either side of that hand-off.</para>
+///
+/// <para><b>F15.</b> action='start'/'stop' used to proxy two of those three wire methods
+/// (hades.regression_record_start/_stop) to the attached Editor, whose own CommandTable.Dispatch
+/// offered every wire call it handled to a session held in Plugin~'s ProjectCommands - which meant
+/// only Editor-routed tool calls could ever be recorded (measured: of six mixed calls, only the two
+/// that reached the Editor were captured; find_references_to/graph_query/trace_dependencies/
+/// project_settings - graph- or disk-served, never touching the Editor - were invisible, and could
+/// not be expressed as a fixture at all). action='start'/'stop' are now pure server-side operations
+/// against <see cref="RegressionRecorder"/> (constructor-injected below) - no Editor round trip, no
+/// live Editor required - and every subsequent MCP tool call in the session is captured by
+/// Program.cs's own CallToolFilters, the one seam every tool dispatch already passes through
+/// regardless of how it answers. See RegressionRecorder's own class doc comment for the full
+/// before/after. action='replay' now branches per entry on <see cref="RegressionCallSpec.Format"/>:
+/// a 'format':'tool' entry (everything 'stop' produces now) calls the named MCP tool directly,
+/// in-process, comparing its result the same way <see cref="RegressionRecorder.Normalize"/> reduces
+/// it at capture time; an entry with no 'format' - every fixture recorded before this change,
+/// including the shipped editor-routed.json - still dispatches by Plugin~ wire method name through
+/// <c>hades.regression_replay</c> exactly as before, so an already-recorded fixture keeps replaying
+/// unmodified. hades_regression's OWN calls are excluded from capture by Program.cs's filter (never
+/// by this class), so a session recording other tools never records itself.</para>
 /// </summary>
 [McpServerToolType]
-public sealed class EditorProjectTools(EditorProxy editor, ProjectService projects, LeaseRegistry leases)
+public sealed class EditorProjectTools(EditorProxy editor, ProjectService projects, LeaseRegistry leases, RegressionRecorder recorder)
 {
     [McpServerTool(Name = "project_recompile_scripts", Title = "Recompile Scripts", ReadOnly = false, UseStructuredContent = true)]
     [Description("Forces the attached Unity Editor to recompile scripts. Triggers a domain reload "
@@ -195,8 +231,10 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
     [Description("Starts a Unity Test Runner run on the attached Editor and returns immediately "
                + "with a runId and status='started' - it does NOT wait for the run to finish "
                + "(EditMode runs trigger a domain reload, which can take far longer than a single "
-               + "tool call should block for). Needs a live Editor - call hades_charon_status "
-               + "first if unsure.")]
+               + "tool call should block for). PlayMode runs enter Play Mode, and Unity saves every "
+               + "open scene to disk before doing so - unsaved scene edits reach disk as a side "
+               + "effect of running PlayMode tests, not just EditMode's domain reload. Needs a live "
+               + "Editor - call hades_charon_status first if unsure.")]
     public async Task<RunTestsResult> ProjectRunTests(
         [Description("Regex filter matched against full test names - a class or namespace name selects everything beneath it. Omit to run all tests.")] string? filter = null,
         [Description("EditMode, PlayMode, or All (default EditMode)")] string? testMode = null,
@@ -324,7 +362,8 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
     public async Task<ScriptEditingSessionResult> ScriptEditingSession(
         [Description("'begin' or 'end'")] string action,
         [Description("begin only: how long the lease may be held before it expires if never renewed, in seconds. Omit for the plugin's default (30s).")] double? ttlSeconds = null,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         EditorComponentTools.RequireNonBlank(action, nameof(action), "script_editing_session");
 
@@ -335,7 +374,7 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
                 var @params = WireJson.NewObject();
                 if (ttlSeconds is { } t) @params.SetProperty("ttlSeconds", WireJson.Float(t));
 
-                var productGuid = ToolSupport.ResolveProject(projects, project);
+                var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
                 var result = await editor.SendCommandAsync(productGuid, "project.begin_script_editing", @params).ConfigureAwait(false);
 
                 var leaseId = EditorComponentTools.Str(result, "leaseId");
@@ -354,7 +393,7 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
 
             case "end":
             {
-                var productGuid = ToolSupport.ResolveProject(projects, project);
+                var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
                 var result = await editor.SendCommandAsync(productGuid, "project.end_script_editing").ConfigureAwait(false);
 
                 // Cleared unconditionally - matching this action's own idempotent contract (safe to
@@ -383,22 +422,29 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
     // ---------------------------------------------------------------- hades_regression
 
     [McpServerTool(Name = "hades_regression", Title = "Regression Record/Replay", ReadOnly = false, UseStructuredContent = true)]
-    [Description("Records or replays tool calls made against the attached Unity Editor. "
-               + "action='start' begins an empty recording; every subsequent tool call the attached "
-               + "Editor executes is captured until action='stop', which returns the captured "
-               + "entries as 'calls': {method, params, expected} - EXACTLY the shape action='replay' "
-               + "accepts in its own 'calls' parameter, so this tool's own 'stop' result can be "
-               + "passed straight into a later 'replay' call with no translation step. Stopping "
-               + "with nothing recorded (or never started) is a no-op, not an error. "
-               + "action='replay' replays a batch of calls - each identified by its Plugin~ wire "
-               + "method name (e.g. 'scene.create_gameobject', 'component.set_property'), not an "
-               + "MCP tool name - and, where an 'expected' value is supplied, compares the actual "
-               + "result against it; a per-call failure does not stop the rest of the batch. Needs "
-               + "a live Editor - call hades_charon_status first if unsure.")]
+    [Description("Records or replays Hades tool calls made in this session - not just what the "
+               + "attached Unity Editor executes. action='start' begins an empty recording; every "
+               + "subsequent tool call (Editor-routed, graph-served, or disk-served - anything but "
+               + "hades_regression itself) is captured until action='stop', which returns the "
+               + "captured entries as 'calls': {method, params, expected, format} - EXACTLY the "
+               + "shape action='replay' accepts in its own 'calls' parameter, so this tool's own "
+               + "'stop' result can be passed straight into a later 'replay' call with no "
+               + "translation step. Stopping with nothing recorded (or never started) is a no-op, "
+               + "not an error. A tool whose result varies between calls (a timestamp, an uptime "
+               + "counter - e.g. hades_ping) replays as a mismatch every time; such tools make poor "
+               + "fixture entries. action='replay' replays a batch of calls: an entry with "
+               + "'format':'tool' (what 'stop' now produces) names an MCP tool and calls it "
+               + "directly with 'params' as its arguments; an entry with no 'format' - the shape "
+               + "every fixture recorded before this tool covered the graph/disk surface, e.g. "
+               + "'scene.create_gameobject' - is dispatched by its Plugin~ wire method name instead "
+               + "and needs a live Editor (call hades_charon_status first if unsure). Either way, "
+               + "where an 'expected' value is supplied, the actual result is compared against it; "
+               + "a per-call failure does not stop the rest of the batch.")]
     public async Task<HadesRegressionResult> HadesRegression(
         [Description("'start', 'stop', or 'replay'")] string action,
         [Description("replay only: calls to replay, each { method, params, expected? }")] IReadOnlyList<RegressionCallSpec>? calls = null,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         EditorComponentTools.RequireNonBlank(action, nameof(action), "hades_regression");
 
@@ -406,32 +452,27 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
         {
             case "start":
             {
-                var result = await editor.SendCommandAsync(project, "hades.regression_record_start").ConfigureAwait(false);
-                return new HadesRegressionResult
+                if (!recorder.Start())
                 {
-                    Recording = result.TryGetProperty("recording", out var r) && r!.Kind == WireKind.Boolean && r.AsBoolean(),
-                };
+                    throw new McpException(
+                        "A regression recording session is already active. Call hades_regression "
+                        + "with action 'stop' first.");
+                }
+
+                return new HadesRegressionResult { Recording = true };
             }
 
             case "stop":
             {
-                var result = await editor.SendCommandAsync(project, "hades.regression_record_stop").ConfigureAwait(false);
-
-                var stoppedCalls = new List<RegressionRecordedCallResult>();
-                if (result.TryGetProperty("calls", out var callsJson) && callsJson!.Kind == WireKind.Array)
+                var stoppedCalls = recorder.Stop().Select(entry => new RegressionRecordedCallResult
                 {
-                    foreach (var entry in callsJson.Items)
-                    {
-                        stoppedCalls.Add(new RegressionRecordedCallResult
-                        {
-                            Method = EditorComponentTools.Str(entry, "method"),
-                            Params = entry.TryGetProperty("params", out var p) ? WireJsonBridge.ToClr(p!) : null,
-                            Expected = entry.TryGetProperty("expected", out var e) ? WireJsonBridge.ToClr(e!) : null,
-                        });
-                    }
-                }
+                    Method = entry.Tool,
+                    Params = entry.Arguments,
+                    Expected = entry.Result,
+                    Format = RegressionRecorder.ToolFormat,
+                }).ToList();
 
-                return new HadesRegressionResult { Calls = stoppedCalls, Count = (int)EditorComponentTools.Int(result, "count") };
+                return new HadesRegressionResult { Calls = stoppedCalls, Count = stoppedCalls.Count };
             }
 
             case "replay":
@@ -439,52 +480,168 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
                 if (calls is null || calls.Count == 0)
                     throw new McpException("hades_regression's 'replay' action needs a non-empty 'calls' array.");
 
-                var callsJson = WireJson.NewArray();
-                foreach (var call in calls)
+                foreach (var call in calls) EditorComponentTools.RequireNonBlank(call.Method, nameof(call.Method), "hades_regression");
+
+                var results = new RegressionReplayEntryResult?[calls.Count];
+
+                // Legacy, wire-method-shaped entries - Format null or anything but "tool" (see
+                // RegressionCallSpec.Format's own doc comment) - replay together in ONE batched
+                // wire call, byte-for-byte the same single dispatch this action has always made -
+                // see ReplayLegacyBatchAsync's own doc comment for why that stays true even now
+                // that a SECOND replay path exists alongside it.
+                var legacyIndices = new List<int>();
+                for (var i = 0; i < calls.Count; i++)
+                    if (!IsToolFormat(calls[i].Format)) legacyIndices.Add(i);
+
+                if (legacyIndices.Count > 0)
                 {
-                    EditorComponentTools.RequireNonBlank(call.Method, nameof(call.Method), "hades_regression");
+                    var legacyResults = await ReplayLegacyBatchAsync(
+                        legacyIndices.Select(i => calls[i]).ToList(), project).ConfigureAwait(false);
 
-                    var callJson = WireJson.NewObject().SetProperty("method", WireJson.String(call.Method));
-                    if (call.Params is { Count: > 0 })
-                    {
-                        var paramsJson = WireJson.NewObject();
-                        foreach (var (key, value) in call.Params) paramsJson.SetProperty(key, WireJsonBridge.ToWire(value));
-                        callJson.SetProperty("params", paramsJson);
-                    }
-                    if (call.Expected is { } expected) callJson.SetProperty("expected", WireJsonBridge.ToWire(expected));
-
-                    callsJson.Add(callJson);
+                    for (var i = 0; i < legacyIndices.Count && i < legacyResults.Count; i++)
+                        results[legacyIndices[i]] = legacyResults[i];
                 }
 
-                var @params = WireJson.NewObject().SetProperty("calls", callsJson);
-                var result = await editor.SendCommandAsync(project, "hades.regression_replay", @params).ConfigureAwait(false);
-
-                var results = new List<RegressionReplayEntryResult>();
-                if (result.TryGetProperty("results", out var resultsJson) && resultsJson!.Kind == WireKind.Array)
+                // Tool-shaped entries - Format "tool", everything hades_regression's own 'stop' now
+                // produces - replay by calling the named MCP tool directly, in-process; see
+                // ReplayToolCallAsync's own doc comment.
+                for (var i = 0; i < calls.Count; i++)
                 {
-                    foreach (var entry in resultsJson.Items)
-                    {
-                        results.Add(new RegressionReplayEntryResult
-                        {
-                            Method = entry.TryGetProperty("method", out var m) && m!.Kind == WireKind.String ? m.AsString() : null,
-                            Passed = entry.TryGetProperty("passed", out var p) && p!.Kind == WireKind.Boolean && p.AsBoolean(),
-                            Actual = entry.TryGetProperty("actual", out var a) ? WireJsonBridge.ToClr(a!) : null,
-                            Error = entry.TryGetProperty("error", out var er) && er!.Kind == WireKind.String ? er.AsString() : null,
-                        });
-                    }
+                    if (!IsToolFormat(calls[i].Format)) continue;
+                    results[i] = await ReplayToolCallAsync(calls[i], context).ConfigureAwait(false);
                 }
+
+                var finalResults = results
+                    .Select((r, i) => r ?? new RegressionReplayEntryResult
+                    {
+                        Method = calls[i].Method,
+                        Passed = false,
+                        Error = "hades_regression: internal error - this entry produced no replay result.",
+                    })
+                    .ToList();
+                var passedCount = finalResults.Count(r => r.Passed);
 
                 return new HadesRegressionResult
                 {
-                    Results = results,
-                    Total = (int)EditorComponentTools.Int(result, "total"),
-                    Passed = (int)EditorComponentTools.Int(result, "passed"),
-                    Failed = (int)EditorComponentTools.Int(result, "failed"),
+                    Results = finalResults,
+                    Total = finalResults.Count,
+                    Passed = passedCount,
+                    Failed = finalResults.Count - passedCount,
                 };
             }
 
             default:
                 throw new McpException($"hades_regression's 'action' must be 'start', 'stop', or 'replay', got '{action}'.");
+        }
+    }
+
+    static bool IsToolFormat(string? format) => string.Equals(format, RegressionRecorder.ToolFormat, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Replays the subset of 'replay's own 'calls' with no 'format' (or anything but
+    /// "tool") in ONE combined <c>hades.regression_replay</c> wire call - exactly the single round
+    /// trip this action has always made for every entry, before F15 gave a SECOND kind of entry a
+    /// second path (see <see cref="ReplayToolCallAsync"/>). The plugin's own RegressionReplay
+    /// handler already loops these internally (see its own doc comment on the Plugin~ side), so
+    /// batching them here is not a new optimisation - it is this method refusing to change the one
+    /// behaviour every already-recorded fixture (editor-routed.json included) depends on.</summary>
+    async Task<List<RegressionReplayEntryResult>> ReplayLegacyBatchAsync(IReadOnlyList<RegressionCallSpec> legacyCalls, string? project)
+    {
+        var callsJson = WireJson.NewArray();
+        foreach (var call in legacyCalls)
+        {
+            var callJson = WireJson.NewObject().SetProperty("method", WireJson.String(call.Method));
+            if (call.Params is { Count: > 0 })
+            {
+                var paramsJson = WireJson.NewObject();
+                foreach (var (key, value) in call.Params) paramsJson.SetProperty(key, WireJsonBridge.ToWire(value));
+                callJson.SetProperty("params", paramsJson);
+            }
+            if (call.Expected is { } expected) callJson.SetProperty("expected", WireJsonBridge.ToWire(expected));
+
+            callsJson.Add(callJson);
+        }
+
+        var @params = WireJson.NewObject().SetProperty("calls", callsJson);
+        var result = await editor.SendCommandAsync(project, "hades.regression_replay", @params).ConfigureAwait(false);
+
+        var results = new List<RegressionReplayEntryResult>();
+        if (result.TryGetProperty("results", out var resultsJson) && resultsJson!.Kind == WireKind.Array)
+        {
+            foreach (var entry in resultsJson.Items)
+            {
+                results.Add(new RegressionReplayEntryResult
+                {
+                    Method = entry.TryGetProperty("method", out var m) && m!.Kind == WireKind.String ? m.AsString() : null,
+                    Passed = entry.TryGetProperty("passed", out var p) && p!.Kind == WireKind.Boolean && p.AsBoolean(),
+                    Actual = entry.TryGetProperty("actual", out var a) ? WireJsonBridge.ToClr(a!) : null,
+                    Error = entry.TryGetProperty("error", out var er) && er!.Kind == WireKind.String ? er.AsString() : null,
+                });
+            }
+        }
+        return results;
+    }
+
+    /// <summary>Replays one 'format':'tool' entry by calling the named MCP tool directly, in
+    /// process, through the SAME <see cref="McpServerTool"/> instance a real tools/call would
+    /// dispatch to - looked up from the request's own <see cref="McpServerOptions.ToolCollection"/>
+    /// rather than a second, hand-rolled registry, so a tool-shaped fixture entry exercises the
+    /// real tool, not a re-implementation of it. Bypasses Program.cs's own CallToolFilters (no
+    /// re-tracing, no re-capture, no unknown-parameter check) exactly as
+    /// <see cref="ReplayLegacyBatchAsync"/> already bypasses the wire transport by calling
+    /// CommandTable.Dispatch directly on the plugin side - the two paths are deliberate mirrors of
+    /// each other. <paramref name="context"/> is THIS call's own request context (see
+    /// HadesRegression's own signature) - its Server/Services are reused for the nested call rather
+    /// than resolving a second, potentially-divergent instance, so a replayed tool's
+    /// constructor-injected dependencies resolve exactly as they would for a live call.</summary>
+    static async Task<RegressionReplayEntryResult> ReplayToolCallAsync(RegressionCallSpec call, RequestContext<CallToolRequestParams> context)
+    {
+        if (context is not { Services: { } services, Server: { } server })
+        {
+            return new RegressionReplayEntryResult
+            {
+                Method = call.Method, Passed = false,
+                Error = "hades_regression: no live request context to replay a tool-shaped entry against.",
+            };
+        }
+
+        var toolCollection = services.GetRequiredService<IOptions<McpServerOptions>>().Value.ToolCollection;
+        if (toolCollection is null || !toolCollection.TryGetPrimitive(call.Method, out var tool) || tool is null)
+        {
+            return new RegressionReplayEntryResult
+            {
+                Method = call.Method, Passed = false, Error = $"'{call.Method}' is not a registered Hades tool.",
+            };
+        }
+
+        var arguments = new Dictionary<string, JsonElement>();
+        if (call.Params is { Count: > 0 } callParams)
+            foreach (var (key, value) in callParams) arguments[key] = value;
+
+        var nestedParams = new CallToolRequestParams { Name = call.Method, Arguments = arguments };
+        var nestedRequest = new JsonRpcRequest { Method = "tools/call", Id = new RequestId(0) };
+        var nestedContext = new RequestContext<CallToolRequestParams>(server, nestedRequest, nestedParams)
+        {
+            Services = services,
+            MatchedPrimitive = tool,
+        };
+
+        try
+        {
+            var actual = await tool.InvokeAsync(nestedContext, CancellationToken.None).ConfigureAwait(false);
+            var normalized = RegressionRecorder.Normalize(actual);
+            var isMatch = call.Expected is not { } expected || JsonElement.DeepEquals(normalized, expected);
+
+            return new RegressionReplayEntryResult
+            {
+                Method = call.Method,
+                Passed = isMatch,
+                Actual = normalized,
+                Error = isMatch ? null : "Result did not match the recorded 'expected' value.",
+            };
+        }
+        catch (Exception ex)
+        {
+            return new RegressionReplayEntryResult { Method = call.Method, Passed = false, Error = ex.Message };
         }
     }
 }

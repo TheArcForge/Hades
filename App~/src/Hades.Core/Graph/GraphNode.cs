@@ -17,6 +17,9 @@ public sealed record GraphNode
     /// <summary>The owning asset's .meta GUID, for nodes that came from a Unity asset.</summary>
     public string? Guid { get; init; }
 
-    /// <summary>The object's fileID within its asset. 0 for script nodes, which have no fileID.</summary>
+    /// <summary>The object's fileID within its asset. 0 for script nodes and for binary/imported
+    /// asset nodes (textures, models, audio, fonts, shaders, animation clips — see
+    /// <see cref="Unity.ImportedAssetKind"/>): neither has a fileID, since both are a whole-file
+    /// identity rather than one object among several in a multi-object YAML asset.</summary>
     public long FileId { get; init; }
 }

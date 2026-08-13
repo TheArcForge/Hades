@@ -1,0 +1,153 @@
+{
+  "calls": [
+    {
+      "method": "projectSettings.apply",
+      "params": {
+        "operations": [
+          {
+            "op": "createTag",
+            "name": "RegSuiteTag"
+          }
+        ]
+      },
+      "expected": {
+        "applied": [
+          0
+        ],
+        "results": [
+          {
+            "index": 0,
+            "op": "createTag",
+            "result": {
+              "created": "RegSuiteTag"
+            }
+          }
+        ],
+        "failed": [],
+        "summary": "1 applied, 0 failed of 1 operation(s)."
+      }
+    },
+    {
+      "method": "projectSettings.apply",
+      "params": {
+        "operations": [
+          {
+            "op": "deleteTag",
+            "name": "RegSuiteTag"
+          }
+        ]
+      },
+      "expected": {
+        "applied": [
+          0
+        ],
+        "results": [
+          {
+            "index": 0,
+            "op": "deleteTag",
+            "result": {
+              "deleted": "RegSuiteTag"
+            }
+          }
+        ],
+        "failed": [],
+        "summary": "1 applied, 0 failed of 1 operation(s)."
+      }
+    },
+    {
+      "method": "scene.apply",
+      "params": {
+        "operations": [
+          {
+            "op": "create",
+            "name": "RegSuiteHost"
+          },
+          {
+            "op": "addComponent",
+            "target": "RegSuiteHost",
+            "type": "NoSuchComponent123"
+          },
+          {
+            "op": "rename",
+            "target": "RegSuiteHost",
+            "newName": "RegSuiteRenamed"
+          }
+        ]
+      },
+      "expected": {
+        "applied": [
+          0,
+          2
+        ],
+        "failed": [
+          {
+            "index": 1,
+            "op": "addComponent",
+            "error": "Component type not found: 'NoSuchComponent123'. Provide the exact type name (case-sensitive), e.g. 'Rigidbody' or 'BoxCollider' for built-in types, or your script's class name for a MonoBehaviour. Use search_by_name to confirm the exact name and check the assembly containing it is compiled."
+          }
+        ],
+        "summary": "2 applied, 1 failed of 3 operation(s)."
+      }
+    },
+    {
+      "method": "scene.apply",
+      "params": {
+        "operations": [
+          {
+            "op": "delete",
+            "target": "RegSuiteRenamed"
+          }
+        ]
+      },
+      "expected": {
+        "applied": [
+          0
+        ],
+        "failed": [],
+        "summary": "1 applied, 0 failed of 1 operation(s)."
+      }
+    },
+    {
+      "method": "scene.apply",
+      "params": {
+        "operations": [
+          {
+            "op": "create",
+            "name": "RegSuiteBox"
+          },
+          {
+            "op": "addComponent",
+            "target": "RegSuiteBox",
+            "type": "BoxCollider"
+          }
+        ]
+      },
+      "expected": {
+        "applied": [
+          0,
+          1
+        ],
+        "failed": [],
+        "summary": "2 applied, 0 failed of 2 operation(s)."
+      }
+    },
+    {
+      "method": "scene.apply",
+      "params": {
+        "operations": [
+          {
+            "op": "delete",
+            "target": "RegSuiteBox"
+          }
+        ]
+      },
+      "expected": {
+        "applied": [
+          0
+        ],
+        "failed": [],
+        "summary": "1 applied, 0 failed of 1 operation(s)."
+      }
+    }
+  ]
+}

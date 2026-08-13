@@ -221,6 +221,22 @@ public class ReferenceReadingTests : IDisposable
         Assert.Contains("no longer on disk", ex.Message);
     }
 
+    [Fact]
+    public void FindUnsetReferences_APathThatIsADirectory_GivesAClearDirectoryErrorNeverTheNoLongerOnDiskMessage()
+    {
+        // F11's own reported symptom: find_unset_references given a directory path used to get
+        // the SAME "no longer on disk... hades_rebuild_graph will bring the index back in sync"
+        // message a genuinely deleted file gets - the path is right there on disk, and rebuilding
+        // the index is an expensive no-op that can never fix a category mismatch.
+        Directory.CreateDirectory(Path.Combine(_projectRoot, "Assets", "SomeFolder"));
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => ReferenceReading.FindUnsetReferences(_projectRoot, "Assets/SomeFolder"));
+        Assert.Contains("directory", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("no longer on disk", ex.Message);
+        Assert.DoesNotContain("hades_rebuild_graph", ex.Message);
+    }
+
     // ---------------------------------------------------------------- GetEventListeners
 
     [Fact]

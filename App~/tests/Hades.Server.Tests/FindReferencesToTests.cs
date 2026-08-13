@@ -146,6 +146,44 @@ public class FindReferencesToTests : IClassFixture<WebApplicationFactory<Program
         Assert.Contains("search_by_name", text);
     }
 
+    // ------------------------------------------------------------ find_references_to (F6-honesty)
+
+    [Fact]
+    public async Task AnAssetTypeHadesDoesNotIndexGivesADifferentActionableMessage_FromAGenuinelyAbsentPath()
+    {
+        // A video clip: on disk, with a real .meta, but never a graph node — video is not among
+        // the binary/imported kinds Hades indexes (textures, models, audio, fonts, shaders,
+        // animation clips; see Hades.Core.Unity.ImportedAssetKind). Before F6-honesty this hit the
+        // exact same "not in the graph" branch as a path that does not exist at all, implying
+        // nothing could be said either way — when in fact Hades knows this file is right there.
+        Write("Assets/Trailer.mp4", "not real video bytes, existence is all that matters here",
+            "ffff6666ffff6666ffff6666ffff6666");
+        _factory.Services.GetRequiredService<ProjectService>().AdoptAndIndex(_projectRoot);
+
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "find_references_to",
+            new { assetPath = "Assets/Trailer.mp4" }));
+
+        Assert.Contains("exists on disk but is an asset type Hades does not index", text);
+
+        // Must NOT read as the genuinely-absent-path message — a caller acting on "not in the
+        // graph" (e.g. "go ahead and delete it, search_by_name confirms nothing references it")
+        // would be reasoning from the wrong premise entirely for a file that is right there.
+        Assert.DoesNotContain("search_by_name returns paths in exactly this form", text);
+    }
+
+    [Fact]
+    public async Task AGenuinelyAbsentPathKeepsItsOriginalMessage_EvenThoughExistsOnDiskNowExists()
+    {
+        // Regression guard for the new ExistsOnDisk branch: a path that truly is not on disk must
+        // still get the ORIGINAL message, unchanged — this only pins AnUnknownPathGivesActionableGuidance's
+        // existing assertions again, but explicitly under the F6-honesty change's own heading.
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "find_references_to",
+            new { assetPath = "Assets/StillDoesNotExist.someWeirdExtension" }));
+
+        Assert.Contains("not in the graph", text);
+        Assert.DoesNotContain("exists on disk but is an asset type Hades does not index", text);
+    }
+
     [Fact]
     public async Task ABlankPathGivesActionableGuidance()
     {

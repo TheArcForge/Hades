@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Hades.Core;
 using Hades.Core.Reading;
 using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
 namespace Hades.Server.Mcp;
@@ -198,10 +199,11 @@ public sealed class SettingsTools(ProjectService projects)
                + "'assetPath') - one asset's importer block, e.g. a TextureImporter's compression "
                + "settings. An unrecognised 'section' is refused, listing the valid ones."
                + ToolSupport.SavedStateClause)]
-    public ProjectSettingsSectionResult ProjectSettings(
+    public async Task<ProjectSettingsSectionResult> ProjectSettings(
         [Description("Which section to read: \"player\", \"tags\", \"layers\", \"buildScenes\", \"renderPipeline\", or \"importSettings\"")] string section,
         [Description("Required when section is \"importSettings\": the project-relative asset path to inspect, as returned by search_by_name")] string? assetPath = null,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         if (string.IsNullOrWhiteSpace(section))
         {
@@ -210,14 +212,45 @@ public sealed class SettingsTools(ProjectService projects)
                 + ". Add one and call again, e.g. {\"section\": \"player\"}.");
         }
 
+        // Both checks below used to live inside the section-specific handlers themselves (see
+        // ReadImportSettingsForSection's former doc comment), reached only once a switch arm below
+        // had already matched - which meant they always ran BEFORE that handler's own project
+        // resolution. Hoisted here, ahead of the SINGLE resolution below, to keep that exact
+        // ordering now that resolution can consult MCP roots (a real round trip, occasionally a
+        // write - see ToolSupport.ResolveProjectAsync) rather than always being free: an
+        // unrecognised section or a missing 'assetPath' must still be refused without ever
+        // attempting that, exactly as before.
+        if (!ValidSections.Contains(section))
+        {
+            throw new McpException(
+                $"'{section}' is not a recognised project_settings section. Valid sections: {string.Join(", ", ValidSections)}.");
+        }
+
+        if (section == "importSettings" && string.IsNullOrWhiteSpace(assetPath))
+        {
+            throw new McpException(
+                "project_settings section \"importSettings\" needs an 'assetPath' - the "
+                + "project-relative asset path to inspect, e.g. {\"section\": \"importSettings\", "
+                + "\"assetPath\": \"Assets/Textures/Rock.png\"}. search_by_name returns paths in "
+                + "exactly this form.");
+        }
+
+        // Resolved exactly ONCE per call, here - every section handler below is called with this
+        // SAME already-resolved productGuid in place of the raw 'project' handle, never re-run
+        // through ToolSupport.ResolveProjectAsync a second time. Passing an already-resolved,
+        // non-blank productGuid as a handle is always safe and free (ProjectResolver.Resolve's own
+        // "explicit handle" fast path - see ToolSupportTests - never re-consults roots), so every
+        // handler below still resolves correctly without needing its own context/await.
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
+
         return section switch
         {
-            "player" => new ProjectSettingsSectionResult { Section = section, Player = ProjectGetSettings(project) },
-            "tags" => new ProjectSettingsSectionResult { Section = section, Tags = TagList(project).Tags },
-            "layers" => new ProjectSettingsSectionResult { Section = section, Layers = LayerList(project).Layers },
-            "buildScenes" => new ProjectSettingsSectionResult { Section = section, BuildScenes = SceneListBuild(project).Scenes },
-            "renderPipeline" => new ProjectSettingsSectionResult { Section = section, RenderPipeline = ReadRenderPipeline(project) },
-            "importSettings" => new ProjectSettingsSectionResult { Section = section, ImportSettings = ReadImportSettingsForSection(assetPath, project) },
+            "player" => new ProjectSettingsSectionResult { Section = section, Player = ProjectGetSettings(productGuid) },
+            "tags" => new ProjectSettingsSectionResult { Section = section, Tags = TagList(productGuid).Tags },
+            "layers" => new ProjectSettingsSectionResult { Section = section, Layers = LayerList(productGuid).Layers },
+            "buildScenes" => new ProjectSettingsSectionResult { Section = section, BuildScenes = SceneListBuild(productGuid).Scenes },
+            "renderPipeline" => new ProjectSettingsSectionResult { Section = section, RenderPipeline = ReadRenderPipeline(productGuid) },
+            "importSettings" => new ProjectSettingsSectionResult { Section = section, ImportSettings = AssetGetImportSettings(assetPath!, productGuid) },
             _ => throw new McpException(
                 $"'{section}' is not a recognised project_settings section. Valid sections: {string.Join(", ", ValidSections)}."),
         };
@@ -231,23 +264,6 @@ public sealed class SettingsTools(ProjectService projects)
         var unityProject = ResolveProjectPath(project);
         var info = Guarded(() => ReadThrough.AnalyzeRenderPipeline(unityProject));
         return new RenderPipelineResult { Pipeline = info.Pipeline, PipelineAssetPath = info.PipelineAssetPath };
-    }
-
-    /// <summary>project_settings' own validation for the one section that needs a second argument -
-    /// AssetGetImportSettings's OWN blank-path message names the wrong tool if surfaced through
-    /// here unchanged, so this checks first and only then delegates.</summary>
-    ImportSettingsResult ReadImportSettingsForSection(string? assetPath, string? project)
-    {
-        if (string.IsNullOrWhiteSpace(assetPath))
-        {
-            throw new McpException(
-                "project_settings section \"importSettings\" needs an 'assetPath' - the "
-                + "project-relative asset path to inspect, e.g. {\"section\": \"importSettings\", "
-                + "\"assetPath\": \"Assets/Textures/Rock.png\"}. search_by_name returns paths in "
-                + "exactly this form.");
-        }
-
-        return AssetGetImportSettings(assetPath, project);
     }
 
     /// <summary>A scalar field's string value, or null when the document does not have it - some

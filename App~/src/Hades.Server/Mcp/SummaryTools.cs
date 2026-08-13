@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using Hades.Core;
 using Hades.Core.Editors;
 using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
 namespace Hades.Server.Mcp;
@@ -88,9 +89,10 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
                + "for a scene or prefab. \"Root\" means a top-level GameObject: its Transform has "
                + "no parent. Takes the project-relative path exactly as search_by_name returns it."
                + ToolSupport.SavedStateClause)]
-    public SceneSummary GetSceneSummary(
+    public async Task<SceneSummary> GetSceneSummary(
         [Description("Project-relative scene or prefab path, as returned by search_by_name")] string path,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -100,7 +102,7 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
                 + "returns paths in exactly this form.");
         }
 
-        var productGuid = ToolSupport.ResolveProject(projects, project);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
 
         return projects.GetSceneSummary(productGuid, path)
             ?? throw new McpException(
@@ -114,11 +116,12 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
     [Description("Files touched most recently, newest first — sourced from the on-disk "
                + "modification time recorded when each file was last indexed. Useful for picking "
                + "up 'what have I been working on'." + ToolSupport.SavedStateClause)]
-    public RecentlyChangedResult GetRecentlyChanged(
+    public async Task<RecentlyChangedResult> GetRecentlyChanged(
         [Description("Only include files changed at or after this ISO-8601 timestamp, e.g. "
                     + "\"2026-08-01T00:00:00Z\". Omit for no lower bound.")] string? since = null,
         [Description("Maximum files to return (1-500, default 50)")] int limit = 50,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         DateTimeOffset? sinceParsed = null;
         if (!string.IsNullOrWhiteSpace(since))
@@ -134,7 +137,7 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
             sinceParsed = parsed;
         }
 
-        var productGuid = ToolSupport.ResolveProject(projects, project);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
 
         // Clamped to this tool's own documented maximum BEFORE the "+1" below - see
         // InspectTool.FindUnsetReferences' identical clampedLimit pattern. Without this, a
@@ -164,10 +167,11 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
                + "but results may be stale until it completes. Hades' incremental sync already "
                + "keeps the graph current on its own — call this when you suspect the graph has "
                + "drifted from disk, not as routine maintenance." + ToolSupport.SavedStateClause)]
-    public RebuildResult RebuildGraph(
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+    public async Task<RebuildResult> RebuildGraph(
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
-        var productGuid = ToolSupport.ResolveProject(projects, project);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
 
         return projects.RebuildGraph(productGuid)
             ?? throw new McpException($"Project {productGuid} is known but has nothing to rebuild yet.");
@@ -204,9 +208,10 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
                + "summaries) works regardless of Editor state. Call this to confirm an Editor-only "
                + "capability is genuinely unavailable, or to tell 'busy' apart from 'gone'.")]
     public async Task<CharonStatusResult> CharonStatus(
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
-        var productGuid = ToolSupport.ResolveProject(projects, project);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
 
         var status = await projects.GetCharonStatus(productGuid).ConfigureAwait(false)
             ?? throw new McpException($"Project {productGuid} is known but has no Charon status to report.");

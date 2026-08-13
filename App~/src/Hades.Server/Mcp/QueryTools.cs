@@ -4,6 +4,7 @@ using Hades.Core;
 using Hades.Core.Graph;
 using Hades.Core.Unity;
 using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
 namespace Hades.Server.Mcp;
@@ -157,7 +158,7 @@ public sealed class QueryTools(ProjectService projects)
                + "cannot express. Refused together with 'kind' (same axis, pick one). "
                + "This is a fixed set of scalar filters, not a query language - there is no way to "
                + "pass raw SQL through any of them, by construction." + ToolSupport.SavedStateClause)]
-    public GraphQueryResult GraphQuery(
+    public async Task<GraphQueryResult> GraphQuery(
         [Description("Exact node kind, e.g. \"Class\", \"MonoBehaviour\", \"GameObject\", \"Rigidbody\", \"Material\", \"AnimatorController\". Refused together with 'kindPattern'.")] string? kind = null,
         [Description("Substring to match against the node name, case-insensitive")] string? namePattern = null,
         [Description("Project-relative path prefix, e.g. \"Assets/Scripts\". Combines with 'fileType' too.")] string? pathPrefix = null,
@@ -170,7 +171,8 @@ public sealed class QueryTools(ProjectService projects)
         [Description("Whole-FILE classification by extension, from file identity rather than graph nodes - reproduces asset_find: \"Script\", \"Scene\", \"Prefab\", \"Material\", \"AnimatorController\", \"ScriptableObject\", or \"Asset\". One hit per file. Combines only with 'pathPrefix'; refused together with 'kind', 'kindPattern', 'namePattern', or 'edgeKind'.")] string? fileType = null,
         [Description("Substring to match against the node kind, case-insensitive - e.g. \"Collider\" matches \"BoxCollider\"/\"SphereCollider\"/\"CapsuleCollider\". Reproduces component_find's builtin-kind branch. Refused together with 'kind'.")] string? kindPattern = null,
         [Description("Maximum nodes to return (1-500, default 100)")] int limit = 100,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         // Clamped to graph_query's own documented maximum BEFORE either branch below adds its "+1"
         // sentinel - see InspectTool.FindUnsetReferences' identical clampedLimit pattern. Without
@@ -212,7 +214,7 @@ public sealed class QueryTools(ProjectService projects)
                     + "just 'fileType' and, optionally, 'pathPrefix'.");
             }
 
-            var fileTypeProject = ToolSupport.ResolveProject(projects, project);
+            var (fileTypeProject, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
             var assets = projects.FindAssetsByFileState(fileTypeProject, fileType, pathPrefix, clampedLimit + 1);
             return BuildFileTypeResult(assets, clampedLimit);
         }
@@ -236,11 +238,34 @@ public sealed class QueryTools(ProjectService projects)
                 + "Add 'edgeKind' and call again.");
         }
 
-        var productGuid = ToolSupport.ResolveProject(projects, project);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
 
         var found = projects.QueryGraph(productGuid, kind, namePattern, pathPrefix, edgeKind,
             edgeDirection.ToLowerInvariant(), clampedLimit + 1, edgeTargetPath, edgeTargetNamePattern, edgeAbsent,
             kindPattern, edgeTargetKind);
+
+        // F7: an unrecognised 'kind' (a typo, e.g. "Bananas", or a plausible-but-wrong guess, e.g.
+        // "Scene" - a real Hades/Unity concept but never a graph NODE kind) used to return exactly
+        // the same {results: [], totalReturned: 0} as a genuinely empty area of an otherwise-
+        // populated graph - indistinguishable from each other. Checked here, against the ACTUAL
+        // kind vocabulary this project's graph contains, rather than up front against a fixed list,
+        // so a valid kind combined with OTHER filters that happen to match nothing (namePattern,
+        // pathPrefix, edge*) still returns an ordinary empty result, exactly as before - this only
+        // fires when 'kind' ITSELF is the reason nothing matched.
+        if (!string.IsNullOrWhiteSpace(kind) && found.Count == 0)
+        {
+            var knownKinds = projects.KnownNodeKinds(productGuid);
+            if (!knownKinds.Contains(kind, StringComparer.Ordinal))
+            {
+                var vocabulary = knownKinds.Count > 0
+                    ? string.Join(", ", knownKinds)
+                    : "(this project's graph has no nodes at all yet)";
+
+                throw new McpException(
+                    $"'{kind}' does not match any node kind in this project's graph (kinds are "
+                    + $"case-sensitive). Known kinds: {vocabulary}.");
+            }
+        }
 
         return BuildResult(found, clampedLimit);
     }

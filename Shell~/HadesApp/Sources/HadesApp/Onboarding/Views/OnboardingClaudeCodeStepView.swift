@@ -8,6 +8,20 @@ import SwiftUI
 /// The verification half is `viewModel.verifyClaudeCode()` - see `ClaudeCodeVerifying`'s own doc
 /// comment for exactly what a `.reachable` result proves, and note that `reachableExplanation`
 /// below states the "proves vs. assumes" distinction directly in the UI, not just in code comments.
+///
+/// **The launch-at-login toggle lives here, not on some later step.** Claude Code does not retry
+/// an MCP server that was unreachable at session start - reconnecting needs `/mcp` plus an
+/// explicit reconnect, or a whole new session (verified against Claude Code's own docs; see
+/// `Documentation/InternalTesting-Install.md`'s "Known issues" section for the same note aimed at
+/// testers). This step is exactly where a user is setting up that connection, so it is the moment
+/// the fix - keeping Hades running in the background - is most worth surfacing, regardless of
+/// whether `verifyClaudeCode()` above just succeeded or failed. Always visible, never gated on
+/// verification: forgetting to start Hades before a session is exactly the "unreachable at session
+/// start" case this exists to prevent NEXT time. The same `Binding(get:set:)` shape `SettingsView`'s
+/// own "Launch Hades at Login" row already uses - this view only ever reads
+/// `viewModel.launchAtLoginEnabled` and calls `viewModel.toggleLaunchAtLogin(to:)`, never touching
+/// `LaunchAtLoginReading` itself (that boundary is `OnboardingViewModel`'s job - see its own
+/// `toggleLaunchAtLogin(to:)` doc comment).
 struct OnboardingClaudeCodeStepView: View {
     let viewModel: OnboardingViewModel
 
@@ -35,6 +49,15 @@ struct OnboardingClaudeCodeStepView: View {
             }
 
             verificationStatus
+
+            Toggle(
+                "Start Hades when you log in — recommended, so Claude Code always finds it",
+                isOn: Binding(
+                    get: { viewModel.launchAtLoginEnabled },
+                    set: { viewModel.toggleLaunchAtLogin(to: $0) }
+                )
+            )
+
             Spacer()
         }
     }

@@ -214,14 +214,25 @@ public sealed class GraphDatabase : IDisposable
     /// "references"` edges count as a dependency here — `instance_of` and `corresponds_to` answer
     /// a different question (what this scene instantiates / what a stripped object stands in
     /// for), not "what does this asset depend on".
+    ///
+    /// F6-honesty: a `references` edge whose target GUID resolves to no node — most often now
+    /// because the target lives outside every scanned root (a registry package resolved into
+    /// Library/PackageCache, never walked regardless of extension) rather than because its kind
+    /// goes unindexed, now that textures, models, audio, fonts, shaders, and animation clips are
+    /// indexed too (see <see cref="Unity.ImportedAssetKind"/>) — is no longer silently dropped. It
+    /// cannot become a <see cref="DependencyHit"/> (there is no path to walk further from), but it
+    /// is real — a row in the `edges` table, exactly as resolvable as any other — so it is
+    /// reported via <see cref="DependencyTrace.Dangling"/> instead of vanishing. See
+    /// <see cref="DanglingDependency"/>'s own class doc comment.
     /// </summary>
-    public IReadOnlyList<DependencyHit> TraceDependencies(string rootPath, int maxDepth)
+    public DependencyTrace TraceDependencies(string rootPath, int maxDepth)
     {
         ArgumentNullException.ThrowIfNull(rootPath);
         maxDepth = Math.Clamp(maxDepth, 1, MaxTraceDepth);
 
         var visited = new HashSet<string>(StringComparer.Ordinal) { rootPath };
-        var results = new List<DependencyHit>();
+        var hits = new List<DependencyHit>();
+        var dangling = new List<DanglingDependency>();
         var frontier = new List<string> { rootPath };
 
         for (var depth = 1; depth <= maxDepth && frontier.Count > 0; depth++)
@@ -229,36 +240,49 @@ public sealed class GraphDatabase : IDisposable
             var next = new List<string>();
 
             foreach (var path in frontier)
-            foreach (var target in TargetsOf(path))
+            foreach (var (guid, propertyPath) in DirectReferencesOf(path))
             {
-                if (!visited.Add(target)) continue;
-                results.Add(new DependencyHit { Path = target, Depth = depth });
-                next.Add(target);
+                if (PathForGuid(guid) is { } targetPath)
+                {
+                    if (!visited.Add(targetPath)) continue;
+                    hits.Add(new DependencyHit { Path = targetPath, Depth = depth });
+                    next.Add(targetPath);
+                }
+                else
+                {
+                    dangling.Add(new DanglingDependency
+                    {
+                        FromPath = path, Depth = depth, ToGuid = guid, PropertyPath = propertyPath,
+                    });
+                }
             }
 
             frontier = next;
         }
 
-        return results;
+        return new DependencyTrace { Hits = hits, Dangling = dangling };
     }
 
-    /// <summary>One hop of <see cref="TraceDependencies"/>: every distinct asset <paramref
-    /// name="path"/> depends on directly. Distinct GUIDs are resolved once each rather than once
-    /// per edge, since a file's edges routinely repeat a target many times over (e.g. every
-    /// component in a prefab pointing back at its own GameObject). A GUID nothing in this
-    /// project's graph owns — a Unity builtin resource, or an asset this graph never indexed —
-    /// resolves to null via <see cref="PathForGuid"/> and is dropped rather than surfaced as a
-    /// broken hop.</summary>
-    IEnumerable<string> TargetsOf(string path)
+    /// <summary>One hop of <see cref="TraceDependencies"/>: every distinct `references` edge
+    /// <paramref name="path"/> carries directly, as (target guid, a sample property path) pairs.
+    /// Distinct GUIDs are yielded once each rather than once per edge, since a file's edges
+    /// routinely repeat a target many times over (e.g. every component in a prefab pointing back
+    /// at its own GameObject) — the property path kept for each is simply the first one seen,
+    /// same convention as <see cref="ReferencingFile.SampleVia"/>. Resolving each guid via
+    /// <see cref="PathForGuid"/> — deciding whether it becomes a hop or a dangling dependency — is
+    /// the caller's job, not this method's: unlike the pre-F6-honesty TargetsOf this replaces,
+    /// dropping an unresolved guid here would make it unreportable.</summary>
+    IEnumerable<(string Guid, string PropertyPath)> DirectReferencesOf(string path)
     {
-        var guids = EdgesFromPath(path)
-            .Where(e => e.Kind == "references" && e.ToGuid is not null)
-            .Select(e => e.ToGuid!)
-            .Distinct(StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var guid in guids)
-            if (PathForGuid(guid) is { } targetPath)
-                yield return targetPath;
+        foreach (var edge in EdgesFromPath(path))
+        {
+            if (edge.Kind != "references" || edge.ToGuid is not { } guid) continue;
+            if (!seen.Add(guid)) continue;
+
+            yield return (guid, edge.PropertyPath);
+        }
     }
 
     /// <summary>Everything referencing this asset — the backbone of "what would break if I

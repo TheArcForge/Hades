@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text.Json.Serialization;
 using Hades.Core;
 using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
 namespace Hades.Server.Mcp;
@@ -75,10 +76,11 @@ public sealed class MemoryTools(ProjectService projects)
                + "when a project has no memory recorded yet, rather than an empty list a caller "
                + "would have to interpret. Does not include memory/proposals/ - pending, "
                + "unaccepted suggestions are not part of this overview.")]
-    public MemorySummaryResult GetMemorySummary(
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+    public async Task<MemorySummaryResult> GetMemorySummary(
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
-        var productGuid = ToolSupport.ResolveProject(projects, project);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
 
         var summary = projects.GetMemorySummary(productGuid)
             ?? throw new McpException($"Project {productGuid} is known but has no memory store yet.");
@@ -105,10 +107,11 @@ public sealed class MemoryTools(ProjectService projects)
                + "from. The query is matched as literal words, never as a query language - special "
                + "characters and words like OR/NEAR/AND/* have no special meaning here. Searches "
                + "only top-level authored documents, never memory/proposals/.")]
-    public MemoryRecallResult RecallMemory(
+    public async Task<MemoryRecallResult> RecallMemory(
         [Description("Free-text search query, e.g. \"render pipeline\" - matched as literal words")] string query,
         [Description("Maximum excerpts to return (1-50, default 10)")] int limit = 10,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         if (string.IsNullOrWhiteSpace(query))
         {
@@ -117,7 +120,7 @@ public sealed class MemoryTools(ProjectService projects)
                 + "{\"query\": \"render pipeline\"}. Add it and call again.");
         }
 
-        var productGuid = ToolSupport.ResolveProject(projects, project);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
 
         var hits = projects.RecallMemory(productGuid, query, limit + 1);
         var truncated = hits.Count > limit;
@@ -134,11 +137,12 @@ public sealed class MemoryTools(ProjectService projects)
                + "decisions.md, etc.). Agents propose; only a human editing the authored document "
                + "directly accepts a proposal into it. Call get_memory_summary first to see what "
                + "authored documents already exist.")]
-    public MemoryProposalResult ProposeMemoryUpdate(
+    public async Task<MemoryProposalResult> ProposeMemoryUpdate(
         [Description("Plain basename of the authored document this proposal is about, e.g. \"patterns.md\" or \"patterns\" — not a path, and not empty.")] string targetFile,
         [Description("The proposed markdown text, to be reviewed and (if accepted) merged into targetFile by a human.")] string content,
         [Description("Why this is being proposed - evidence, reasoning, or context for the human reviewer.")] string? rationale = null,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         if (string.IsNullOrWhiteSpace(targetFile))
         {
@@ -162,7 +166,7 @@ public sealed class MemoryTools(ProjectService projects)
                 + "proposed. Add it and call again.");
         }
 
-        var productGuid = ToolSupport.ResolveProject(projects, project);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
 
         var result = projects.ProposeMemoryUpdate(productGuid, targetFile, content, rationale ?? "")
             ?? throw new McpException($"Project {productGuid} is known but could not accept a proposal.");
@@ -177,11 +181,12 @@ public sealed class MemoryTools(ProjectService projects)
                + "reports drift, it never edits a memory document; only a human fixes what this "
                + "finds. Only explicit, backtick-quoted project-relative .cs paths are recognised, "
                + "not bare class names or prose mentions." + ToolSupport.SavedStateClause)]
-    public MemoryValidationResult ValidateMemory(
+    public async Task<MemoryValidationResult> ValidateMemory(
         [Description("Maximum findings to return (1-500, default 100)")] int limit = 100,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
-        var productGuid = ToolSupport.ResolveProject(projects, project);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
 
         var found = projects.ValidateMemory(productGuid, limit + 1);
         var truncated = found.Count > limit;

@@ -41,6 +41,7 @@ public sealed class EditorListener : IDisposable
     readonly string _tokenFilePath;
     readonly EditorRegistry _registry;
     readonly LeaseRegistry? _leases;
+    readonly ProjectService? _projects;
     readonly int _requestedPort;
 
     readonly HashSet<EditorSession> _liveSessions = [];
@@ -61,9 +62,15 @@ public sealed class EditorListener : IDisposable
     /// this was still the disconnecting session's own registration (see <see cref="Register"/>'s
     /// <c>Disconnected</c> handler). Optional; null (the default) skips both entirely, same as
     /// every other test in this file that has no need of them.</param>
+    /// <param name="projects">Where a successful registration persists the Hello's own
+    /// UnityVersion and bumps LastSeen - see <see cref="Register"/> and
+    /// <see cref="ProjectService.RecordEditorAttached"/>. Optional, same reasoning as
+    /// <paramref name="leases"/>: null (the default) skips the update entirely, which every other
+    /// test in this file that has no need of it relies on.</param>
     /// <param name="port">TCP port to bind, or 0 (the default) to let the OS assign a free one -
     /// the actual bound port is read back via <see cref="Port"/> after <see cref="Start"/>.</param>
-    public EditorListener(string tokenFilePath, EditorRegistry registry, LeaseRegistry? leases = null, int port = 0)
+    public EditorListener(string tokenFilePath, EditorRegistry registry, LeaseRegistry? leases = null,
+        ProjectService? projects = null, int port = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tokenFilePath);
         ArgumentNullException.ThrowIfNull(registry);
@@ -71,6 +78,7 @@ public sealed class EditorListener : IDisposable
         _tokenFilePath = tokenFilePath;
         _registry = registry;
         _leases = leases;
+        _projects = projects;
         _requestedPort = port;
     }
 
@@ -225,6 +233,23 @@ public sealed class EditorListener : IDisposable
         };
 
         _registry.Register(new AttachedEditor { Hello = hello, ConnectedAtUtc = DateTimeOffset.UtcNow, Session = session });
+
+        // Persists the Hello's own UnityVersion and bumps LastSeen (see
+        // ProjectService.RecordEditorAttached's own doc comment: project.json otherwise stayed
+        // UnityVersion: null and LastSeen == FirstSeen forever after the initial Adopt). Best-effort,
+        // same reasoning as the lease-clearing block above: a transient project.json write failure
+        // must never prevent the Editor from actually attaching.
+        if (_projects is not null)
+        {
+            try
+            {
+                _projects.RecordEditorAttached(projectGuid, hello.UnityVersion);
+            }
+            catch
+            {
+                // Best-effort - see this block's own comment above.
+            }
+        }
 
         session.Start();
 

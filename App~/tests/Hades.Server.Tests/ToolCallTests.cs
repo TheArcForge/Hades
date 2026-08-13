@@ -197,6 +197,83 @@ public class ToolCallTests : IClassFixture<WebApplicationFactory<Program>>, IDis
         Assert.True(rejected, envelope.GetRawText());
     }
 
+    // ---------------------------------------------------------------- F13a: unknown parameters are refused, not dropped
+    //
+    // Defect: a misspelled or invented parameter (a typo, or a caller remembering a retired v1.2
+    // name) was silently ignored - a caller asking for a filtered result got an unfiltered one that
+    // LOOKS filtered, with no error anywhere. Fixed as a server-side check in Program.cs's own
+    // CallToolFilters, ahead of the tool's own body: an unknown argument name refuses the WHOLE
+    // call, before any work happens, naming both the unknown parameter and the tool's real ones -
+    // the same "refused, not ignored" convention OperationFieldValidator already established for an
+    // unrecognised FIELD inside a batch operation (see that class's own doc comment), extended here
+    // to top-level tool parameters, which nothing previously checked at all.
+
+    [Fact]
+    public async Task UnknownParameter_RejectsTheWholeCall_NamingItAndTheValidParameters()
+    {
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "search_by_name",
+            new { namePattern = "player", frobnicate = "Class" }));
+
+        Assert.Contains("frobnicate", text);
+        Assert.Contains("search_by_name", text);
+        // Every one of search_by_name's real parameters is named, so a caller can self-correct
+        // without guessing or re-reading the tool's own schema.
+        Assert.Contains("namePattern", text);
+        Assert.Contains("kind", text);
+        Assert.Contains("limit", text);
+        Assert.Contains("project", text);
+    }
+
+    [Fact]
+    public async Task UnknownParameter_ResultIsAToolErrorNotASilentlyFilteredSuccess()
+    {
+        // The exact live symptom: a caller asking for a filtered result must never get back an
+        // unfiltered one that looks filtered - the whole call is refused instead, zero results
+        // returned either way.
+        var envelope = await McpTestClient.CallTool(_factory, "search_by_name",
+            new { namePattern = "player", frobnicate = "Class" });
+
+        var result = envelope.GetProperty("result");
+        Assert.True(result.GetProperty("isError").GetBoolean(), envelope.GetRawText());
+    }
+
+    [Fact]
+    public async Task UnknownParameter_OnADifferentToolWithManyParameters_IsStillCaught()
+    {
+        // Proves the check is generic (schema-driven), not hardcoded to one tool's own parameter
+        // list - graph_query has an entirely different parameter set from search_by_name.
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "graph_query",
+            new { kind = "Class", edgeTarget = "Assets/Scripts/PlayerController.cs" }));
+
+        Assert.Contains("edgeTarget", text);
+        Assert.Contains("graph_query", text);
+    }
+
+    [Fact]
+    public async Task UnknownParameter_MisspellingAnOptionalKnownOne_IsRefusedNotSilentlyIgnored()
+    {
+        // The core symptom, concretely: 'knd' (typo for the OPTIONAL 'kind') would otherwise be
+        // silently dropped, and the call would succeed with an UNFILTERED result indistinguishable
+        // from a correctly-filtered one - the caller has no way to know their filter was ignored.
+        // Must be refused instead, naming the misspelling - not silently coerced to the parameter
+        // it merely resembles.
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "search_by_name",
+            new { namePattern = "a", knd = "Interface" }));
+
+        Assert.Contains("knd", text);
+    }
+
+    [Fact]
+    public async Task OnlyKnownParameters_CallSucceedsNormally_NoFalsePositive()
+    {
+        // Regression guard for the check itself: a call using only real parameters (including the
+        // optional ones) must never be refused.
+        var structured = Structured(await McpTestClient.CallTool(_factory, "search_by_name",
+            new { namePattern = "player", kind = "Class", limit = 10, project = "aaaabbbbccccddddeeeeffff00001111" }));
+
+        Assert.Equal(1, structured.GetProperty("totalReturned").GetInt32());
+    }
+
     [Fact]
     public async Task BlankPatternReturnsAnActionableError()
     {

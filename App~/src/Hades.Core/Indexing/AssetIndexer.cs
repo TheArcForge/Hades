@@ -9,11 +9,22 @@ namespace Hades.Core.Indexing;
 /// controllers — into the graph, mirroring <see cref="ScriptIndexer"/>. Both share
 /// <see cref="ProjectWalker"/>, so "what counts as project source" is answered once: local
 /// "file:" packages outside the project are included, and directories Unity ignores are pruned.
+///
+/// <see cref="IndexFiles"/> and <see cref="IndexProject"/> each also call straight into
+/// <see cref="BinaryAssetIndexer"/> and merge its <see cref="IndexResult"/> into their own —
+/// textures, models, audio, fonts, shaders, and animation clips are binary and carry no structure
+/// this type's own YAML reader could extract, so they get meta-only nodes there instead of a
+/// parse here. Delegating from this type's own entry points (rather than adding a third call at
+/// every caller) means the two callers that matter — a full reindex and an incremental sync —
+/// pick up binary assets automatically, with no call-site changes anywhere else.
 /// </summary>
 public static class AssetIndexer
 {
-    /// <summary>The asset kinds Unity serialises as YAML documents. Textures, models and audio
-    /// are binary and carry their structure in .meta importer settings, which is a later plan.</summary>
+    /// <summary>The asset kinds Unity serialises as YAML documents — the shapes this type's own
+    /// reader can actually parse into an object graph. Textures, models, audio, fonts, shaders,
+    /// and animation clips are binary/imported instead; see <see cref="BinaryAssetIndexer"/>,
+    /// which <see cref="IndexFiles"/> and <see cref="IndexProject"/> both also call, for how those
+    /// become meta-only nodes with no content parse.</summary>
     static readonly string[] Extensions = [".unity", ".prefab", ".asset", ".mat", ".controller"];
 
     /// <summary>
@@ -47,12 +58,17 @@ public static class AssetIndexer
             }
         }
 
+        // Same batch, filtered independently by BinaryAssetIndexer's own extension set — see
+        // this type's own class doc comment for why delegating here, rather than a third call at
+        // every caller, is what makes binary assets flow through the existing incremental path.
+        var binary = BinaryAssetIndexer.IndexFiles(projectRoot, database, relativePaths);
+
         return new IndexResult
         {
-            FilesScanned = filesScanned,
-            TypesFound = objectsFound,
+            FilesScanned = filesScanned + binary.FilesScanned,
+            TypesFound = objectsFound + binary.TypesFound,
             Duration = stopwatch.Elapsed,
-            Warnings = warnings,
+            Warnings = [.. warnings, .. binary.Warnings],
         };
     }
 
@@ -96,12 +112,17 @@ public static class AssetIndexer
             database.SweepStaleNodes(root.PathPrefix, visited, unreachablePackagePrefixes, Extensions);
         }
 
+        // A full, independent walk of the same project — BinaryAssetIndexer resolves its own
+        // scan roots and sweeps only the extensions it owns (see its own IndexProject), so this
+        // cannot double-count or step on the YAML loop above.
+        var binary = BinaryAssetIndexer.IndexProject(projectRoot, database);
+
         return new IndexResult
         {
-            FilesScanned = filesScanned,
-            TypesFound = objectsFound,
+            FilesScanned = filesScanned + binary.FilesScanned,
+            TypesFound = objectsFound + binary.TypesFound,
             Duration = stopwatch.Elapsed,
-            Warnings = warnings,
+            Warnings = [.. warnings, .. binary.Warnings],
         };
     }
 

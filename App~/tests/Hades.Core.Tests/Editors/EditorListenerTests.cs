@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using Hades.Contract.Wire;
 using Hades.Core.Editors;
+using Hades.Core.Storage;
 
 namespace Hades.Core.Tests.Editors;
 
@@ -535,6 +536,82 @@ public sealed class EditorListenerTests : IDisposable
         Assert.Equal("lease-new", stillBelieved!.LeaseId); // untouched by the old connection's cleanup
 
         newClient.Close();
+    }
+
+    // ---------------------------------------------------------------- project record updates on attach (F9)
+    //
+    // project.json kept UnityVersion: null and LastSeen == FirstSeen forever, even once a real
+    // Editor attached and reported both - it was otherwise only ever written once, at Adopt time,
+    // and never revisited. ProjectServiceTests' own RecordEditorAttached_* tests prove the
+    // persistence itself in isolation; these prove Register actually calls it once a Hello
+    // completes, over a real socket - the attach-time update the optional 'projects' constructor
+    // parameter (defaulted to null, like 'leases' above, so every other test in this file is
+    // unaffected) exists for.
+
+    static void MakeUnityProject(string projectRoot, string guid)
+    {
+        Directory.CreateDirectory(Path.Combine(projectRoot, "ProjectSettings"));
+        File.WriteAllText(Path.Combine(projectRoot, "ProjectSettings", "ProjectSettings.asset"),
+            $"  productGUID: {guid}\n");
+    }
+
+    [Fact]
+    public async Task ValidHello_UpdatesTheKnownProjectsUnityVersionAndBumpsLastSeen()
+    {
+        var appRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var projectRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        const string guid = "aaaabbbbccccddddeeeeffff00004444";
+
+        try
+        {
+            MakeUnityProject(projectRoot, guid);
+            var projects = new ProjectService(new AppPaths(appRoot));
+            var adopted = projects.Adopt(projectRoot)!;
+            Assert.Null(adopted.UnityVersion);
+            var lastSeenBeforeAttach = adopted.LastSeen;
+
+            await Task.Delay(20); // guarantee a measurable clock difference for LastSeen
+
+            var registry = new EditorRegistry();
+            using var listener = new EditorListener(_tokenPath, registry, projects: projects);
+            listener.Start();
+
+            using var client = await HandshakeAsync(listener, MakeHello(guid, unityVersion: "6000.3.2f1"));
+            Assert.True(await Eventually(() => registry.Get(guid) is not null), "the editor never registered");
+
+            Assert.True(await Eventually(() => projects.Get(guid)?.UnityVersion == "6000.3.2f1"),
+                "the project record's UnityVersion was never updated from the Hello");
+            Assert.True(projects.Get(guid)!.LastSeen > lastSeenBeforeAttach, "LastSeen was never bumped on attach");
+        }
+        finally
+        {
+            foreach (var dir in new[] { appRoot, projectRoot })
+                if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ValidHello_ForAProjectHadesNeverAdopted_StillRegistersNormally_NoExceptionFromTheProjectStoreUpdate()
+    {
+        var appRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        const string guid = "aaaabbbbccccddddeeeeffff00005555"; // never Adopted
+
+        try
+        {
+            var projects = new ProjectService(new AppPaths(appRoot));
+            var registry = new EditorRegistry();
+            using var listener = new EditorListener(_tokenPath, registry, projects: projects);
+            listener.Start();
+
+            using var client = await HandshakeAsync(listener, MakeHello(guid));
+
+            Assert.True(await Eventually(() => registry.Get(guid) is not null), "the editor never registered");
+            Assert.Null(projects.Get(guid)); // nothing to update - still nothing, not a crash
+        }
+        finally
+        {
+            if (Directory.Exists(appRoot)) Directory.Delete(appRoot, recursive: true);
+        }
     }
 
     [Fact]

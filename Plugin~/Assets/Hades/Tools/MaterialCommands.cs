@@ -298,7 +298,7 @@ namespace Hades.Tools
 
         static ArgumentException MaterialNotFoundError(string path) =>
             new ArgumentException(
-                "Material not found at path: '" + path + "'. Use search_by_name (type_filter=\"Material\") to find the correct project-relative path.");
+                "Material not found at path: '" + path + "'. Use search_by_name (kind=\"Material\") to find the correct project-relative path.");
 
         static ArgumentException ShaderNotFoundError(string shaderName) =>
             new ArgumentException(

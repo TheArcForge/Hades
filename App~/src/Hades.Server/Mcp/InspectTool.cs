@@ -4,6 +4,7 @@ using Hades.Core;
 using Hades.Core.Reading;
 using Hades.Core.Unity;
 using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
 namespace Hades.Server.Mcp;
@@ -300,13 +301,14 @@ public sealed class InspectTool(ProjectService projects)
                + "directly, rather than re-requesting the whole file. A legacy pre-2018.3 'Prefab:' "
                + "format file is reported as unsupported by name, not silently returned empty."
                + ToolSupport.SavedStateClause)]
-    public InspectAssetResult InspectAsset(
+    public async Task<InspectAssetResult> InspectAsset(
         [Description("Project-relative asset path - prefab, scene, material, animator controller, or any other asset - as returned by search_by_name")] string path,
         [Description("Narrows to one GameObject's components: its fileId, exactly as the whole-file structure result reports it. Requires a prefab or scene path.")] long? target = null,
         [Description("Narrows to one component's properties and UnityEvent listeners: its fileId, exactly as the 'target'-narrowed result reports it. Requires 'target'.")] long? component = null,
         [Description("Narrows to one field's value: its name, exactly as the 'component'-narrowed result reports it. Requires 'component'.")] string? property = null,
         [Description("Maximum GameObjects to include in a whole-file hierarchy result (1-500, default 100). Ignored once 'target' is given.")] int limit = DefaultHierarchyLimit,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -332,8 +334,8 @@ public sealed class InspectTool(ProjectService projects)
                 + "GameObject's components first.");
         }
 
-        var productGuid = ToolSupport.ResolveProject(projects, project);
-        var unityProject = ResolveProjectPath(project);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
+        var unityProject = ResolveProjectPath(productGuid);
 
         if (property is not null)
             return Guarded(() => ValueResult(productGuid, unityProject, path, component!.Value, property));
@@ -367,16 +369,17 @@ public sealed class InspectTool(ProjectService projects)
                + "LOWER BOUND, not always exact. Call inspect_asset with 'target' and 'component' on "
                + "a specific component for the complete, exact picture instead."
                + ToolSupport.SavedStateClause)]
-    public FindUnsetReferencesResult FindUnsetReferences(
+    public async Task<FindUnsetReferencesResult> FindUnsetReferences(
         [Description("Project-relative prefab or scene path to scan for unset references. Omit (or leave blank) to instead find UnityEvents with wired listeners across the whole project.")] string? path = null,
         [Description("Maximum results to return (1-500, default 100)")] int limit = 100,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         var clampedLimit = Math.Clamp(limit, 1, 500);
 
         if (string.IsNullOrWhiteSpace(path))
         {
-            var productGuid = ToolSupport.ResolveProject(projects, project);
+            var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
             var found = projects.FindUnityEvents(productGuid, clampedLimit + 1);
             var truncated = found.Count > clampedLimit;
             var hits = found.Take(clampedLimit).Select(h => new InspectUnityEventResult
@@ -396,7 +399,8 @@ public sealed class InspectTool(ProjectService projects)
             };
         }
 
-        var unityProject = ResolveProjectPath(project);
+        var (fileProductGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
+        var unityProject = ResolveProjectPath(fileProductGuid);
         var all = Guarded(() => ReferenceReading.FindUnsetReferences(unityProject, path));
         var limited = all.Take(clampedLimit).ToList();
 

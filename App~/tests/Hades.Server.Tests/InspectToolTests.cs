@@ -818,6 +818,21 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
         Assert.Contains("no longer on disk", text);
     }
 
+    [Fact]
+    public async Task FileScope_APathThatIsADirectoryGivesADirectoryErrorNeverTheNoLongerOnDiskMessage()
+    {
+        // F11: 'path' naming a real directory (e.g. "Assets" itself) used to get the SAME "no
+        // longer on disk... hades_rebuild_graph will bring the index back in sync" message a
+        // genuinely deleted file gets - an expensive no-op advice for a path that is right there
+        // on disk, just not the kind of thing (a prefab or scene file) this tool reads.
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "find_unset_references",
+            new { path = "Assets/Scripts" }));
+
+        Assert.Contains("directory", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("no longer on disk", text);
+        Assert.DoesNotContain("hades_rebuild_graph", text);
+    }
+
     // ================================================================== find_unset_references: project scope
 
     [Fact]

@@ -129,10 +129,11 @@ public final class SettingsViewModel {
     /// Requests a launch-at-login change, then immediately re-reads `launchAtLoginEnabled` from the
     /// SAME OS source - never the requested value - so a request the OS refuses OR silently ignores
     /// can never display as on. See this type's own class doc comment and
-    /// `LaunchAtLoginReading.setEnabled`'s own doc comment for exactly why both failure modes matter.
+    /// `LaunchAtLoginReading.setEnabled`'s own doc comment for exactly why both failure modes
+    /// matter. The re-read-after-write behavior itself is `LaunchAtLoginReading.settingEnabled(to:)`
+    /// - shared with `OnboardingViewModel.toggleLaunchAtLogin`, not reimplemented here.
     public func toggleLaunchAtLogin(to requested: Bool) {
-        try? launchAtLogin.setEnabled(requested)
-        launchAtLoginEnabled = launchAtLogin.isEnabled
+        launchAtLoginEnabled = launchAtLogin.settingEnabled(to: requested)
     }
 
     /// The ONLY path that ever calls `migrationCleanClaudeDesktopConfig(proceed: true)`. `confirmed`

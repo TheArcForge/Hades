@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Hades.Core.Graph;
 using Hades.Core.Indexing;
+using Hades.Core.Unity;
 
 namespace Hades.Core.Observation;
 
@@ -29,9 +30,13 @@ public sealed record SweepResult
 public static class ProjectSweeper
 {
     /// <summary>Extensions the indexers actually handle. A file outside this set changing is not
-    /// a graph event, so sweeping it would produce work with nothing to do.</summary>
+    /// a graph event, so sweeping it would produce work with nothing to do. The six YAML/script
+    /// extensions plus <see cref="ImportedAssetKind.Extensions"/> — binary/imported assets are a
+    /// graph event too (a new texture, deleted audio clip, or renamed shader must be picked up by
+    /// the same incremental path as everything else), sourced from that single shared list rather
+    /// than duplicated here so this and <see cref="Indexing.BinaryAssetIndexer"/> cannot drift.</summary>
     static readonly string[] IndexableExtensions =
-        [".cs", ".unity", ".prefab", ".asset", ".mat", ".controller"];
+        [".cs", ".unity", ".prefab", ".asset", ".mat", ".controller", .. ImportedAssetKind.Extensions];
 
     public static SweepResult Sweep(string projectRoot, GraphDatabase database)
     {

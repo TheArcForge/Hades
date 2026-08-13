@@ -86,7 +86,7 @@ public class RelationshipQueryTests : IDisposable
             Reference("Assets/B.prefab", 1, "cccc"),
         ]);
 
-        var hits = db.TraceDependencies("Assets/A.prefab", maxDepth: 1);
+        var hits = db.TraceDependencies("Assets/A.prefab", maxDepth: 1).Hits;
 
         var hit = Assert.Single(hits);
         Assert.Equal("Assets/B.prefab", hit.Path);
@@ -106,7 +106,7 @@ public class RelationshipQueryTests : IDisposable
             Reference("Assets/B.prefab", 1, "cccc"),
         ]);
 
-        var hits = db.TraceDependencies("Assets/A.prefab", maxDepth: 5);
+        var hits = db.TraceDependencies("Assets/A.prefab", maxDepth: 5).Hits;
 
         Assert.Equal(2, hits.Count);
         Assert.Contains(hits, h => h.Path == "Assets/B.prefab" && h.Depth == 1);
@@ -130,7 +130,7 @@ public class RelationshipQueryTests : IDisposable
             Node("B", "GameObject", "Assets/B.prefab", guid: "bbbb"),
         ]);
 
-        var hits = db.TraceDependencies("Assets/A.prefab", maxDepth: 10);
+        var hits = db.TraceDependencies("Assets/A.prefab", maxDepth: 10).Hits;
 
         // Walking back to the root must not re-report it as its own dependency.
         var hit = Assert.Single(hits);
@@ -153,7 +153,7 @@ public class RelationshipQueryTests : IDisposable
             Reference("Assets/C.prefab", 1, "aaaa"),
         ]);
 
-        var hits = db.TraceDependencies("Assets/A.prefab", maxDepth: 10);
+        var hits = db.TraceDependencies("Assets/A.prefab", maxDepth: 10).Hits;
 
         Assert.Equal(2, hits.Count);
         Assert.Contains(hits, h => h.Path == "Assets/B.prefab" && h.Depth == 1);
@@ -165,6 +165,8 @@ public class RelationshipQueryTests : IDisposable
     {
         // instance_of and corresponds_to are not "depends on" in the sense this tool answers —
         // only `references` edges count outward, per the reference implementation's doc comment.
+        // Must not leak into the dangling report either — an unresolvable instance_of target is
+        // not "a dependency this graph can't index", it was never a dependency at all.
         using var db = Open();
         db.UpsertEdges([
             new GraphEdge
@@ -174,19 +176,69 @@ public class RelationshipQueryTests : IDisposable
             },
         ]);
 
-        Assert.Empty(db.TraceDependencies("Assets/A.prefab", maxDepth: 3));
+        var trace = db.TraceDependencies("Assets/A.prefab", maxDepth: 3);
+        Assert.Empty(trace.Hits);
+        Assert.Empty(trace.Dangling);
     }
 
     [Fact]
-    public void TraceDependencies_UnresolvableGuidIsDroppedRatherThanFailing()
+    public void TraceDependencies_UnresolvableGuidIsReportedAsDanglingRatherThanDroppedOrFailing()
     {
-        // A reference to a GUID nothing in this project's graph owns — a Unity builtin resource
-        // (e.g. the default cube mesh), or an asset this graph never indexed. PathForGuid
-        // returns null for it; the hop is silently skipped rather than surfaced as a broken node.
+        // F6-honesty: a reference to a GUID nothing in this project's graph owns — e.g. one that
+        // lives outside every scanned root, such as a registry package resolved into
+        // Library/PackageCache (see DanglingDependency's own class doc comment) — used to be
+        // silently dropped. PathForGuid still returns null for it, and it still cannot become a
+        // hit (there is nothing to walk further from), but it is now reported via Dangling
+        // instead of vanishing.
         using var db = Open();
-        db.UpsertEdges([Reference("Assets/A.prefab", 1, "0000000000000000e000000000000000")]);
+        db.UpsertEdges([Reference("Assets/A.mat", 1, "0000000000000000e000000000000000", propertyPath: "m_Shader")]);
 
-        Assert.Empty(db.TraceDependencies("Assets/A.prefab", maxDepth: 3));
+        var trace = db.TraceDependencies("Assets/A.mat", maxDepth: 3);
+
+        Assert.Empty(trace.Hits);
+        var dangling = Assert.Single(trace.Dangling);
+        Assert.Equal("Assets/A.mat", dangling.FromPath);
+        Assert.Equal(1, dangling.Depth);
+        Assert.Equal("0000000000000000e000000000000000", dangling.ToGuid);
+        Assert.Equal("m_Shader", dangling.PropertyPath);
+    }
+
+    [Fact]
+    public void TraceDependencies_DedupesRepeatedDanglingGuidsFromTheSameFile()
+    {
+        // Same reasoning PrefabsReferencing/ComponentsUsingPattern already apply to resolvable
+        // targets: five components in one prefab all pointing at the same missing guid must not
+        // report five identical dangling rows.
+        using var db = Open();
+        db.UpsertEdges([
+            Reference("Assets/A.mat", 1, "texguid00000000000000000000000", propertyPath: "m_TexEnvs[_MainTex]"),
+            Reference("Assets/A.mat", 2, "texguid00000000000000000000000", propertyPath: "m_TexEnvs[_MainTex]"),
+        ]);
+
+        var trace = db.TraceDependencies("Assets/A.mat", maxDepth: 3);
+
+        Assert.Single(trace.Dangling);
+    }
+
+    [Fact]
+    public void TraceDependencies_ReportsDanglingDependenciesFoundAtDeeperHopsWithTheirOwnDepth()
+    {
+        // A -> B (resolvable) -> a dangling guid. The dangling entry's FromPath/Depth describe B,
+        // not the root — it is B that carries the unresolvable edge.
+        using var db = Open();
+        db.UpsertNodes([Node("B", "GameObject", "Assets/B.prefab", guid: "bbbb")]);
+        db.UpsertEdges([
+            Reference("Assets/A.prefab", 1, "bbbb"),
+            Reference("Assets/B.prefab", 1, "texguid00000000000000000000000", propertyPath: "m_TexEnvs[_MainTex]"),
+        ]);
+
+        var trace = db.TraceDependencies("Assets/A.prefab", maxDepth: 5);
+
+        Assert.Single(trace.Hits);
+        var dangling = Assert.Single(trace.Dangling);
+        Assert.Equal("Assets/B.prefab", dangling.FromPath);
+        Assert.Equal(2, dangling.Depth);
+        Assert.Equal("texguid00000000000000000000000", dangling.ToGuid);
     }
 
     [Fact]
@@ -202,7 +254,7 @@ public class RelationshipQueryTests : IDisposable
         ]);
         db.UpsertEdges([Reference("Assets/Player.prefab", 2, "cccc")]);
 
-        var hit = Assert.Single(db.TraceDependencies("Assets/Player.prefab", maxDepth: 1));
+        var hit = Assert.Single(db.TraceDependencies("Assets/Player.prefab", maxDepth: 1).Hits);
         Assert.Equal("Assets/PlayerController.cs", hit.Path);
     }
 
@@ -214,7 +266,7 @@ public class RelationshipQueryTests : IDisposable
         db.UpsertEdges([Reference("Assets/A.prefab", 1, "bbbb")]);
 
         // 0 (and negative) must not mean "no hops" or "unlimited" — it is clamped up to 1.
-        var hit = Assert.Single(db.TraceDependencies("Assets/A.prefab", maxDepth: 0));
+        var hit = Assert.Single(db.TraceDependencies("Assets/A.prefab", maxDepth: 0).Hits);
         Assert.Equal("Assets/B.prefab", hit.Path);
     }
 

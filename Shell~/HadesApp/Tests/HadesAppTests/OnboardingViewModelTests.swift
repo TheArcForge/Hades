@@ -26,7 +26,8 @@ struct OnboardingViewModelTests {
         let viewModel = OnboardingViewModel(
             projectsViewModel: ProjectsViewModel(discover: { nil }),
             completionStore: FakeOnboardingCompletionTracking(),
-            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable])
+            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false)
         )
 
         #expect(viewModel.currentStep == .install)
@@ -42,7 +43,8 @@ struct OnboardingViewModelTests {
         let viewModel = OnboardingViewModel(
             projectsViewModel: ProjectsViewModel(discover: { nil }),
             completionStore: FakeOnboardingCompletionTracking(),
-            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable])
+            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false)
         )
 
         viewModel.advance()
@@ -62,7 +64,8 @@ struct OnboardingViewModelTests {
         let viewModel = OnboardingViewModel(
             projectsViewModel: ProjectsViewModel(discover: { nil }),
             completionStore: completionStore,
-            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable])
+            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false)
         )
         for _ in 0..<4 { viewModel.advance() }
         #expect(viewModel.currentStep == .unityPlugin)
@@ -79,7 +82,8 @@ struct OnboardingViewModelTests {
         let viewModel = OnboardingViewModel(
             projectsViewModel: ProjectsViewModel(discover: { nil }),
             completionStore: completionStore,
-            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable])
+            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false)
         )
         for _ in 0..<5 { viewModel.advance() }
         #expect(viewModel.isComplete == true)
@@ -102,7 +106,8 @@ struct OnboardingViewModelTests {
         let viewModel = OnboardingViewModel(
             projectsViewModel: projectsViewModel,
             completionStore: completionStore,
-            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable])
+            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false)
         )
 
         for _ in 0..<5 { viewModel.advance() }
@@ -119,7 +124,8 @@ struct OnboardingViewModelTests {
         let viewModel = OnboardingViewModel(
             projectsViewModel: ProjectsViewModel(discover: { nil }),
             completionStore: FakeOnboardingCompletionTracking(),
-            claudeCodeVerifier: FakeClaudeCodeVerifying([.reachable(toolCount: 32)])
+            claudeCodeVerifier: FakeClaudeCodeVerifying([.reachable(toolCount: 32)]),
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false)
         )
 
         await viewModel.verifyClaudeCode()
@@ -132,7 +138,8 @@ struct OnboardingViewModelTests {
         let viewModel = OnboardingViewModel(
             projectsViewModel: ProjectsViewModel(discover: { nil }),
             completionStore: FakeOnboardingCompletionTracking(),
-            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable])
+            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false)
         )
 
         await viewModel.verifyClaudeCode()
@@ -146,7 +153,8 @@ struct OnboardingViewModelTests {
         let viewModel = OnboardingViewModel(
             projectsViewModel: ProjectsViewModel(discover: { nil }),
             completionStore: FakeOnboardingCompletionTracking(),
-            claudeCodeVerifier: verifier
+            claudeCodeVerifier: verifier,
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false)
         )
 
         await viewModel.verifyClaudeCode()
@@ -172,7 +180,8 @@ struct OnboardingViewModelTests {
         let viewModel = OnboardingViewModel(
             projectsViewModel: projectsViewModel,
             completionStore: FakeOnboardingCompletionTracking(),
-            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable])
+            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false)
         )
 
         await viewModel.addProject(path: "/tmp/demo")
@@ -189,10 +198,11 @@ struct OnboardingViewModelTests {
         let viewModel = OnboardingViewModel(
             projectsViewModel: projectsViewModel,
             completionStore: FakeOnboardingCompletionTracking(),
-            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable])
+            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
             // migrationOffering omitted - defaults to nil. AppDelegate itself always passes a real
             // LiveMigrationOffering (Plan 14 Task 10); this test proves the OTHER case still degrades
             // safely, e.g. for any future caller that does not care about migration at all.
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false)
         )
 
         await viewModel.addProject(path: "/tmp/v12-project")
@@ -210,7 +220,8 @@ struct OnboardingViewModelTests {
             projectsViewModel: projectsViewModel,
             completionStore: FakeOnboardingCompletionTracking(),
             claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
-            migrationOffering: migration
+            migrationOffering: migration,
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false)
         )
 
         await viewModel.addProject(path: "/tmp/v12-project")
@@ -229,7 +240,8 @@ struct OnboardingViewModelTests {
             projectsViewModel: projectsViewModel,
             completionStore: FakeOnboardingCompletionTracking(),
             claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
-            migrationOffering: migration
+            migrationOffering: migration,
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false)
         )
 
         await viewModel.addProject(path: "/tmp/ordinary-project")
@@ -248,7 +260,8 @@ struct OnboardingViewModelTests {
             projectsViewModel: projectsViewModel,
             completionStore: FakeOnboardingCompletionTracking(),
             claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
-            migrationOffering: migration
+            migrationOffering: migration,
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false)
         )
         await viewModel.addProject(path: "/tmp/v12-project")
         #expect(viewModel.migrationOfferedProjectPath == "/tmp/v12-project")
@@ -268,7 +281,8 @@ struct OnboardingViewModelTests {
             projectsViewModel: projectsViewModel,
             completionStore: FakeOnboardingCompletionTracking(),
             claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
-            migrationOffering: migration
+            migrationOffering: migration,
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false)
         )
         await viewModel.addProject(path: "/tmp/v12-project")
         #expect(viewModel.migrationOfferedProjectPath == "/tmp/v12-project")
@@ -287,12 +301,84 @@ struct OnboardingViewModelTests {
             projectsViewModel: projectsViewModel,
             completionStore: FakeOnboardingCompletionTracking(),
             claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
-            migrationOffering: migration
+            migrationOffering: migration,
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: false)
         )
         #expect(viewModel.migrationOfferedProjectPath == nil)
 
         await viewModel.confirmMigration()
 
         #expect(await migration.performMigrationCallCount == 0)
+    }
+
+    // MARK: - launchAtLoginEnabled / toggleLaunchAtLogin(to:) - the Claude Code step's own
+    // launch-at-login opt-in (spec #4 §4's connectivity step is where this matters most: Claude
+    // Code does not retry an MCP server that was unreachable at session start). Same
+    // `LaunchAtLoginReading` seam `SettingsViewModel` already established, and the identical
+    // "always re-read the OS's own answer after writing, never trust the request" contract - see
+    // `LaunchAtLoginReading.settingEnabled(to:)`'s own doc comment for exactly why a thrown error
+    // alone is not the only failure mode this must guard against, and `SettingsViewModelTests`'
+    // own three equivalent tests for the shape these mirror.
+
+    @Test("launchAtLoginEnabled reflects the OS's current state as soon as the view model exists")
+    func launchAtLoginEnabledReflectsOSStateAtConstruction() {
+        let viewModel = OnboardingViewModel(
+            projectsViewModel: ProjectsViewModel(discover: { nil }),
+            completionStore: FakeOnboardingCompletionTracking(),
+            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
+            launchAtLogin: FakeLaunchAtLoginReading(isEnabled: true)
+        )
+
+        #expect(viewModel.launchAtLoginEnabled == true)
+    }
+
+    @Test("toggleLaunchAtLogin reflects the OS's real answer once the request succeeds")
+    func toggleLaunchAtLoginReflectsRealSuccess() {
+        let launchAtLogin = FakeLaunchAtLoginReading(isEnabled: false)
+        let viewModel = OnboardingViewModel(
+            projectsViewModel: ProjectsViewModel(discover: { nil }),
+            completionStore: FakeOnboardingCompletionTracking(),
+            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
+            launchAtLogin: launchAtLogin
+        )
+
+        viewModel.toggleLaunchAtLogin(to: true)
+
+        #expect(viewModel.launchAtLoginEnabled == true)
+        #expect(launchAtLogin.lastRequestedValue == true)
+    }
+
+    @Test("a request the OS silently ignores (no throw, but isEnabled unchanged) must NOT display as on")
+    func toggleLaunchAtLoginDoesNotDisplayOnWhenTheOSSilentlyIgnoresTheRequest() {
+        let launchAtLogin = FakeLaunchAtLoginReading(isEnabled: false)
+        launchAtLogin.applyRequestToIsEnabled = false // the OS accepts the call but never actually registers
+        let viewModel = OnboardingViewModel(
+            projectsViewModel: ProjectsViewModel(discover: { nil }),
+            completionStore: FakeOnboardingCompletionTracking(),
+            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
+            launchAtLogin: launchAtLogin
+        )
+
+        viewModel.toggleLaunchAtLogin(to: true)
+
+        #expect(viewModel.launchAtLoginEnabled == false, "a silently-ignored request must read back as still off, not the requested true")
+    }
+
+    @Test("a thrown setEnabled error is swallowed, and isEnabled is still re-read afterward - never left stale")
+    func toggleLaunchAtLoginSwallowsAThrownErrorAndStillRereadsIsEnabled() {
+        struct SomeError: Error {}
+        let launchAtLogin = FakeLaunchAtLoginReading(isEnabled: false)
+        launchAtLogin.errorToThrow = SomeError()
+        let viewModel = OnboardingViewModel(
+            projectsViewModel: ProjectsViewModel(discover: { nil }),
+            completionStore: FakeOnboardingCompletionTracking(),
+            claudeCodeVerifier: FakeClaudeCodeVerifying([.unreachable]),
+            launchAtLogin: launchAtLogin
+        )
+
+        viewModel.toggleLaunchAtLogin(to: true)
+
+        #expect(viewModel.launchAtLoginEnabled == false, "the OS refused - isEnabled is still false, not the requested true")
+        #expect(launchAtLogin.setEnabledCallCount == 1)
     }
 }

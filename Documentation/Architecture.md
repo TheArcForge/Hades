@@ -219,17 +219,71 @@ AI agents talk to the core only — never to the shell, never directly to the pl
 `POST http://127.0.0.1:7823/mcp`. Protocol negotiation is SDK-provided, not something Hades
 configures itself, and the shipped SDK speaks revisions `2024-11-05` through `2025-11-25` — verified
 live against a running core: an `initialize` requesting `2026-07-28` is rejected with exactly that
-supported list, and `2025-11-25` negotiates cleanly. (The specs were written targeting `2026-07-28`;
-the SDK in the lockfile doesn't offer it yet — a small spec-vs-code drift of the same kind §5 flags.) Both listeners
+supported list, and `2025-11-25` negotiates cleanly. (Not a lockfile gap: the SDK fully supports
+`2026-07-28` — confirmed below in this same section — but that revision removed the `initialize`
+handshake itself, replaced by `server/discover`, so `initialize`-based negotiation cannot reach it
+on any SDK version; `2025-11-25` is the newest revision still reachable that way.) Both listeners
 (MCP and control) bind loopback only and validate `Origin` per the MCP specification's requirement
 for local servers (`App~/src/Hades.Server/Mcp/OriginValidation.cs`,
 `App~/src/Hades.Server/Control/ControlAuth.cs`).
 
-MCP *roots* — the mechanism a client would normally use to tell a server which project it means —
-are deprecated as of this same spec revision (SEP-2577), and the SDK marks the API obsolete
-(`RootsRouter.cs`, `HadesTools.cs`). Hades never adopted them for per-call routing; every Editor-
-bound tool instead takes an explicit `project` handle parameter (from `hades_status`), omittable
-only when exactly one project is known.
+MCP *roots* — the mechanism a client uses to tell a server which folder it's working in — are real,
+fully wired in the SDK, and now part of per-call routing. Two of Hades's own artifacts used to
+disagree about this: this section previously said roots "are deprecated... and the SDK marks the
+API obsolete", while a later audit reported `RootsRouter.Adopt` already auto-adopting per call. Both
+were half right, and both are corrected here — this project records its own mistakes rather than
+quietly overwriting them.
+
+Checked directly against the pinned `ModelContextProtocol.Core` 2.0.0 — by reflecting over the
+compiled assembly and confirming with a real `dotnet build` — `McpServer.RequestRootsAsync`,
+`ClientCapabilities.Roots`, and `RootsCapability` do carry `[Obsolete]` (diagnostic `MCP9005`,
+citing SEP-2577 and spec revision `2026-07-28` — the same SEP that also deprecates Sampling and
+Logging). But it is a plain, single-argument `ObsoleteAttribute` with no `error: true`, so the
+default severity is a warning, never a build failure — confirmed empirically, not just read off the
+attribute — and the underlying feature is completely functional end to end: capability negotiation,
+the `roots/list` request/response types, the `list_changed` notification, and the SDK's own doc
+remarks recommending it be called via `RequestContext.Server` from inside a tool handler precisely
+*because* Streamable HTTP keeps that route open for the whole call. And per this section's own
+protocol-version paragraph above, this server negotiates the pre-`2026-07-28` `initialize` handshake
+today regardless (tops out at `2025-11-25`) — the revision that deprecates roots is not even the one
+in effect on the wire yet. Claude Code, the client this server actually talks to, answers
+`roots/list` and pushes `roots/list_changed` today.
+
+`RootsRouter.cs` did already have a tested `Resolve(IReadOnlyList<string> roots)` before this
+change — adopting, never indexing, any Unity project among a *supplied* set of paths — so the audit
+was not inventing anything. What it got wrong was "and is called": nothing outside `RootsRouter`'s
+own tests ever invoked it. Startup seeding (`Program.cs`) duplicates the same walk-up-and-adopt
+logic inline rather than calling it, and no MCP tool call path asked it for anything either, despite
+doc comments elsewhere (`ProjectService.cs`, `ObservationService.cs`) describing it as if it already
+ran "on every routed tool call" — a description of an intended wiring that had never been finished,
+not of anything live.
+
+Per-call resolution now runs in this order (`ToolSupport.ResolveProjectAsync`, `ToolSupport.cs`):
+an explicit `project` handle always wins; failing that, a single known project still wins exactly as
+before (unchanged, and decided without ever asking the client for anything); failing that,
+`RootsRouter.ResolveAsync` (`RootsRouter.cs`) asks the connected client for its roots — through
+`IRootsProvider`/`McpRootsProvider`, a short-timeout, cached (so an ambiguous session doesn't pay a
+round trip on every call), canonicalizing wrapper over `RequestRootsAsync` that resolves symlinks and
+trims trailing separators before comparing paths (an exact-string compare was already the wrong tool
+for that once in this codebase — see `Indexing.ProjectWalker.IsInside`'s own doc comment) and
+suppresses `MCP9005` locally at that one call site rather than project-wide. A root that equals or
+lies inside an already-known project routes there silently; a root that is *itself* an unregistered
+Unity project (never an ancestor or descendant reached by guessing — a write is a worse place to
+guess wrong than routing is) is auto-adopted and indexed, and the tool result says so. Anything
+else — ambiguous roots, no roots capability, a timeout, or no match — collapses back into the exact
+same explicit, handle-listing error this section always described; an unknown or ambiguous handle
+still fails the same way it always has. Every project-scoped `[McpServerTool]` method that resolves
+a project at all now takes the SDK's `RequestContext<CallToolRequestParams>` and calls
+`ToolSupport.ResolveProjectAsync` through it, handing this seam a live session — the piece an
+earlier revision of this section flagged as a follow-up is done. The auto-adopt announcement
+reaches a caller as an additive `TextContentBlock`, appended once, uniformly, by a CallToolFilter
+in `Program.cs` (`ToolSupport.AppendAnnouncement`) — not a field on any individual tool's own
+result type, so no existing result shape changed. Left out of this wiring, by construction: the
+~20 Editor-dependent tools that reach the plugin through `Hades.Core.Editors.EditorProxy`, which
+resolves a project via the SAME `ProjectResolver.Resolve` but cannot reach `RootsRouter` or
+`RequestContext` — both Server-side types `Hades.Core` must not depend on (see `EditorProxy`'s own
+class doc comment). Those still take an explicit handle or the sole-known-project fallback only;
+routing one of them through live roots too remains a genuine follow-up.
 
 ## 3. Governing rules
 
@@ -255,9 +309,9 @@ table (per-file mtime + size, for incremental reindexing). Because the graph is 
 data, migration policy is "if the version differs, drop and recreate" — there is no incremental
 schema migration machinery, on purpose; nothing authored is ever at risk from it.
 
-### 4.2 The two indexers
+### 4.2 The three indexers
 
-Two indexers, doing genuinely different jobs, feeding the same tables:
+Three indexers, doing genuinely different jobs, feeding the same tables:
 
 **`ScriptIndexer`** (`App~/src/Hades.Core/Indexing/ScriptIndexer.cs`) walks `.cs` files through
 `RoslynScriptScanner` (`App~/src/Hades.Core/Scanning/RoslynScriptScanner.cs`). This is
@@ -292,11 +346,28 @@ through a hand-rolled reader (`App~/src/Hades.Core/Unity/UnityYamlReader.cs` and
 scene/prefab hierarchy, `m_Script` → MonoBehaviour resolution, and prefab-variant/nested-prefab
 modification chains.
 
-Exactly **six** extensions are indexed: **`.cs .unity .prefab .asset .mat .controller`** — the
-sweep's own list, `ProjectSweeper.IndexableExtensions`
-(`App~/src/Hades.Core/Observation/ProjectSweeper.cs`). `AssetIndexer.cs`'s own array is the five
-YAML formats (everything but `.cs`, which `ScriptIndexer` covers). Nothing else is walked for
-content (`.meta` files are read only for their GUID).
+**`BinaryAssetIndexer`** (`App~/src/Hades.Core/Indexing/BinaryAssetIndexer.cs`) walks binary/
+imported assets — textures, models, audio, fonts, shaders, and animation clips, the exact
+extension-to-kind mapping owned by `Hades.Core.Unity.ImportedAssetKind` — and writes **one
+meta-only node per file**: path, name (the filename stem), kind (from the extension), and guid
+(from the sibling `.meta`). It never reads the asset's own content and never writes an edge. The
+point of the node is not what it says about itself, but what it makes RESOLVABLE: a material,
+prefab, or renderer asset that references one of these by GUID already produced a `references`
+edge (`AssetIndexer` reads the REFERENCING file's own YAML, regardless of what the target turns
+out to be); before `BinaryAssetIndexer` existed, that edge's target GUID owned no node anywhere in
+the graph, so it could only ever be reported dangling (§4.3), never resolved. `AssetIndexer.IndexFiles`
+and `IndexProject` each call straight into this indexer's own IndexFiles/IndexProject and merge the
+result, so both of `ProjectService`'s entry points — a full reindex and an incremental sync — pick
+up binary assets with no call-site changes of their own.
+
+`ProjectSweeper.IndexableExtensions` (`App~/src/Hades.Core/Observation/ProjectSweeper.cs`) now
+lists 24 extensions: the original six YAML/script formats — **`.cs .unity .prefab .asset .mat
+.controller`** — plus the 18 binary ones `ImportedAssetKind` recognises (**`.png .tga .psd .jpg
+.jpeg .exr .fbx .obj .wav .mp3 .ogg .aiff .ttf .otf .shader .shadergraph .compute .anim`**).
+`AssetIndexer.cs`'s own array is still just the five YAML formats (everything but `.cs`, which
+`ScriptIndexer` covers); `BinaryAssetIndexer.cs`'s own array is the 18 binary ones, sourced from
+`ImportedAssetKind` rather than duplicated. Content is walked only for those eleven YAML/script
+extensions — `.meta` files are read for their GUID across all 24.
 
 ### 4.3 What is not indexed
 
@@ -304,8 +375,19 @@ This is a design principle in this codebase, not a disclaimer bolted on afterwar
 themselves are full of "measured, and it turned out false" corrections, and this section follows
 that same habit. Stated plainly:
 
-- **No node types for textures, models, audio clips, or fonts.** The graph has no representation
-  for them at all — they are invisible, not merely unqueryable.
+- **Binary/imported assets are meta-only nodes, never content.** Textures, models, audio, fonts,
+  shaders, and animation clips (`Hades.Core.Unity.ImportedAssetKind`) get a node — path, name,
+  kind, and GUID — so a `references` edge into one resolves instead of dangling, but nothing about
+  their own structure (a texture's dimensions, a clip's curves, a shader's passes) is ever read;
+  `inspect_asset` still cannot describe what is inside one of these.
+- **Registry packages resolved into `Library/PackageCache` are never scanned, regardless of
+  extension.** `ProjectWalker` (`App~/src/Hades.Core/Indexing/ProjectWalker.cs`) walks `Assets/`,
+  the in-project `Packages/` folder, and local `"file:"` packages only — a registry package (the
+  overwhelmingly common case, including Unity's own render pipelines) resolves to `Library/
+  PackageCache` instead, deliberately excluded as third-party code that would swamp the graph. A
+  reference into one — a built-in shader or texture bundled with a render pipeline package is the
+  everyday example — stays unresolvable and is reported as `dangling`, not silently dropped, for
+  exactly this reason rather than because its asset kind goes unindexed.
 - **No Addressables support.** There is no code anywhere in `App~/src` that reads an Addressables
   group or entry.
 - **No C#-to-C# code references.** `ScriptIndexer` writes zero edges (above); `find_references_to`
@@ -510,6 +592,13 @@ Three classes, each restricted to exactly what it's allowed to touch:
   one never performs another, and refusing one never blocks the rest. JSON edits are byte-level
   splices located with `Utf8JsonReader`, never parse-and-reserialize, so removing one entry never
   reformats a file the user didn't ask to have reformatted.
+
+**A structural gap worth naming directly:** every signal `V12Detector` reads is project-scoped —
+a project's `Packages/manifest.json`, its `CLAUDE.md`, and the mere existence of its `.arcforge/`
+SQLite files. A v1.2 install that never touches the project directory at all — a
+marketplace-installed old plugin recorded only in the user's global Claude Code settings, for
+instance — is invisible to it by construction, not by omission. A clean `V12Detector` result
+rules out project-local leftovers; it says nothing about the rest of the machine.
 
 ## 8. Distribution
 

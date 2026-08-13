@@ -77,6 +77,104 @@ public class ToolSupportTests : IDisposable
         Assert.Contains("aaaabbbbccccddddeeeeffff00001111", ex.Message);
     }
 
+    // -----------------------------------------------------------------------------------------
+    // ResolveProjectAsync: the full order — explicit handle, then the sole-known-project
+    // fallback (both unchanged from ResolveProject above, and proven here to never even ask for
+    // roots), then RootsRouter.ResolveAsync against an injected FakeRootsProvider (see
+    // RootsRouterTests for canonicalization/caching/timeout, which live at that seam and are not
+    // re-tested here), then today's explicit "needs a project argument" error as the catch-all.
+    // -----------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ResolveProjectAsync_ReturnsTheExplicitHandleWithoutConsultingRoots()
+    {
+        var service = NewService();
+        service.AdoptAndIndex(MakeProject("aaaabbbbccccddddeeeeffff00001111", "Alpha"));
+        service.AdoptAndIndex(MakeProject("bbbbccccddddeeeeffff000011112222", "Beta"));
+        var router = new RootsRouter(service);
+        var roots = new FakeRootsProvider();
+
+        var (productGuid, announcement) = await ToolSupport.ResolveProjectAsync(
+            service, "bbbbccccddddeeeeffff000011112222", router, roots);
+
+        Assert.Equal("bbbbccccddddeeeeffff000011112222", productGuid);
+        Assert.Null(announcement);
+        Assert.Equal(0, roots.CallCount);
+    }
+
+    [Fact]
+    public async Task ResolveProjectAsync_FallsBackToTheSoleKnownProjectWithoutConsultingRoots()
+    {
+        var service = NewService();
+        service.AdoptAndIndex(MakeProject("aaaabbbbccccddddeeeeffff00001111", "Alpha"));
+        var router = new RootsRouter(service);
+        var roots = new FakeRootsProvider();
+
+        var (productGuid, announcement) = await ToolSupport.ResolveProjectAsync(service, null, router, roots);
+
+        Assert.Equal("aaaabbbbccccddddeeeeffff00001111", productGuid);
+        Assert.Null(announcement);
+        Assert.Equal(0, roots.CallCount);
+    }
+
+    [Fact]
+    public async Task ResolveProjectAsync_UsesRootsWhenMultipleProjectsAreKnownAndHandleIsOmitted()
+    {
+        var service = NewService();
+        service.AdoptAndIndex(MakeProject("aaaabbbbccccddddeeeeffff00001111", "Alpha"));
+        var betaRoot = MakeProject("bbbbccccddddeeeeffff000011112222", "Beta");
+        service.AdoptAndIndex(betaRoot);
+        var router = new RootsRouter(service);
+
+        var (productGuid, announcement) = await ToolSupport.ResolveProjectAsync(
+            service, null, router, new FakeRootsProvider(betaRoot));
+
+        Assert.Equal("bbbbccccddddeeeeffff000011112222", productGuid);
+        Assert.Null(announcement);
+    }
+
+    [Fact]
+    public async Task ResolveProjectAsync_AutoAdoptsWhenNoProjectsAreKnownYet()
+    {
+        var service = NewService();
+        var freshRoot = MakeProject("aaaabbbbccccddddeeeeffff00001111", "Alpha");
+        var router = new RootsRouter(service);
+
+        var (productGuid, announcement) = await ToolSupport.ResolveProjectAsync(
+            service, null, router, new FakeRootsProvider(freshRoot));
+
+        Assert.Equal("aaaabbbbccccddddeeeeffff00001111", productGuid);
+        Assert.NotNull(announcement);
+        Assert.Contains(service.KnownProjects(), p => p.ProductGuid == "aaaabbbbccccddddeeeeffff00001111");
+    }
+
+    [Fact]
+    public async Task ResolveProjectAsync_ThrowsTheStandardAmbiguousErrorWhenRootsDoNotDisambiguate()
+    {
+        var service = NewService();
+        service.AdoptAndIndex(MakeProject("aaaabbbbccccddddeeeeffff00001111", "Alpha"));
+        service.AdoptAndIndex(MakeProject("bbbbccccddddeeeeffff000011112222", "Beta"));
+        var router = new RootsRouter(service);
+
+        var ex = await Assert.ThrowsAsync<McpException>(() =>
+            ToolSupport.ResolveProjectAsync(service, null, router, new FakeRootsProvider()));
+
+        Assert.Contains("aaaabbbbccccddddeeeeffff00001111", ex.Message);
+        Assert.Contains("bbbbccccddddeeeeffff000011112222", ex.Message);
+    }
+
+    [Fact]
+    public async Task ResolveProjectAsync_ThrowsTheStandardNoProjectErrorWhenRootsDontHelpAndNoneAreKnown()
+    {
+        var service = NewService();
+        var router = new RootsRouter(service);
+
+        var ex = await Assert.ThrowsAsync<McpException>(() =>
+            ToolSupport.ResolveProjectAsync(service, null, router, new FakeRootsProvider()));
+
+        Assert.Contains("does not know about any project yet", ex.Message);
+    }
+
     public void Dispose()
     {
         foreach (var dir in _projectRoots.Append(_appRoot))

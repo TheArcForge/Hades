@@ -7,6 +7,8 @@ using Hades.Core.Storage;
 using Hades.Core.Tracing;
 using Hades.Server.Control;
 using Hades.Server.Mcp;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Options;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -48,9 +50,15 @@ builder.Services.AddSingleton<OperationRegistry>();
 builder.Services.AddSingleton<ProjectService>();
 builder.Services.AddSingleton<RootsRouter>();
 builder.Services.AddSingleton<ObservationService>();
+
+// F15: hades_regression's recording seam, moved here from the attached Editor - see that class's
+// own doc comment. A singleton (not scoped) because a recording session spans many separate HTTP
+// requests (action='start' on one call, the calls being recorded on others, action='stop' on a
+// later one) - a scoped/per-request instance would forget everything the instant 'start' returned.
+builder.Services.AddSingleton<RegressionRecorder>();
 builder.Services.AddSingleton(sp =>
     new EditorListener(sp.GetRequiredService<AppPaths>().EditorTokenFile, sp.GetRequiredService<EditorRegistry>(),
-        sp.GetRequiredService<LeaseRegistry>()));
+        sp.GetRequiredService<LeaseRegistry>(), sp.GetRequiredService<ProjectService>()));
 
 // EditorProxy: the one path every Editor-dependent MCP tool (EditorSceneTools,
 // EditorComponentTools, and everything the rest of the "52 Editor tools" plan still adds) takes
@@ -98,7 +106,17 @@ builder.Services.AddSingleton(sp => new ControlListener(
 // call directly, likewise no longer registered. See the tool-surface-consolidation plan's own
 // "Capability audit" section for the full old-tool -> new-call mapping, with a passing test per row.
 builder.Services
-    .AddMcpServer()
+    .AddMcpServer(options =>
+    {
+        // F5: left unset, the SDK reports the ENTRY ASSEMBLY's own version here (Hades.Server.dll's
+        // AssemblyVersion, an incidental build artifact - "1.0.0.0" on the machine that found this
+        // defect, something else on another build) rather than the product's own version. Wired
+        // from HadesTools.ServerVersion - the existing constant, never a re-typed literal - so this
+        // can never drift from what hades_status itself reports. Matters most exactly when the tool
+        // list fails to load at all (F1): serverInfo.version is then the ONE version string a
+        // tester can still read, and it must not lie about being a v1 server.
+        options.ServerInfo = new Implementation { Name = "Hades", Version = HadesTools.ServerVersion };
+    })
     .WithHttpTransport()
     .WithTools<HadesTools>()
     .WithTools<GraphTools>()
@@ -131,6 +149,20 @@ builder.Services.Configure<McpServerOptions>(options =>
         var startUtcMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var stopwatch = Stopwatch.StartNew();
 
+        // F13a: an unknown argument name (a typo, or a caller remembering a retired parameter
+        // name) was previously silently dropped by the SDK's own parameter binding - a caller
+        // asking for a filtered result got an unfiltered one that LOOKS filtered, with no error
+        // anywhere. Refused here, BEFORE next() runs - the whole call, zero side effects - the
+        // same "refused, not ignored" convention OperationFieldValidator already established one
+        // level down, for an unrecognised FIELD inside a batch operation (see that class's own
+        // doc comment); this is the missing sibling check for a top-level PARAMETER, which
+        // nothing previously checked at all.
+        if (UnknownParameterRejection(context) is { } rejection)
+        {
+            RecordTrace(context, toolName, startUtcMs, stopwatch.ElapsedMilliseconds, ok: false, DescribeError(rejection), rejection);
+            return rejection;
+        }
+
         CallToolResult result;
         try
         {
@@ -146,19 +178,82 @@ builder.Services.Configure<McpServerOptions>(options =>
             throw;
         }
 
+        // Seamless project resolution's auto-adopt announcement: a tool that resolved its project
+        // via ToolSupport.ResolveProjectAsync(..., context) and triggered auto-adopt recorded the
+        // announcement on THIS call's own context.Items (RootsRouter.ResolveAsync's own doc
+        // comment: "the tool result says so") — appended here, once, for every tool uniformly,
+        // rather than each tool's own result type carrying an Announcement field. Before
+        // RecordTrace/CaptureForRegression below, so both observe the SAME content a real caller
+        // actually receives.
+        result = ToolSupport.AppendAnnouncement(context, result);
+
         var errorMessage = result.IsError == true ? DescribeError(result) : null;
         RecordTrace(context, toolName, startUtcMs, stopwatch.ElapsedMilliseconds, errorMessage is null, errorMessage, result);
+
+        // F15: hades_regression's recording seam. The SAME wrap-every-tool-dispatch position as
+        // RecordTrace just above - see RegressionRecorder's own class doc comment for why this
+        // layer, not the attached Editor's own wire dispatch, is what closes the graph/disk
+        // observability gap. hades_regression's own calls are excluded here, not inside
+        // RegressionRecorder itself, so a session recording other tools never records its own
+        // start/stop/replay - the same exclusion CaptureIfRecording used to make wire-side.
+        if (toolName != "hades_regression") CaptureForRegression(context, toolName, result);
+
         return result;
     });
 });
 
 var app = builder.Build();
 
+// F1: a member typed object/JsonElement/JsonValue (InspectAssetResult.Value, SceneApplyOperation.
+// Values, a Dictionary<string, object?>'s own additionalProperties, ...) exports as the JSON
+// Schema boolean `true` ("matches anything") by default - legal JSON Schema, but real Claude Code
+// validates tools/list CLIENT-SIDE and requires an object at every schema position, so one bare
+// boolean anywhere drops the ENTIRE 32-tool list, not just the offending tool (verified externally:
+// rewriting the one offending field, inspect_asset.outputSchema.properties.value, to `{}` restores
+// every tool). 16 of these exist today, across both inputSchema and outputSchema, spread over
+// several tools - see TransportConformanceTests.NoToolSchemaContainsABooleanSubschemaAnywhere for
+// the exact, currently-live count and the durable structural guard this must keep satisfying.
+//
+// There is no clean creation-time hook for this: WithTools<T>() below never accepts a
+// McpServerToolCreateOptions/AIJsonSchemaCreateOptions of its own (only an optional
+// JsonSerializerOptions), and every property on both AIJsonSchemaCreateOptions AND
+// AIJsonSchemaTransformOptions - including AIJsonSchemaCreateOptions.Default itself, the shared
+// singleton schema generation falls back to - is init-only (verified empirically: assigning
+// AIJsonSchemaCreateOptions.Default.TransformOptions post-construction is a compile error, CS8852),
+// so there is no seam that runs BEFORE a tool's schema is built.
+//
+// This instead does exactly what the alternative the defect report itself allows for: post-process
+// every already-built tool's schema once, here, right after ToolCollection is fully populated by
+// the WithTools<T>() chain above and before the endpoint is mapped below, so no request ever
+// observes an un-rewritten schema. Tool.InputSchema/OutputSchema are ordinary, publicly mutable
+// JsonElement properties (unlike the create-time options above), and AIJsonUtilities.TransformSchema
+// is the SDK's own standalone entry point for transforming an EXISTING schema - the identical logic
+// ConvertBooleanSchemas drives during creation, exposed as a pure function - so the rewrite is
+// authoritative (every genuine schema-valued position: properties/items/additionalProperties/...),
+// never a hand-rolled walk that could miss a nesting shape or corrupt an unrelated boolean keyword
+// (e.g. a future "readOnly": true) by treating every JSON boolean as if it were a subschema.
+var booleanSchemaFix = new AIJsonSchemaTransformOptions { ConvertBooleanSchemas = true };
+var registeredTools = app.Services.GetRequiredService<IOptions<McpServerOptions>>().Value.ToolCollection;
+if (registeredTools is not null)
+{
+    foreach (var tool in registeredTools)
+    {
+        tool.ProtocolTool.InputSchema = AIJsonUtilities.TransformSchema(tool.ProtocolTool.InputSchema, booleanSchemaFix);
+
+        if (tool.ProtocolTool.OutputSchema is { } outputSchema)
+            tool.ProtocolTool.OutputSchema = AIJsonUtilities.TransformSchema(outputSchema, booleanSchemaFix);
+    }
+}
+
 // Any non-flag command-line argument is a Unity project path to adopt and index at startup.
 // This is the walking skeleton's only way to tell the server about a project; continuous
 // FSEvents discovery, Unity Hub import, and the control API all belong to later plans.
-// Note this is deliberately NOT how a tool call picks its project — that uses an explicit
-// handle (see HadesTools), because MCP roots are deprecated as of revision 2026-07-28.
+// Note this is deliberately NOT how a tool call picks its project — a call falls back to live
+// MCP roots (ToolSupport.ResolveProjectAsync, RootsRouter.cs) only once an explicit handle and
+// the sole-known-project case both come up empty. Roots themselves are not the reason this
+// startup seam still exists: the SDK's [Obsolete] on them (MCP9005, SEP-2577) is an advisory,
+// suppressible warning on a fully functional feature, not a working blocker — see
+// Architecture.md §2.4 for the corrected writeup and how the two used to disagree on this.
 // Kept small on purpose: it is a seam, not a feature.
 foreach (var projectPath in args.Where(a => !a.StartsWith('-')))
 {
@@ -306,6 +401,25 @@ static void RecordTrace(RequestContext<CallToolRequestParams> context, string to
 static string? SerializeArguments(IDictionary<string, JsonElement>? arguments) =>
     arguments is null ? null : JsonSerializer.Serialize(arguments);
 
+/// <summary>
+/// F15: offers one completed tool call to <see cref="RegressionRecorder"/> - a no-op unless a
+/// recording session is currently active (see that class's own Capture). Entirely inside its own
+/// try/catch, same guarantee as <see cref="RecordTrace"/> just above and for the same reason:
+/// capturing a call for later replay must never be what makes that call fail.
+/// </summary>
+static void CaptureForRegression(RequestContext<CallToolRequestParams> context, string toolName, CallToolResult result)
+{
+    try
+    {
+        if (context.Services?.GetService<RegressionRecorder>() is { } recorder)
+            recorder.Capture(toolName, context.Params.Arguments, result);
+    }
+    catch
+    {
+        // Never fails the call being captured - see this method's own doc comment.
+    }
+}
+
 /// <summary>The text of a failed tool's error content, for the trace record — the same
 /// human-readable text an agent calling the tool would see back, for the "graceful" IsError path
 /// (a thrown exception is described from the exception itself instead - see the catch block
@@ -314,6 +428,51 @@ static string DescribeError(CallToolResult result) =>
     string.Join(" ", result.Content.OfType<TextContentBlock>().Select(c => c.Text)) is { Length: > 0 } text
         ? text
         : "Tool reported an error.";
+
+/// <summary>
+/// F13a: null when every argument name on <paramref name="context"/>'s call is a real parameter of
+/// the matched tool; otherwise a ready-to-return error <see cref="CallToolResult"/> naming the
+/// unknown parameter(s) and the tool's actual ones, so a caller can self-correct without guessing.
+/// Reads the accepted parameter names from <c>context.MatchedPrimitive</c>'s own
+/// <c>ProtocolTool.InputSchema</c> - the EXACT schema <c>tools/list</c> already advertises for this
+/// tool, via its own <c>properties</c> keys - rather than a second, hand-maintained list that could
+/// silently drift from it as tools gain or rename parameters. <c>MatchedPrimitive</c> is only ever
+/// an <see cref="McpServerTool"/> here (CallToolFilters wraps dispatch to an already name-matched
+/// tool - see this file's own comment on CallToolFilters, above - an unknown TOOL name never reaches
+/// this filter at all), checked with an <c>is</c> pattern anyway rather than assumed, so a future SDK
+/// change that widens what can be matched degrades to "skip the check" instead of throwing.
+/// </summary>
+static CallToolResult? UnknownParameterRejection(RequestContext<CallToolRequestParams> context)
+{
+    if (context.Params.Arguments is not { Count: > 0 } arguments) return null;
+    if (context.MatchedPrimitive is not McpServerTool tool) return null;
+
+    if (!tool.ProtocolTool.InputSchema.TryGetProperty("properties", out var properties)
+        || properties.ValueKind != JsonValueKind.Object)
+    {
+        return null;
+    }
+
+    var unknown = arguments.Keys.Where(key => !properties.TryGetProperty(key, out _)).ToList();
+    if (unknown.Count == 0) return null;
+
+    var validNames = properties.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToList();
+    var quotedUnknown = string.Join(", ", unknown.Select(name => $"'{name}'"));
+    var noun = unknown.Count == 1 ? "a parameter" : "parameters";
+
+    return new CallToolResult
+    {
+        IsError = true,
+        Content =
+        [
+            new TextContentBlock
+            {
+                Text = $"{context.Params.Name} does not accept {noun} named {quotedUnknown}. "
+                     + $"Valid parameters: {string.Join(", ", validNames)}.",
+            },
+        ],
+    };
+}
 
 /// <summary>Exposed so WebApplicationFactory&lt;Program&gt; can host the app in tests.</summary>
 public partial class Program;

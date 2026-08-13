@@ -298,6 +298,25 @@ public class ReadThroughTests : IDisposable
     }
 
     [Fact]
+    public void APathThatIsADirectory_GivesAClearDirectoryErrorNeverTheNoLongerOnDiskMessage()
+    {
+        // F11: a directory path passed where a prefab/scene file was expected used to fall through
+        // to LoadValidatedContent's plain File.Exists check - false for a directory - so it got the
+        // SAME "no longer on disk... hades_rebuild_graph will bring the index back in sync" message
+        // a genuinely deleted file gets. The path is right there on disk; the advice (rebuild the
+        // index) is an expensive no-op that can never fix a category mismatch. Must be its own,
+        // distinct error naming the real problem instead.
+        Directory.CreateDirectory(Path.Combine(_projectRoot, "Assets", "SomeFolder"));
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => ReadThrough.GetHierarchy(_projectRoot, "Assets/SomeFolder"));
+        Assert.Contains("directory", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("SomeFolder", ex.Message);
+        Assert.DoesNotContain("no longer on disk", ex.Message);
+        Assert.DoesNotContain("hades_rebuild_graph", ex.Message);
+    }
+
+    [Fact]
     public void MalformedOrTruncatedYaml_ReturnsAParseErrorNamingTheFileNeverAPartialHierarchy()
     {
         // Cut off mid-flow-mapping, as a file caught mid-write would be.

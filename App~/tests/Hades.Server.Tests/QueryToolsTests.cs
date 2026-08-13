@@ -548,6 +548,70 @@ public class QueryToolsTests : IClassFixture<WebApplicationFactory<Program>>, ID
         Assert.Contains("filter", text, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ---------------------------------------------------------------- F7: an unrecognised 'kind' errors, never a silent empty set
+    //
+    // kind: "Bananas" and a plausible-but-wrong kind: "Scene" both used to return {results: [],
+    // totalReturned: 0} - indistinguishable from a genuinely empty area of an otherwise-populated
+    // graph. project_settings already gets this right for an unrecognised 'section' (lists the
+    // valid ones); this is the same treatment for graph_query's 'kind', drawn from the actual,
+    // live kind vocabulary this project's graph contains (GraphDatabase.CountByKind - the same
+    // computation get_project_summary's own nodesByKind reports), not a fixed, hand-maintained list.
+
+    [Fact]
+    public async Task GraphQuery_UnrecognisedKind_ErrorsNamingTheActualKindVocabulary()
+    {
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "graph_query",
+            new { kind = "Bananas" }));
+
+        Assert.Contains("Bananas", text);
+        Assert.Contains("case-sensitive", text, StringComparison.OrdinalIgnoreCase);
+        // The real, live kind vocabulary for THIS project's graph - this fixture's own Class/
+        // MonoBehaviour nodes (PlayerController.cs/OrphanScript.cs; Player.prefab/Config.asset).
+        Assert.Contains("Class", text);
+        Assert.Contains("MonoBehaviour", text);
+    }
+
+    [Fact]
+    public async Task GraphQuery_PlausibleButWrongKind_Scene_ErrorsRatherThanSilentlyEmpty()
+    {
+        // "Scene" is a real Hades/Unity concept (graph_query's OWN separate 'fileType' filter
+        // value) but never a graph NODE kind - a scene is many per-object nodes (GameObject,
+        // Transform, PrefabInstance, ...) with no single node summarising the whole file (see
+        // QueryTools' own class doc comment on 'fileType'). Before this fix, indistinguishable
+        // from a typo: both silently returned an empty result.
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "graph_query",
+            new { kind = "Scene" }));
+
+        Assert.Contains("Scene", text);
+        Assert.Contains("Class", text);
+    }
+
+    [Fact]
+    public async Task GraphQuery_KindCaseMismatch_IsRefused_NotSilentlyCoercedOrEmpty()
+    {
+        // Kinds are case-sensitive (the underlying column uses SQLite's default BINARY collation,
+        // exactly like every other exact-match column here) - a caller who gets the case wrong
+        // needs to be told, not silently handed an empty result indistinguishable from "this
+        // project genuinely has none".
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "graph_query",
+            new { kind = "monobehaviour" }));
+
+        Assert.Contains("monobehaviour", text);
+        Assert.Contains("MonoBehaviour", text); // the real, correctly-cased kind
+    }
+
+    [Fact]
+    public async Task GraphQuery_ValidKindCombinedWithOtherFiltersMatchingNothing_IsStillAnOrdinaryEmptyResult()
+    {
+        // The fix must fire ONLY when 'kind' itself is unrecognised - a genuinely valid kind
+        // combined with a namePattern that happens to match nothing is an ordinary empty result,
+        // exactly as before, not an error.
+        var structured = Structured(await McpTestClient.CallTool(_factory, "graph_query",
+            new { kind = "MonoBehaviour", namePattern = "definitely-does-not-match-anything" }));
+
+        Assert.Empty(structured.GetProperty("results").EnumerateArray());
+    }
+
     [Fact]
     public async Task GraphQuery_AnUnrecognisedEdgeDirectionGivesActionableGuidance()
     {

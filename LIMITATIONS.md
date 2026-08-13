@@ -40,7 +40,7 @@ A reference that exists *only* through one of these will not appear in the graph
 
 - **Precompiled DLL types** can't be turned into graph nodes from source, so edges *to* a base class/interface/type that lives in a compiled package or DLL may stay unresolved. Hades reports these as external/unindexed rather than pretending they don't exist.
 - **Generics** are resolved best-effort; deeply nested or open generic relationships may be incomplete.
-- **Asset types Hades doesn't index** (e.g. some binary/proprietary assets) won't have nodes; references into them are reported as unresolvable, not missing user code.
+- **Binary/imported assets (textures, models, audio, fonts, shaders, animation clips) are meta-only nodes** — path, name, kind, and GUID, so references into them resolve, but their own content (a texture's pixels, a clip's curves) is never read. Any remaining unindexed asset kind, or a reference resolving outside every scanned root entirely (most commonly a registry package's own copy under `Library/PackageCache` — a built-in shader or texture bundled with a Unity package, for example), still has no node; references into those are reported as unresolvable, not missing user code.
 
 ## Operational notes
 

@@ -27,6 +27,20 @@ public class ObservationServiceTests : IDisposable
         return service;
     }
 
+    /// <summary>Same fixture as <see cref="MakeProject"/>, minus the AdoptAndIndex call — for F14
+    /// tests that need to control exactly when (relative to ObservationService.Start()) the
+    /// project becomes known. Assets/ is created (empty) up front, same as every real Unity
+    /// project already has by the time anything adopts it: ProjectWatcher only watches scan roots
+    /// that exist AT CONSTRUCTION time (see its own constructor), so a fixture that instead
+    /// created Assets/ for the first time via a later Write() would be testing that unrelated
+    /// directory-must-pre-exist behaviour, not F14's watcher-enrollment fix.</summary>
+    ProjectService MakeUnadoptedProject()
+    {
+        Write("ProjectSettings/ProjectSettings.asset", $"  productGUID: {Guid}\n");
+        Directory.CreateDirectory(Path.Combine(_projectRoot, "Assets"));
+        return new ProjectService(new AppPaths(_appRoot));
+    }
+
     /// <summary>Polls rather than sleeping a fixed period — a timing-sensitive test that passes
     /// on a fast machine and fails in CI is worse than no test.</summary>
     static async Task<bool> Eventually(Func<bool> condition, int timeoutMs = 8000)
@@ -78,6 +92,71 @@ public class ObservationServiceTests : IDisposable
 
         Assert.True(await Eventually(() => service.Search(Guid, "Alpha").Count == 0),
             "a deleted file's nodes survived");
+    }
+
+    // ---------------------------------------------------------------- F14: watcher enrollment
+    //
+    // Start() only ever enrolled a ProjectWatcher for projects KnownProjects() already listed at
+    // that exact moment. A project registered afterwards — exactly what the control API's
+    // POST /control/projects/add and RootsRouter's per-tool-call Adopt both do at runtime, the
+    // ordinary "add a project while Hades is already running" flow — never got one: no add-project
+    // call path invoked Watch(). Live writes to that project were invisible until the next
+    // 5-minute periodic sweep (or a manual hades_rebuild_graph), while graph_query/find_references_to
+    // answered confidently and wrongly in the meantime — F14's "graph inverts the truth with no
+    // staleness signal". These three tests pin the repro and the fix.
+
+    [Fact]
+    public async Task AProjectAdoptedAfterStartIsWatchedLiveNotJustOnTheNextPeriodicSweep()
+    {
+        var service = MakeUnadoptedProject();
+        using var observation = new ObservationService(service) { Debounce = TimeSpan.FromMilliseconds(150) };
+        observation.Start();
+
+        // Registered AFTER Start() already ran — Start()'s own KnownProjects() loop never saw it.
+        service.AdoptAndIndex(_projectRoot);
+        Write("Assets/AddedAfterAdopt.cs", "public class AddedAfterAdopt { }");
+
+        Assert.True(await Eventually(() => service.Search(Guid, "AddedAfterAdopt").Count == 1),
+            "a project adopted after Start() never got a live watcher — F14");
+    }
+
+    [Fact]
+    public async Task RemovingAProjectStopsItsLiveWatcher()
+    {
+        var service = MakeProject();
+        using var observation = new ObservationService(service) { Debounce = TimeSpan.FromMilliseconds(150) };
+        observation.Start();
+
+        // Prove the watcher is live before removing anything, so a false negative below can only
+        // mean "unwatched on remove", never "was never watched at all".
+        Write("Assets/BeforeRemove.cs", "public class BeforeRemove { }");
+        Assert.True(await Eventually(() => service.Search(Guid, "BeforeRemove").Count == 1),
+            "setup failure: the watcher was not live before RemoveProject");
+
+        service.RemoveProject(Guid);
+        Write("Assets/AfterRemove.cs", "public class AfterRemove { }");
+        await Task.Delay(400);
+
+        Assert.Empty(service.Search(Guid, "AfterRemove"));
+    }
+
+    [Fact]
+    public void PeriodicSweepCoversAProjectAddedAfterStart()
+    {
+        // Defense in depth, independent of watcher enrollment: SyncAll — exactly what the
+        // periodic Timer invokes — re-reads KnownProjects() fresh on every call rather than a
+        // snapshot taken at Start(), so it must already cover a project added later. Verifies this
+        // stays true regardless of the watcher-enrollment fix above.
+        var service = MakeUnadoptedProject();
+        using var observation = new ObservationService(service);
+        observation.Start();
+
+        service.AdoptAndIndex(_projectRoot);
+        Write("Assets/CaughtByPeriodicSweep.cs", "public class CaughtByPeriodicSweep { }");
+
+        observation.SyncAll();
+
+        Assert.Single(service.Search(Guid, "CaughtByPeriodicSweep"));
     }
 
     [Fact]

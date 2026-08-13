@@ -46,6 +46,7 @@ namespace Hades.Tests.Editor
             RemoveTagDirect(TestTag);
             RemoveTagDirect(TestTagAlt);
             foreach (var slot in ScratchLayerSlots) SetLayerSlotDirect(slot, "");
+            FlushTagManagerDirect();
             _originalBuildScenes = EditorBuildSettings.scenes;
 
             if (AssetDatabase.IsValidFolder(ScratchDir)) AssetDatabase.DeleteAsset(ScratchDir);
@@ -59,6 +60,7 @@ namespace Hades.Tests.Editor
             RemoveTagDirect(TestTag);
             RemoveTagDirect(TestTagAlt);
             foreach (var slot in ScratchLayerSlots) SetLayerSlotDirect(slot, "");
+            FlushTagManagerDirect();
             EditorBuildSettings.scenes = _originalBuildScenes;
 
             if (AssetDatabase.IsValidFolder(ScratchDir)) AssetDatabase.DeleteAsset(ScratchDir);
@@ -154,6 +156,17 @@ namespace Hades.Tests.Editor
             var layers = so.FindProperty("layers");
             return index < layers.arraySize ? layers.GetArrayElementAtIndex(index).stringValue : "";
         }
+
+        /// <summary>SetUp/TearDown's own fixture cleanup, after this class's F10 fix: projectSettings.apply
+        /// createTag/deleteTag now flush ProjectSettings/TagManager.asset to disk for real (see
+        /// Apply's own doc comment), so a PRIOR test's tag/layer edit can genuinely reach disk. The
+        /// direct in-memory cleanup above (RemoveTagDirect/SetLayerSlotDirect, via
+        /// ApplyModifiedPropertiesWithoutUndo) never did and still does not flush anything itself -
+        /// without this, that cleanup would silently stop being enough, leaving a later test's own
+        /// "disk starts clean" assertion (see CreateTag_FlushesTagManagerToDisk_WithoutAnySceneSave)
+        /// to fail on stale disk content a fresh AssetDatabase.LoadMainAssetAtPath-based check like
+        /// TagExists() would never reveal.</summary>
+        static void FlushTagManagerDirect() => AssetDatabase.SaveAssets();
 
         /// <summary>Dispatches once through a fresh, throwaway gate - for building fixture state
         /// (e.g. an existing tag before testing deleteTag) via the SAME code path a real caller
@@ -330,5 +343,61 @@ namespace Hades.Tests.Editor
                 AssertExactlyOneLeaseWindow(fake, gate);
             }
         }
+
+        // ---------------------------------------------------------------- disk flush (mutations must not depend on a later save)
+
+        /// <summary>The defect this pair guards against: a batch that applies a tag mutation left
+        /// ProjectSettings/TagManager.asset on disk byte-for-byte unchanged - verified empirically,
+        /// in batchmode, with no scene save anywhere in the process - even though the in-memory
+        /// SerializedObject WAS updated (a same-session duplicate createTag still correctly failed
+        /// "already exists"). A disk-backed reader (the project_settings read tool, or any process
+        /// that starts fresh before a scene save or Editor quit happens to flush it incidentally)
+        /// saw the mutation as never having happened. TagExists() elsewhere in this file reads
+        /// through AssetDatabase.LoadMainAssetAtPath, which reflects this process's own in-memory
+        /// state regardless of whether anything was ever written to disk - it would pass even
+        /// without a fix, so it cannot be the test that catches this. Reading the file directly
+        /// with File.ReadAllText, bypassing every Unity API/cache, is what makes it one.</summary>
+        [Test]
+        public void CreateTag_FlushesTagManagerToDisk_WithoutAnySceneSave()
+        {
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                Assert.IsFalse(ReadTagManagerFileFromDisk().Contains(TestTag), "fixture must start clean on disk");
+
+                CommandTable.Dispatch(gate, Request("projectSettings.apply", Params(
+                    Op("createTag", ("name", JsonValue.String(TestTag))))));
+
+                Assert.IsTrue(ReadTagManagerFileFromDisk().Contains(TestTag),
+                    "projectSettings.apply must flush ProjectSettings/TagManager.asset to disk before returning, with no scene save");
+            }
+        }
+
+        [Test]
+        public void DeleteTag_FlushesRemovalToDisk_WithoutAnySceneSave()
+        {
+            // Setup goes through projectSettings.apply itself (not the standalone tag.create command,
+            // which TagLayerCommands still answers unchanged - this fix is scoped to the batch handler
+            // only, see Apply's own doc comment), so this test's own precondition is guaranteed by the
+            // fix under test rather than by another test happening to have left the same tag on disk.
+            DispatchSetup("projectSettings.apply", Params(Op("createTag", ("name", JsonValue.String(TestTag)))));
+            Assert.IsTrue(ReadTagManagerFileFromDisk().Contains(TestTag), "fixture setup must itself already be on disk");
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                CommandTable.Dispatch(gate, Request("projectSettings.apply", Params(
+                    Op("deleteTag", ("name", JsonValue.String(TestTag))))));
+
+                Assert.IsFalse(ReadTagManagerFileFromDisk().Contains(TestTag),
+                    "projectSettings.apply must flush the deletion to disk before returning, with no scene save");
+            }
+        }
+
+        /// <summary>Same file AbsolutePath() above resolves for the setImportSettings fixture -
+        /// reused here to reach ProjectSettings/TagManager.asset, read directly rather than through
+        /// any Unity API, so this sees exactly what a disk-backed reader outside this Editor process
+        /// would see.</summary>
+        static string ReadTagManagerFileFromDisk() => File.ReadAllText(AbsolutePath("ProjectSettings/TagManager.asset"));
     }
 }

@@ -1,9 +1,23 @@
+using Hades.Core.Projects;
+
 namespace Hades.Core.Observation;
 
 /// <summary>
 /// Keeps every known project's graph current: a catch-up sweep on start, a watcher per project
 /// for live changes, and a periodic sweep as the safety net that makes correctness independent of
 /// the watcher.
+///
+/// F14 fix: a project registered AFTER <see cref="Start"/> already ran — the ordinary shape of
+/// POST /control/projects/add or RootsRouter adopting a root mid-session — used to never get a
+/// <see cref="ProjectWatcher"/> at all: <see cref="Start"/> only ever enrolled what
+/// <see cref="ProjectService.KnownProjects"/> listed at that one moment, and no add-project path
+/// called <see cref="Watch"/>. <see cref="Start"/> now also subscribes to
+/// <see cref="ProjectService.ProjectAdopted"/>/<see cref="ProjectService.ProjectRemoved"/>, so
+/// every FUTURE adopt/remove — regardless of which caller triggers it — enrolls or disposes a
+/// watcher the same way. The periodic sweep was never actually broken by this: <see cref="SyncAll"/>
+/// re-reads <see cref="ProjectService.KnownProjects"/> fresh on every tick rather than a snapshot
+/// taken at <see cref="Start"/>, so a runtime-added project was always eventually synced — only
+/// instant, watcher-driven freshness was missing.
 /// </summary>
 public sealed class ObservationService(ProjectService projects) : IDisposable
 {
@@ -26,6 +40,14 @@ public sealed class ObservationService(ProjectService projects) : IDisposable
 
     public void Start()
     {
+        // Subscribed BEFORE the catch-up loop below, not after: a project adopted concurrently
+        // while this loop is still running must not fall in the gap between "KnownProjects() was
+        // read" and "we started listening for adopts". Watch/Unwatch are idempotent either way
+        // (see their own doc comments), so a project this loop AND the event both see costs one
+        // harmless extra dictionary check, never a double-watch or a missed one.
+        projects.ProjectAdopted += OnProjectAdopted;
+        projects.ProjectRemoved += Unwatch;
+
         foreach (var project in projects.KnownProjects())
         {
             // Catch-up first: whatever changed while this process was not running is found here,
@@ -36,6 +58,12 @@ public sealed class ObservationService(ProjectService projects) : IDisposable
 
         _periodicSweep = new Timer(_ => SyncAll(), null, PeriodicInterval, PeriodicInterval);
     }
+
+    /// <summary>F14: the ONLY thing that enrolls a watcher for a project adopted (or re-adopted)
+    /// after <see cref="Start"/> already ran — see this class's own doc comment. Watch itself
+    /// already handles "already watching this project", so re-firing on every RootsRouter-driven
+    /// Adopt call costs one idempotent dictionary check, never a duplicate watcher.</summary>
+    void OnProjectAdopted(UnityProject project) => Watch(project.ProductGuid, project.Path);
 
     /// <summary>Begins watching a project, syncing it first. Safe to call for an already-watched
     /// project.</summary>
@@ -48,6 +76,19 @@ public sealed class ObservationService(ProjectService projects) : IDisposable
             var watcher = new ProjectWatcher(projectPath, Debounce);
             watcher.ChangesSettled += () => Sync(productGuid);
             _watchers[productGuid] = watcher;
+        }
+    }
+
+    /// <summary>F14's "and dispose on remove" half: stops and disposes <paramref
+    /// name="productGuid"/>'s live watcher, if it has one. Safe to call for a project that was
+    /// never watched, or was already unwatched — the same "safe to call twice" contract every
+    /// other lifecycle method on this class holds.</summary>
+    public void Unwatch(string productGuid)
+    {
+        lock (_gate)
+        {
+            if (!_watchers.Remove(productGuid, out var watcher)) return;
+            watcher.Dispose();
         }
     }
 
@@ -107,6 +148,12 @@ public sealed class ObservationService(ProjectService projects) : IDisposable
             if (_disposed) return;
             _disposed = true;
         }
+
+        // Unsubscribe even though Watch/Unwatch would both no-op safely post-Dispose anyway (the
+        // same _disposed guard every other method here already relies on) — a disposed instance
+        // must not linger as a live subscriber on projects, which can easily outlive it.
+        projects.ProjectAdopted -= OnProjectAdopted;
+        projects.ProjectRemoved -= Unwatch;
 
         _periodicSweep?.Dispose();
         _periodicSweep = null;

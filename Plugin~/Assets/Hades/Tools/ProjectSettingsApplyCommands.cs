@@ -124,6 +124,31 @@ namespace Hades.Tools
 
                 Undo.SetCurrentGroupName("Hades Project Settings Apply: " + applied.Items.Count + " of " + ops.Items.Count + " operation(s)");
 
+                // Flush to disk before returning, so a read that happens right after this call sees
+                // what this call just did. createTag/deleteTag/createLayer (TagLayerCommands) already
+                // call AssetDatabase.SaveAssetIfDirty on the TagManager object each one touches, but
+                // verified empirically (batchmode, no scene save in between) that call does not reach
+                // ProjectSettings/TagManager.asset on disk - a freshly-reloaded reference to the same
+                // object, SaveAssetIfDirty'd again right here, does not either. Only
+                // AssetDatabase.SaveAssets() (confirmed empirically to write the new tag to disk
+                // immediately) closes the gap. Until this returns, the split is invisible to a caller
+                // in the SAME session - the in-memory SerializedObject is already updated, so a
+                // same-session duplicate createTag still correctly fails "already exists" - but the
+                // disk-backed project_settings read tool, and any process that starts fresh before a
+                // scene save or Editor quit happens to flush it incidentally, both see the mutation as
+                // never having happened.
+                //
+                // This is the blanket save MaterialCommands' own doc comment deliberately avoids for
+                // a single material edit (flushing every dirty asset in the project on every
+                // material.set_property call would surprise a caller mid-WIP on unrelated assets).
+                // That tradeoff does not hold the same way here: project_settings_apply is already an
+                // explicit "commit these settings" call, not one a caller makes mid-iteration on WIP
+                // content, and the narrower per-asset save this class could reach for instead -
+                // reloading TagManager.asset and calling SaveAssetIfDirty on it directly - was the
+                // first thing tried and, per the same empirical check, does not work either. Gated on
+                // applied.Items.Count > 0 so a no-op or all-failed batch never touches disk.
+                if (applied.Items.Count > 0) AssetDatabase.SaveAssets();
+
                 return JsonValue.NewObject()
                     .SetProperty("applied", applied)
                     .SetProperty("results", results)

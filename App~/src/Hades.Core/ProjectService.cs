@@ -260,11 +260,67 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
 
     public UnityProject? Get(string productGuid) => _store.Get(productGuid);
 
+    /// <summary>
+    /// Raised whenever <see cref="Adopt"/> (directly, or via <see cref="AdoptAndIndex"/>)
+    /// registers or re-registers a project — including on every routing call through RootsRouter,
+    /// which adopts on every request by design (see <see cref="Adopt"/>'s own doc comment: "cheap
+    /// enough to call on every request"). Exists so <see cref="Observation.ObservationService"/>
+    /// can enroll a live watcher for a project added at runtime, after it already started (F14:
+    /// Start() only ever watched what <see cref="KnownProjects"/> listed AT THAT MOMENT — a
+    /// project registered afterwards, via POST /control/projects/add or RootsRouter, never got
+    /// one), without ProjectService taking a hard dependency on Observation — same reasoning as
+    /// ObservationService's own ProjectSynced event.
+    /// </summary>
+    public event Action<UnityProject>? ProjectAdopted;
+
+    /// <summary>Raised when <see cref="RemoveProject"/> actually deregisters a project Hades
+    /// previously knew — never for a productGuid Hades never knew (see
+    /// <see cref="ProjectStore.Remove"/>'s own doc comment: that's the one case it returns false).
+    /// Exists so <see cref="Observation.ObservationService"/> can dispose that project's live
+    /// watcher — see <see cref="ProjectAdopted"/>'s own doc comment for why this is an event
+    /// rather than a direct dependency.</summary>
+    public event Action<string>? ProjectRemoved;
+
     /// <summary>Deregisters a project - see <see cref="ProjectStore.Remove"/>'s own doc comment
     /// for exactly what "deregister" means (nothing on disk is ever deleted, least of all
     /// authored memory). Returns false when <paramref name="productGuid"/> is not, or was never,
     /// known.</summary>
-    public bool RemoveProject(string productGuid) => _store.Remove(productGuid);
+    public bool RemoveProject(string productGuid)
+    {
+        if (!_store.Remove(productGuid)) return false;
+
+        ProjectRemoved?.Invoke(productGuid);
+        return true;
+    }
+
+    /// <summary>
+    /// Persists what a Unity Editor's Hello just reported: the live <see
+    /// cref="UnityProject.UnityVersion"/> (project.json's own copy is otherwise written once, at
+    /// <see cref="Adopt"/> time, and never revisited — it stays null forever for a project adopted
+    /// before any Editor ever attached) and a fresh <see cref="UnityProject.LastSeen"/>. Called once
+    /// per successful <see cref="EditorListener.Register"/> — see that method's own doc comment for
+    /// exactly when "a Hello completes" means. Deliberately minimal: an attach-time update only, no
+    /// periodic write while the connection stays open.
+    ///
+    /// A no-op — never a throw — when <paramref name="productGuid"/> is not (yet) known: the normal
+    /// startup path always Adopts before an Editor can attach, but a Hello can in principle arrive
+    /// for a project Hades has never adopted through any route, and there is nothing to update.
+    /// <paramref name="unityVersion"/> blank/whitespace (a well-formed Hello can still report an
+    /// empty string — Hello only requires "unityVersion" to be present and a string, never that it
+    /// be non-empty) leaves the previously recorded version alone rather than clobbering a real
+    /// value with an unhelpful blank; <see cref="UnityProject.LastSeen"/> still bumps either way,
+    /// since a Hello arriving at all is itself the liveness signal, independent of what it reports.
+    /// </summary>
+    public void RecordEditorAttached(string productGuid, string? unityVersion)
+    {
+        if (_store.Get(productGuid) is not { } project) return;
+
+        _store.Save(project with
+        {
+            UnityVersion = string.IsNullOrWhiteSpace(unityVersion) ? project.UnityVersion : unityVersion,
+            LastSeen = DateTimeOffset.UtcNow,
+        });
+    }
 
     /// <summary>
     /// Registers a project without indexing it, and imports any pre-existing
@@ -278,12 +334,14 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
     public UnityProject? Adopt(string projectRoot)
     {
         var project = _store.Adopt(projectRoot);
+        if (project is null) return null;
 
-        if (project is not null && _memoryImported.TryAdd(project.ProductGuid, 0))
+        if (_memoryImported.TryAdd(project.ProductGuid, 0))
         {
             _memory.ImportFromArcforge(project.ProductGuid, projectRoot);
         }
 
+        ProjectAdopted?.Invoke(project);
         return project;
     }
 
@@ -400,13 +458,14 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
     }
 
     /// <summary>
-    /// Everything <paramref name="rootPath"/> depends on, walking `references` edges outward.
-    /// Returns null when the project or the root path itself is unknown to the graph — mirrors
-    /// <see cref="FindReferencesTo"/>'s null-means-unknown-path convention, including its use of
-    /// <see cref="GraphDatabase.GuidForPath"/> as the existence check, even though the walk
-    /// itself only ever needs paths, not the root's own GUID.
+    /// Everything <paramref name="rootPath"/> depends on, walking `references` edges outward —
+    /// plus (F6-honesty) every dangling dependency found along the way, see
+    /// <see cref="Graph.DependencyTrace"/>. Returns null when the project or the root path itself
+    /// is unknown to the graph — mirrors <see cref="FindReferencesTo"/>'s null-means-unknown-path
+    /// convention, including its use of <see cref="GraphDatabase.GuidForPath"/> as the existence
+    /// check, even though the walk itself only ever needs paths, not the root's own GUID.
     /// </summary>
-    public IReadOnlyList<DependencyHit>? TraceDependencies(string productGuid, string rootPath, int maxDepth = 3)
+    public DependencyTrace? TraceDependencies(string productGuid, string rootPath, int maxDepth = 3)
     {
         if (_store.Get(productGuid) is null) return null;
 
@@ -414,6 +473,49 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
         if (database.GuidForPath(rootPath) is null) return null;
 
         return database.TraceDependencies(rootPath, maxDepth);
+    }
+
+    /// <summary>
+    /// True when <paramref name="assetPath"/> — or its .meta sibling — exists on disk under
+    /// <paramref name="productGuid"/>'s project root. F6-honesty: the only use is
+    /// <see cref="Mcp.HadesTools.FindReferencesTo"/> distinguishing, for a path
+    /// <see cref="FindReferencesTo"/> could not resolve in the graph, "exists but is not a graph
+    /// node" from "genuinely does not exist". The former no longer means "an asset type Hades does
+    /// not index" for textures, models, audio, fonts, shaders, or animation clips specifically —
+    /// those ARE indexed today, as meta-only nodes (path, name, kind from the extension, guid from
+    /// the sibling .meta; no content ever read, no edges ever written FROM one — see
+    /// <see cref="BinaryAssetIndexer"/> and <see cref="ImportedAssetKind"/>). What still resolves
+    /// true here instead: a path outside every root Hades scans at all — a package resolved into
+    /// Library/PackageCache is walked by nothing regardless of its type (see
+    /// <see cref="ProjectWalker.ResolveScanRoots"/>) — or an asset kind neither
+    /// <see cref="AssetIndexer"/>'s YAML parsing nor <see cref="ImportedAssetKind"/>'s binary
+    /// mapping recognises at all (video, terrain data, and the rest of Unity's importer surface —
+    /// see that type's own doc comment for the deliberately-smaller-than-complete extension list).
+    /// The .meta check alone covers a folder asset (whose own content is a directory, not a file) without a separate
+    /// Directory.Exists call — Unity always gives a folder a sibling .meta file the same way it
+    /// gives every other asset one.
+    ///
+    /// False for an unknown project (nothing to resolve <paramref name="assetPath"/> against), or
+    /// for a path that is not even a well-formed project-relative path at all
+    /// (<see cref="ReadThrough.ResolveAssetPath"/> throwing <see cref="ArgumentException"/> for a
+    /// rooted path, one that escapes every scan root, or one that exits via a symlink) — every
+    /// failure mode collapses to the same conservative "cannot confirm existence" as a genuinely
+    /// missing file, never an exception a caller of <see cref="FindReferencesTo"/> would have to
+    /// handle separately.
+    /// </summary>
+    public bool ExistsOnDisk(string productGuid, string assetPath)
+    {
+        if (_store.Get(productGuid) is not { } project) return false;
+
+        try
+        {
+            var resolved = ReadThrough.ResolveAssetPath(project.Path, assetPath);
+            return File.Exists(resolved) || File.Exists(resolved + ".meta");
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -679,6 +781,23 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
 
         return database.QueryGraph(kind, namePattern, pathPrefix, edgeKind, edgeDirection, limit,
             edgeTargetGuid, edgeTargetNamePattern, edgeAbsent, kindPattern, edgeTargetKind);
+    }
+
+    /// <summary>
+    /// The distinct node kinds actually present in this project's graph, sorted - the same source
+    /// <see cref="ProjectSummary.NodesByKind"/> (get_project_summary's own "nodesByKind") already
+    /// computes, reused here so graph_query's <c>kind</c> validation (F7) can distinguish an
+    /// unrecognised kind - a typo, or a plausible-but-wrong guess like "Scene", never a real node
+    /// kind - from a genuinely empty result for a valid one, and name the real vocabulary rather
+    /// than leaving a caller to guess. Pattern-search shape like <see cref="Search"/>: an unknown
+    /// project just means an empty list.
+    /// </summary>
+    public IReadOnlyList<string> KnownNodeKinds(string productGuid)
+    {
+        if (_store.Get(productGuid) is null) return [];
+
+        using var database = OpenGraph(productGuid);
+        return database.CountByKind().Keys.ToList();
     }
 
     public ProjectSummary? Summary(string productGuid)

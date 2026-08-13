@@ -4,7 +4,7 @@
 [![CI](https://github.com/TheArcForge/Hades/actions/workflows/ci.yml/badge.svg)](https://github.com/TheArcForge/Hades/actions/workflows/ci.yml)
 [![MCP compatible](https://img.shields.io/badge/MCP-compatible-blue)](https://modelcontextprotocol.io)
 
-Hades is a standalone macOS menu-bar app. Its .NET core builds a queryable knowledge graph of a Unity project — every scene, prefab, script, and asset, and the dependencies between them — and serves it to AI agents over MCP: 32 tools, 22 skills, 6 commands. Everything runs locally.
+Hades is a standalone macOS menu-bar app. Its .NET core builds a queryable knowledge graph of a Unity project — every scene, prefab, script, and asset, including textures, models, audio, fonts, shaders, and animation clips, and the dependencies between them — and serves it to AI agents over MCP: 32 tools, 22 skills, 6 commands. Everything runs locally. Binary/imported assets are indexed by path, name, kind, and GUID only — their content is never parsed, and an asset resolved outside every scanned root (e.g. a registry package's own copy in `Library/PackageCache`) still has no node; see [Documentation/Architecture.md](Documentation/Architecture.md) §4.3.
 
 ## Status
 
