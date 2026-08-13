@@ -267,7 +267,10 @@ def c_f9_unity_version_persisted():
     if not ch.get("attached"):
         return False, "SKIP-CONDITION: no Editor attached"
     guid = st.get("defaultProject")
-    p = os.path.expanduser(f"~/Library/Application Support/Hades/projects/{guid}/project.json")
+    # HADES_HOME relocates the app's state dir (app and plugin both honor it); same here, or
+    # this case reads the wrong home whenever the suite targets an isolated instance.
+    home = os.environ.get("HADES_HOME") or os.path.expanduser("~/Library/Application Support/Hades")
+    p = os.path.join(home, "projects", guid, "project.json")
     if not os.path.exists(p):
         return False, f"missing {p}"
     rec = json.load(open(p))
@@ -436,13 +439,13 @@ CASES = [
      "graph_query(kind=Scene) does not silently return 0 despite scenes existing"),
     ("G7", "F13", False, "pass", c_f13_unknown_param_rejected,
      "unknown parameters are rejected, not silently dropped"),
-    ("A1", "F9",  True,  "fail", c_f9_unity_version_persisted,
+    ("A1", "F9",  True,  "pass", c_f9_unity_version_persisted,
      "project.json records UnityVersion while an Editor is attached"),
-    ("E1", "F14", True,  "fail", c_f14_new_asset_indexed,
+    ("E1", "F14", True,  "pass", c_f14_new_asset_indexed,
      "a newly created asset is queryable without a manual rebuild"),
-    ("E2", "F14", True,  "fail", c_f14_move_not_stale,
+    ("E2", "F14", True,  "pass", c_f14_move_not_stale,
      "after a move the graph rejects the old path and resolves the new one"),
-    ("E3", "F10", True,  "fail", c_f10_tag_visible_after_create,
+    ("E3", "F10", True,  "pass", c_f10_tag_visible_after_create,
      "a created tag is visible to project_settings immediately"),
     ("E4", "F8",  True,  "pass", c_f8_nested_prefab,
      "GUARD: prefab_apply create produces a nested PrefabInstance, not a flattened copy"),

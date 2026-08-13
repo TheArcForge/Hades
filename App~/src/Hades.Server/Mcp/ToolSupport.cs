@@ -113,8 +113,16 @@ public static class ToolSupport
 
         var resolution = await ResolveProjectAsync(projects, handle, router, rootsProvider).ConfigureAwait(false);
 
-        if (resolution.Announcement is not null && context.Items is { } items)
-            items[AnnouncementItemsKey] = resolution.Announcement;
+        if (context.Items is { } items)
+        {
+            // Always recorded, not just on auto-adopt: Program.cs's RecordTrace files the trace
+            // under this guid. The synchronous ResolveProject it falls back to cannot re-derive a
+            // roots-based answer (several known projects, no handle - it throws), so without this
+            // hand-off exactly the calls the seamless path serves would be the untraced ones.
+            items[ResolvedProjectItemsKey] = resolution.ProductGuid;
+            if (resolution.Announcement is not null)
+                items[AnnouncementItemsKey] = resolution.Announcement;
+        }
 
         return resolution;
     }
@@ -124,6 +132,12 @@ public static class ToolSupport
     /// <see cref="MessageContext.Items"/> — read back by <see cref="AppendAnnouncement"/>, and by
     /// nothing else (not part of any wire-visible contract).</summary>
     internal const string AnnouncementItemsKey = "hades.rootsAnnouncement";
+
+    /// <summary>Key the same overload records the resolved <c>ProductGuid</c> under, on every
+    /// successful resolution — read back by Program.cs's RecordTrace so the trace is filed under
+    /// the project the call actually ran against, even when only roots could have picked it.
+    /// Like <see cref="AnnouncementItemsKey"/>, never part of any wire-visible contract.</summary>
+    public const string ResolvedProjectItemsKey = "hades.resolvedProject";
 
     /// <summary>
     /// Appends <paramref name="context"/>'s own recorded auto-adopt announcement (if any — see

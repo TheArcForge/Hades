@@ -409,7 +409,7 @@ public sealed class ProjectsBuildRebuildMessageTests
 public sealed class ProjectsBuildAsyncTests : IDisposable
 {
     const string ProjectGuid = "aaaabbbbccccddddeeeeffff40000004";
-    const string RealAppPluginVersion = "1.2.0"; // Plugin~/Assets/Hades/Runtime/HadesBoot.cs's own PluginVersion constant, confirmed by reading it directly. Keep in sync if that constant ever changes (every other test in this codebase already pins this exact literal too).
+    const string RealAppPluginVersion = "1.3.0"; // Plugin~/Assets/Hades/Runtime/HadesBoot.cs's own PluginVersion constant, confirmed by reading it directly. Keep in sync if that constant ever changes (every other test in this codebase already pins this exact literal too).
 
     readonly string _appRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
     readonly string _projectRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());

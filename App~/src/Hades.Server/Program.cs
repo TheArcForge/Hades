@@ -365,10 +365,13 @@ catch (McpPortBindException ex)
 }
 
 /// <summary>
-/// Resolves which project's traces.db this call belongs to and records it — entirely inside its
-/// own try/catch, so an ambiguous or unknown project (e.g. hades_status, which takes no 'project'
-/// argument, on a server that knows several projects) is treated exactly like an unwritable trace
-/// database: tracing is skipped for this call, never surfaced as a failure of the call itself.
+/// Resolves which project's traces.db this call belongs to and records it — preferring the guid
+/// the tool itself already resolved (ToolSupport.ResolveProjectAsync leaves it on this call's own
+/// context.Items, the only place a roots-based answer survives to; the synchronous fallback below
+/// cannot re-derive one). Entirely inside its own try/catch, so a call that resolved nowhere by
+/// either route (e.g. hades_status, which takes no 'project' argument, on a server that knows
+/// several projects) is treated exactly like an unwritable trace database: tracing is skipped for
+/// this call, never surfaced as a failure of the call itself.
 /// </summary>
 static void RecordTrace(RequestContext<CallToolRequestParams> context, string toolName, long startUtcMs,
     long durationMs, bool ok, string? errorMessage, CallToolResult? result)
@@ -380,12 +383,25 @@ static void RecordTrace(RequestContext<CallToolRequestParams> context, string to
         var projects = services.GetRequiredService<ProjectService>();
         var paths = services.GetRequiredService<AppPaths>();
 
-        var projectHandle = context.Params.Arguments is { } arguments
-            && arguments.TryGetValue("project", out var value)
-            && value.ValueKind == JsonValueKind.String
-                ? value.GetString()
-                : null;
-        var productGuid = ToolSupport.ResolveProject(projects, projectHandle);
+        string productGuid;
+        if (context.Items is { } items
+            && items.TryGetValue(ToolSupport.ResolvedProjectItemsKey, out var resolved)
+            && resolved is string alreadyResolved)
+        {
+            productGuid = alreadyResolved;
+        }
+        else
+        {
+            // Tools not routed through ResolveProjectAsync (the Editor-proxy family, whose
+            // resolution lives in Hades.Core) leave nothing on Items; for those the old
+            // synchronous resolution still answers exactly as before.
+            var projectHandle = context.Params.Arguments is { } arguments
+                && arguments.TryGetValue("project", out var value)
+                && value.ValueKind == JsonValueKind.String
+                    ? value.GetString()
+                    : null;
+            productGuid = ToolSupport.ResolveProject(projects, projectHandle);
+        }
 
         paths.EnsureProjectDir(productGuid);
         var tracer = new ToolCallTracer(paths.TracesDb(productGuid));

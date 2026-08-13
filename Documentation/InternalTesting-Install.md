@@ -287,16 +287,6 @@ v1.2 keeps working the whole time. Nothing here is forced or automatic.
 
 ## Known issues (read before you report these as new)
 
-**The asset-type indexing boundary.** Textures, models, audio clips, fonts, shaders, and
-animation clips are not graph nodes — see `Documentation/Architecture.md` §4.3, "What is not
-indexed," for the full list and why. `inspect_asset` still resolves GUIDs for these types
-correctly; it's `search_by_name`, `find_references_to`, and `trace_dependencies` that will
-report them as absent, or their dependencies as empty, even when a reference demonstrably
-exists and resolves. This is a design boundary, not a stale index — rebuilding the graph does
-not change it. Expect it rather than reporting it fresh; do report which specific workflow it
-blocked for you, since narrowing this boundary is one of the fixes this testing round is
-feeding into.
-
 **Hades wasn't running yet when the Claude Code session started.** Claude Code does not retry
 an MCP server that was unreachable at session start (confirmed against Claude Code's own docs)
 — the `hades` entry shows as failed, not the same as the 0-tools cases above, and it will not
@@ -312,6 +302,13 @@ report it.
 *(The previously-listed `prefab_apply create` flattening issue is fixed — both a black-box
 repro and the shipped plugin source confirm a nested prefab is produced — and has been removed
 from this list.)*
+
+*(The previously-listed asset-type indexing boundary is fixed — `BinaryAssetIndexer` now gives
+textures, models, audio clips, fonts, shaders, and animation clips a meta-only graph node
+(path/name/kind/guid), so `search_by_name`, `find_references_to`, and `trace_dependencies` all
+resolve them instead of reporting them absent or their dependencies as empty. Content is still
+never read — `inspect_asset` still can't describe what's inside one of these — see
+`Documentation/Architecture.md` §4.2–4.3. Removed from this list.)*
 
 ---
 

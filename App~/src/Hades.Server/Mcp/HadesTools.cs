@@ -98,12 +98,15 @@ public sealed class HadesTools(ProjectService projects)
     }
 
     [McpServerTool(Name = "search_by_name", Title = "Search by Name", ReadOnly = true, UseStructuredContent = true)]
-    [Description("Find C# types in the project graph by name (case-insensitive substring). Use "
-               + "this instead of grep: it is indexed and understands the project structure."
-               + ToolSupport.SavedStateClause)]
+    [Description("Find C# types and assets in the project graph by name (case-insensitive "
+               + "substring). Use this instead of grep: it is indexed and understands the "
+               + "project structure." + ToolSupport.SavedStateClause)]
     public async Task<SearchResult> SearchByName(
         [Description("Substring to match, case-insensitive")] string namePattern,
-        [Description("Optional declaration-kind filter: Class, Struct, Interface, Enum, Record")] string? kind = null,
+        [Description("Optional exact node-kind filter. Script declarations: Class, Struct, "
+                   + "Interface, Enum, Record. Imported assets: Texture2D, Model, AudioClip, "
+                   + "Font, Shader, ShaderGraph, ComputeShader, AnimationClip. Unity object "
+                   + "types (Material, GameObject, ...) also match by their exact type name.")] string? kind = null,
         [Description("Maximum results to return (1-200, default 50)")] int limit = 50,
         [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)

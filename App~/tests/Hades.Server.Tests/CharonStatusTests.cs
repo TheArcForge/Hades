@@ -60,7 +60,7 @@ public sealed class CharonStatusTests : IClassFixture<WebApplicationFactory<Prog
     static JsonElement Structured(JsonElement envelope) =>
         envelope.GetProperty("result").GetProperty("structuredContent");
 
-    const string RealAppPluginVersion = "1.2.0"; // Plugin~/Assets/Hades/Runtime/HadesBoot.cs's own PluginVersion constant - see ProjectsTests.cs's own identically-named constant for the same reasoning.
+    const string RealAppPluginVersion = "1.3.0"; // Plugin~/Assets/Hades/Runtime/HadesBoot.cs's own PluginVersion constant - see ProjectsTests.cs's own identically-named constant for the same reasoning.
 
     static Hello MakeHello(long processId, string pluginVersion = RealAppPluginVersion) => new()
     {

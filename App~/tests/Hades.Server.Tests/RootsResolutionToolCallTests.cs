@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Hades.Core;
 using Hades.Core.Storage;
+using Hades.Core.Tracing;
 using Hades.Server.Mcp;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -192,6 +193,47 @@ public class RootsResolutionToolCallTests : IClassFixture<WebApplicationFactory<
                 && (b.GetProperty("text").GetString() ?? "").Contains("Registered", StringComparison.Ordinal));
 
         Assert.False(hasAnnouncement, blocks.GetRawText());
+    }
+
+    [Fact]
+    public async Task RootsResolvedCall_IsTracedIntoTheResolvedProjectsOwnTracesDb()
+    {
+        // Two known projects and no 'project' argument - the shape only roots can resolve.
+        // Program.cs's RecordTrace must file this call under the project the call ACTUALLY ran
+        // against, which the synchronous ToolSupport.ResolveProject alone can never determine
+        // here (two candidates, no handle - it throws, and tracing's own catch used to swallow
+        // that into "no trace anywhere"). The Traces surface being blind to exactly the calls
+        // the seamless path serves is the F15 blind-spot class all over again, hence pinned.
+        var alphaRoot = MakeUnityProject("aaaabbbbccccddddeeeeffff00001111", "AlphaOnlyType");
+        var betaRoot = MakeUnityProject("bbbbccccddddeeeeffff000011112222", "BetaOnlyType");
+
+        using var factory = FactoryWithFakeRoots(new FakeRootsProvider(betaRoot));
+        var projects = factory.Services.GetRequiredService<ProjectService>();
+        projects.AdoptAndIndex(alphaRoot);
+        projects.AdoptAndIndex(betaRoot);
+
+        var envelope = await McpTestClient.CallTool(factory, "search_by_name", new { namePattern = "OnlyType" });
+
+        // Sanity first: the call itself resolved via roots to beta. A trace assertion on a call
+        // that never resolved would be testing nothing.
+        Assert.Equal("BetaOnlyType",
+            Structured(envelope).GetProperty("results")[0].GetProperty("name").GetString());
+
+        var paths = factory.Services.GetRequiredService<AppPaths>();
+        using (var store = TraceStore.Open(paths.TracesDb("bbbbccccddddeeeeffff000011112222")))
+        {
+            Assert.True(store.RecentTraces().Any(t => t.ToolName == "search_by_name"),
+                "the roots-resolved call left no trace in the resolved project's own traces.db");
+        }
+
+        // And under beta specifically - a trace filed under alpha would misattribute which
+        // project the call ran against, worse than no trace at all.
+        var alphaDb = paths.TracesDb("aaaabbbbccccddddeeeeffff00001111");
+        if (File.Exists(alphaDb))
+        {
+            using var alphaStore = TraceStore.Open(alphaDb);
+            Assert.DoesNotContain(alphaStore.RecentTraces(), t => t.ToolName == "search_by_name");
+        }
     }
 
     public void Dispose()
