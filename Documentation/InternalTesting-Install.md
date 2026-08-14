@@ -209,7 +209,7 @@ Check both:
        on the old surface, not the new one — see "If you're on the old server" below.
 
 2. **Server version.** Ask Claude to call the `hades_status` tool. Check the `version` field.
-   - **New app reports `2.0.0-dev`** — a fixed constant (`HadesTools.cs`, `ServerVersion`).
+   - **New app reports `2.0.0-beta.2`** — a fixed constant (`HadesTools.cs`, `ServerVersion`).
    - **Old v1.2 package reports whatever Unity Package Manager has installed** —
      `Editor/MCP/Tools/GraphQueryTools.cs`'s `hades_status` reads it live via
      `PackageInfo.FindForAssembly(...).version`, not a hardcoded string. For the current old
@@ -262,6 +262,13 @@ Claude Code settings (`enabledPlugins`), a stray project-root `.mcp.json`, or
 `~/.arcforge/hades-hub/` — and the app's per-project detector cannot see any of these. Check
 `/plugin` in Claude Code for an installed old-plugin entry, and use the app's Settings cleanup
 actions for the rest.
+
+The stray `.mcp.json` is the sneakiest of these, because it still *works*: `claude mcp list`
+run inside the project shows `hades: node .../.arcforge/hades-hub/launcher.js — ✔ Connected`,
+and every session in that project quietly talks to the old server instead of this app (found
+live on a real migrated machine, not hypothetical). The app's migration cleanup removes it, or
+by hand: `claude mcp remove "hades" -s project` — after the new plugin is installed, or the
+project has no Hades at all in between.
 
 **The one rule that matters here: `.arcforge/memory/` is authored, irreplaceable content.**
 It's the decisions and conventions your project has accumulated — nothing regenerates it if
@@ -344,7 +351,7 @@ Include:
 
 - What you did, what you expected, what actually happened.
 - Which install path (cask / DMG), and whether Gatekeeper fired.
-- `hades_status`'s output (gives the MCP server version — `2.0.0-dev` for the new app — and
+- `hades_status`'s output (gives the MCP server version — `2.0.0-beta.2` for the new app — and
   which projects the app knows about). Paste it directly.
 - macOS version and confirmation you're on Apple Silicon.
 - For anything Unity-mutation-related: the actual `.unity`/`.prefab`/`.mat`/`.controller` YAML

@@ -74,7 +74,7 @@ public sealed record StatusResult
 [McpServerToolType]
 public sealed class HadesTools(ProjectService projects)
 {
-    public const string ServerVersion = "2.0.0-dev";
+    public const string ServerVersion = "2.0.0-beta.2";
 
     [McpServerTool(Name = "hades_status", Title = "Hades Status", ReadOnly = true, UseStructuredContent = true)]
     [Description("Hades server state and the list of projects it knows, each with the 'project' "

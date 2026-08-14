@@ -181,7 +181,7 @@ def c_f5_server_version():
     v = (r.get("serverInfo") or {}).get("version")
     if v and v != "1.0.0.0":
         return True, f"serverInfo.version={v}"
-    return False, f"serverInfo.version={v!r} (expected the product version, e.g. 2.0.0-dev)"
+    return False, f"serverInfo.version={v!r} (expected the product version, e.g. 2.0.0-beta.2)"
 
 
 def c_f6_trace_material():
