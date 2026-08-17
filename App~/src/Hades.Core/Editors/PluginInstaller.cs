@@ -54,6 +54,7 @@ public static class PluginInstaller
         ("Hades.Plugin.Runtime.MainThreadPump.cs", "Runtime/MainThreadPump.cs"),
         ("Hades.Plugin.Runtime.ReloadGate.cs", "Runtime/ReloadGate.cs"),
         ("Hades.Plugin.Runtime.ReloadLease.cs", "Runtime/ReloadLease.cs"),
+        ("Hades.Plugin.Tools.AssetPathGuard.cs", "Tools/AssetPathGuard.cs"),
         ("Hades.Plugin.Tools.CommandTable.cs", "Tools/CommandTable.cs"),
         ("Hades.Plugin.Tools.SceneCommands.cs", "Tools/SceneCommands.cs"),
         ("Hades.Plugin.Tools.SceneApplyCommands.cs", "Tools/SceneApplyCommands.cs"),

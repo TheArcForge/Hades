@@ -612,6 +612,122 @@ public class QueryToolsTests : IClassFixture<WebApplicationFactory<Program>>, ID
         Assert.Empty(structured.GetProperty("results").EnumerateArray());
     }
 
+    // ---------------------------------------------------------------- F7-sibling: unrecognised 'edgeKind'/'edgeTargetKind' error too
+    //
+    // F7 fixed 'kind' alone. Two siblings never got it: 'edgeKind' and 'edgeTargetKind'. edgeKind's
+    // vocabulary is fixed by CODE (GraphDatabase.KnownEdgeKinds - "references", "instance_of",
+    // "corresponds_to", the only three kinds AssetIndexer ever writes), so it is checked eagerly,
+    // before the query runs, unlike 'kind'. That eagerness matters for a reason beyond consistency:
+    // edgeKind feeds the edge-exists subquery 'edgeAbsent' NEGATES (GraphDatabase.QueryGraph's own
+    // SQL) - so a typo'd edgeKind does not zero the result out the way an unrecognised 'kind' does,
+    // it makes "no matching edge" vacuously TRUE for every node instead. Before this fix,
+    // {kind: "Class", edgeKind: "reference" (typo), edgeDirection: "incoming", edgeAbsent: true}
+    // returned BOTH classes in this fixture, including PlayerController - which Player.prefab
+    // genuinely references - as "unreferenced": a confident FALSE POSITIVE, not an honest empty
+    // result. edgeTargetKind draws from the SAME open, per-project node-kind vocabulary 'kind'
+    // does (GraphDatabase.CountByKind via ProjectService.KnownNodeKinds), so it gets the identical
+    // after-the-fact treatment 'kind' already has - see ValidateEdgeKind's and the extended F7
+    // block's own doc comments in QueryTools.cs for why the two are treated differently.
+
+    [Fact]
+    public async Task GraphQuery_UnrecognisedEdgeKind_ErrorsNamingTheKnownEdgeKinds()
+    {
+        // "reference" (singular) - a plausible typo for "references" - must error rather than
+        // silently matching nothing.
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "graph_query",
+            new { kind = "Class", edgeKind = "reference" }));
+
+        Assert.Contains("reference", text);
+        Assert.Contains("case-sensitive", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("references", text);
+        Assert.Contains("instance_of", text);
+        Assert.Contains("corresponds_to", text);
+    }
+
+    [Fact]
+    public async Task GraphQuery_EdgeKindCaseMismatch_IsRefused()
+    {
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "graph_query",
+            new { kind = "Class", edgeKind = "References" }));
+
+        Assert.Contains("References", text);
+        Assert.Contains("references", text); // the real, correctly-cased edge kind
+    }
+
+    [Fact]
+    public async Task GraphQuery_EdgeAbsentWithTypoedEdgeKind_ErrorsInsteadOfFlippingEveryNodeIntoAFalsePositiveOrphan()
+    {
+        // THE sharp edge this fix closes - see this section's own banner comment above for the
+        // mechanism. Must error before the query ever runs, not return PlayerController (genuinely
+        // referenced by Player.prefab) and OrphanScript alike as "unreferenced".
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "graph_query",
+            new { kind = "Class", edgeKind = "reference", edgeDirection = "incoming", edgeAbsent = true }));
+
+        Assert.Contains("reference", text);
+        Assert.Contains("references", text);
+    }
+
+    [Fact]
+    public async Task GraphQuery_ValidEdgeKind_IsNotRejectedByTheNewValidation()
+    {
+        // Regression guard: all three real edge kinds must keep working exactly as before - none
+        // rejected by the new fixed-set check, regardless of whether each happens to match anything
+        // in this fixture.
+        foreach (var edgeKind in new[] { "references", "instance_of", "corresponds_to" })
+        {
+            var envelope = await McpTestClient.CallTool(_factory, "graph_query", new { edgeKind });
+            Assert.False(envelope.GetProperty("result").TryGetProperty("isError", out var isError) && isError.GetBoolean(),
+                $"edgeKind '{edgeKind}' is a real, known edge kind and must not be rejected");
+        }
+    }
+
+    [Fact]
+    public async Task GraphQuery_UnrecognisedEdgeTargetKind_ErrorsNamingTheKnownNodeKindVocabulary()
+    {
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "graph_query",
+            new { edgeKind = "references", edgeTargetNamePattern = "player", edgeTargetKind = "Clas" }));
+
+        Assert.Contains("Clas", text);
+        Assert.Contains("case-sensitive", text, StringComparison.OrdinalIgnoreCase);
+        // edgeTargetKind draws from the same NODE-kind vocabulary 'kind' does, not edgeKind's.
+        Assert.Contains("Class", text);
+        Assert.Contains("MonoBehaviour", text);
+    }
+
+    [Fact]
+    public async Task GraphQuery_EdgeTargetKindCaseMismatch_IsRefused()
+    {
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "graph_query",
+            new { edgeKind = "references", edgeTargetNamePattern = "player", edgeTargetKind = "class" }));
+
+        Assert.Contains("class", text);
+        Assert.Contains("Class", text); // the real, correctly-cased node kind
+    }
+
+    [Fact]
+    public async Task GraphQuery_EdgeAbsentWithTypoedEdgeTargetKind_ErrorsInsteadOfFlippingEveryNodeIntoAFalsePositive()
+    {
+        // The edgeTargetKind twin of GraphQuery_EdgeAbsentWithTypoedEdgeKind... above.
+        // edgeTargetKind ALSO sits inside the edge-exists subquery 'edgeAbsent' negates, so a typo
+        // makes "no matching edge to a <kind>" vacuously TRUE for every node - a confident false
+        // positive (nodes reported as having no such edge purely because the kind name was
+        // misspelled) that the after-the-fact found.Count==0 check can never catch, because the
+        // result is not empty, it is wrong. Closed by validating edgeTargetKind EAGERLY, before
+        // the query runs, exactly like edgeKind - not on the empty-result gate 'kind' uses.
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "graph_query",
+            new { edgeKind = "references", edgeTargetKind = "Clas", edgeAbsent = true }));
+
+        Assert.Contains("Clas", text);
+        Assert.Contains("case-sensitive", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Class", text); // the real, correctly-cased node kind, enumerated
+    }
+
+    // GraphQuery_EdgeTargetKind_ExcludesAMatchWhoseTargetKindDiffers_ProvingItIsWiredThroughEndToEnd
+    // (above) is already the "valid edgeTargetKind combined with another filter matching nothing
+    // stays an ordinary empty result" regression guard for edgeTargetKind - edgeTargetKind:
+    // "MonoBehaviour" is a real, known kind in this fixture, legitimately matching nothing for this
+    // particular query, and must not (and, per that pre-existing passing test, does not) error.
+
     [Fact]
     public async Task GraphQuery_AnUnrecognisedEdgeDirectionGivesActionableGuidance()
     {
@@ -724,12 +840,19 @@ public class QueryToolsTests : IClassFixture<WebApplicationFactory<Program>>, ID
     }
 
     [Fact]
-    public async Task GraphQuery_SqlInjectionAttemptInEdgeTargetKindReturnsEmptyNotAnError()
+    public async Task GraphQuery_SqlInjectionShapedEdgeTargetKind_IsRejectedAsAnUnrecognisedKindNotSilentlyEmpty()
     {
-        var structured = Structured(await McpTestClient.CallTool(_factory, "graph_query",
+        // Before edgeTargetKind validation existed, an injection-shaped value here returned an
+        // ordinary empty result - safe only because every value is a bound SQLite parameter, never
+        // string-concatenated (see QueryTools' own class doc comment). Now that edgeTargetKind is
+        // validated the same way 'kind' already is, this is simply another unrecognised value: it
+        // errors, exactly as "Clas" or "class" do above, rather than silently returning nothing -
+        // and the server is still fully functional afterward, proving the rejection is ordinary
+        // input validation, not a crash or a corrupted graph.
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "graph_query",
             new { edgeKind = "references", edgeTargetKind = "'; DROP TABLE nodes; --" }));
 
-        Assert.Empty(structured.GetProperty("results").EnumerateArray());
+        Assert.Contains("does not match any node kind", text, StringComparison.OrdinalIgnoreCase);
 
         var summary = Structured(await McpTestClient.CallTool(_factory, "get_project_summary"));
         Assert.True(summary.GetProperty("totalNodes").GetInt32() > 0);

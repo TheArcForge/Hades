@@ -44,6 +44,11 @@ namespace Hades.Tools
         {
             var sourcePath = JsonParams.RequireString(@params, "sourcePath", "asset.move");
             var destPath = JsonParams.RequireString(@params, "destPath", "asset.move");
+            // Structural check only (traversal/absolute/whitespace/length) - no existence check, so
+            // the self-move and missing-parent-directory refusals AssetDatabase.MoveAsset already
+            // gives below are unchanged; this just makes the traversal/length failure modes uniform
+            // with every other write-path tool instead of relying on MoveAsset's own incidental checks.
+            destPath = AssetPathGuard.RequireWellFormedProjectPath(destPath, "asset.move");
 
             if (AssetDatabase.GetMainAssetTypeAtPath(sourcePath) == null)
                 throw new ArgumentException("Source asset not found at path: '" + sourcePath + "'.");

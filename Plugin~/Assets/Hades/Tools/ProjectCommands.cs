@@ -562,7 +562,10 @@ namespace Hades.Tools
         /// <summary>Class 4 (live-state read - see this file's own class doc comment): recent
         /// entries from <see cref="ConsoleLogBuffer"/>, optionally filtered to one severity and
         /// capped at 'count' (default 50, max 200, min 1 - a caller-supplied value outside that
-        /// range is clamped rather than rejected, since any positive intent is unambiguous). No
+        /// range is clamped rather than rejected, since any positive intent is unambiguous). Also
+        /// reports 'totalMatching' - how many buffered entries match 'type' before 'count' capped
+        /// them - since 'totalBuffered' alone (every severity, ignoring 'type') cannot tell a
+        /// caller whether the entries returned are all there are or just the newest slice. No
         /// lease: never references <paramref name="gate"/>, the same as inspector.select and every
         /// other handler in this file - there is nothing here a domain reload could interrupt.</summary>
         internal static JsonValue GetConsoleLog(ReloadGate gate, JsonValue @params)
@@ -585,7 +588,7 @@ namespace Hades.Tools
                 }
             }
 
-            var (selected, totalBuffered) = ConsoleLogBuffer.GetRecent(count, filter);
+            var (selected, totalBuffered, totalMatching) = ConsoleLogBuffer.GetRecent(count, filter);
 
             var entries = JsonValue.NewArray();
             foreach (var entry in selected)
@@ -599,7 +602,8 @@ namespace Hades.Tools
             return JsonValue.NewObject()
                 .SetProperty("entries", entries)
                 .SetProperty("count", JsonValue.Integer(entries.Items.Count))
-                .SetProperty("totalBuffered", JsonValue.Integer(totalBuffered));
+                .SetProperty("totalBuffered", JsonValue.Integer(totalBuffered))
+                .SetProperty("totalMatching", JsonValue.Integer(totalMatching));
         }
 
         // ---------------------------------------------------------------- project.get_test_results
@@ -938,12 +942,16 @@ namespace Hades.Tools
         /// <summary>The <paramref name="count"/> most recent entries matching
         /// <paramref name="filter"/> (null = every severity), oldest-of-the-selected-window first,
         /// alongside how many entries the buffer currently holds in total (capped at
-        /// <see cref="Capacity"/>, regardless of <paramref name="filter"/>). Filters across the
+        /// <see cref="Capacity"/>, regardless of <paramref name="filter"/>) and how many of those
+        /// buffered entries match <paramref name="filter"/> - the count <c>Selected</c> was taken
+        /// from before <paramref name="count"/> capped it. <c>TotalBuffered</c> alone cannot answer
+        /// "are there more matches than I got back?" once a filter is applied (it counts every
+        /// severity, not just the one asked for); <c>TotalMatching</c> can. Filters across the
         /// WHOLE buffer before taking the most recent <paramref name="count"/> - deliberately NOT
         /// "the most recent count entries, then filtered" - so asking for the last 5 errors
         /// returns the last 5 errors even when non-matching entries sit between them, rather than
         /// however many happen to survive a raw positional slice taken first.</summary>
-        public static ((LogType Type, string Message, string StackTrace)[] Selected, int TotalBuffered) GetRecent(int count, LogType? filter)
+        public static ((LogType Type, string Message, string StackTrace)[] Selected, int TotalBuffered, int TotalMatching) GetRecent(int count, LogType? filter)
         {
             (LogType Type, string Message, string StackTrace)[] snapshot;
             int totalBuffered;
@@ -963,7 +971,7 @@ namespace Hades.Tools
             var take = Math.Min(count, matching.Length);
             var result = new (LogType, string, string)[take];
             Array.Copy(matching, matching.Length - take, result, 0, take);
-            return (result, totalBuffered);
+            return (result, totalBuffered, matching.Length);
         }
 
         /// <summary>Test-only reset. Public for the same InternalsVisibleTo reason every other

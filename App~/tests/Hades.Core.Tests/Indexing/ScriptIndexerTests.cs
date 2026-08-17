@@ -586,6 +586,36 @@ public class ScriptIndexerTests : IDisposable
         Assert.Single(db.SearchByName("UsesBurst"));
     }
 
+    // I10: a directory a full rebuild's own walk cannot read is not evidence anything under it
+    // was deleted — SweepStaleNodes (called once per root, right after this walk) must not treat
+    // "never visited because unreadable" the same as "confirmed gone", or a permissions hiccup
+    // silently wipes an entire subtree's nodes.
+#pragma warning disable CA1416 // POSIX-only test, see IncrementalIndexTests' identical suppression
+    [Fact]
+    public void AnUnreadableDirectory_PreservesItsNodes_OnFullReindex()
+    {
+        WriteScript("Assets/Locked/Hidden.cs", "public class Hidden { }");
+        using var db = OpenGraph();
+        ScriptIndexer.IndexProject(_projectRoot, db);
+        Assert.Single(db.SearchByName("Hidden"));
+
+        var lockedDir = Path.Combine(_projectRoot, "Assets", "Locked");
+        File.SetUnixFileMode(lockedDir, UnixFileMode.None);
+        try
+        {
+            var result = ScriptIndexer.IndexProject(_projectRoot, db);
+
+            Assert.Single(db.SearchByName("Hidden"));
+            Assert.Contains(result.Warnings, w => w.Contains("Assets/Locked"));
+        }
+        finally
+        {
+            File.SetUnixFileMode(lockedDir,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+#pragma warning restore CA1416
+
     public void Dispose()
     {
         if (Directory.Exists(_projectRoot)) Directory.Delete(_projectRoot, recursive: true);

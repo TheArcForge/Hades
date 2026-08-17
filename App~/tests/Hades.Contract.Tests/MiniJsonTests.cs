@@ -674,4 +674,103 @@ public class MiniJsonTests
         Assert.Null(hello);
         Assert.False(string.IsNullOrEmpty(error));
     }
+
+    // ---------------------------------------------------------------------------------------
+    // Batch E: EditorConnectionInfo - the token+port rendezvous file both sides read
+    // (Wire/EditorConnectionInfo.cs), same "round trip + malformed input rejected" scope as
+    // Hello above. B-F4: 'port' is only ever valid in [1, 65535] - TryParse used to cast the
+    // parsed long straight to int, which silently wraps (rather than range-checks) once it is
+    // out of int's range - so an out-of-range 'port' must be a parse failure, never a truncated
+    // value.
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public void EditorConnectionInfo_RoundTrips_ThroughWireText()
+    {
+        var info = new EditorConnectionInfo { Port = 54321, Token = "abc123token" };
+
+        var text = MiniJson.Write(info.ToJson());
+        Assert.True(EditorConnectionInfo.TryParse(text, out var parsed, out var error), error);
+        Assert.Equal(54321, parsed!.Port);
+        Assert.Equal("abc123token", parsed.Token);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(65535)]
+    [InlineData(54321)]
+    public void EditorConnectionInfo_PortWithinValidRange_Parses(int port)
+    {
+        var json = JsonValue.NewObject()
+            .SetProperty("port", JsonValue.Integer(port))
+            .SetProperty("token", JsonValue.String("t"));
+
+        Assert.True(EditorConnectionInfo.TryParse(json, out var info, out var error), error);
+        Assert.Equal(port, info!.Port);
+    }
+
+    [Theory]
+    [InlineData(0L)]
+    [InlineData(-1L)]
+    [InlineData(65536L)]
+    [InlineData(70000L)]
+    [InlineData(4294967296L)]  // 2^32 - would wrap to 0 under an unchecked (int) cast
+    [InlineData(4295032831L)]  // 2^32 + 65535 - would wrap to a value that LOOKS valid (65535) if truncated
+    [InlineData(long.MaxValue)]
+    [InlineData(long.MinValue)]
+    public void EditorConnectionInfo_PortOutOfRange_FailsToParse_RatherThanTruncating(long port)
+    {
+        var json = JsonValue.NewObject()
+            .SetProperty("port", JsonValue.Integer(port))
+            .SetProperty("token", JsonValue.String("t"));
+
+        var ex = Record.Exception(() => EditorConnectionInfo.TryParse(json, out _, out _));
+        Assert.Null(ex);
+
+        Assert.False(EditorConnectionInfo.TryParse(json, out var info, out var error));
+        Assert.Null(info);
+        Assert.False(string.IsNullOrEmpty(error));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Batch F: unpaired UTF-16 surrogate \u escapes (B-F3). \uD800 (a lone high surrogate) or
+    // \uDC00 (a lone low surrogate) decodes into an ill-formed .NET string that this codec
+    // accepted silently before this fix - a strict downstream consumer (System.Text.Json)
+    // throws on it later, far from this parse call. Rejected at parse time instead, the same
+    // "malformed escape" treatment every other bad \u escape already gets (see
+    // MalformedInput_NeverThrows_ReturnsInspectableFailure above) - a well-formed PAIR must keep
+    // parsing exactly as it always did.
+    // ---------------------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("\\uD800")]        // lone high surrogate, nothing follows
+    [InlineData("\\uDBFF")]        // lone high surrogate, top of the high range
+    [InlineData("\\uD800x")]       // lone high surrogate followed by ordinary text, not a \u escape
+    [InlineData("\\uD800\\n")]     // lone high surrogate followed by a DIFFERENT (non-u) escape
+    [InlineData("\\uDC00")]        // lone low surrogate
+    [InlineData("\\uDFFF")]        // lone low surrogate, top of the low range
+    [InlineData("\\uDC00\\uDC00")] // two low surrogates - the first is unpaired regardless of what follows
+    public void UnpairedSurrogateEscape_FailsToParse_InsteadOfProducingAnIllFormedString(string escape)
+    {
+        var input = "\"" + escape + "\"";
+
+        var ex = Record.Exception(() => MiniJson.TryParse(input, out _, out _));
+        Assert.Null(ex);
+
+        Assert.False(MiniJson.TryParse(input, out var value, out var error));
+        Assert.Null(value);
+        Assert.False(string.IsNullOrEmpty(error));
+    }
+
+    [Fact]
+    public void PairedSurrogateEscape_StillParsesToTheCorrectCharacter()
+    {
+        // 😀 is the UTF-16 surrogate pair for U+1F600 (grinning face) - a well-formed
+        // pair must keep parsing exactly as it always did; only a LONE half is newly rejected.
+        const string input = "\"\\uD83D\\uDE00\"";
+
+        Assert.True(MiniJson.TryParse(input, out var value, out var error));
+        Assert.Null(error);
+        Assert.Equal("\U0001F600", value!.AsString());
+    }
 }

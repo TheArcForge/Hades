@@ -158,6 +158,31 @@ public sealed class EditorListenerTests : IDisposable
     }
 
     [Fact]
+    public void Start_NarrowsAPreExistingTokenFilesModeTo0600()
+    {
+        // FileStreamOptions.UnixCreateMode (the atomic create-at-0600 fix - see
+        // EditorListener.WriteConnectionFile's own doc comment) only takes effect for a
+        // genuinely NEW inode. A token file already sitting at this path - e.g. a stale one left
+        // behind by a previous run - is reused/truncated by FileMode.Create instead, so this pins
+        // the defensive SetUnixFileMode that still runs after the write: the end state must be
+        // 0600 regardless of what mode the file started at. Same OS guard as
+        // Start_WritesTheTokenFileAtMode0600 above.
+        if (OperatingSystem.IsWindows()) return;
+
+        var directory = Path.GetDirectoryName(_tokenPath)!;
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(_tokenPath, "stale");
+        File.SetUnixFileMode(_tokenPath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+
+        using var listener = new EditorListener(_tokenPath, new EditorRegistry());
+        listener.Start();
+
+        var mode = File.GetUnixFileMode(_tokenPath);
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, mode);
+    }
+
+    [Fact]
     public void Start_WritesTheConnectionFileContainingThePortAndToken()
     {
         // The plugin dials out, so it needs to learn which port to connect to as well as the

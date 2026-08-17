@@ -294,6 +294,59 @@ namespace Hades.Tests.Editor
             }
         }
 
+        // ---------------------------------------------------------- prefab.create - path guard (F16/F17/F20)
+
+        [Test]
+        public void CreatePrefab_TraversalAssetPath_RefusedBeforeAnyWrite_LeaseCleanlyReleased()
+        {
+            new GameObject("TraversalSource");
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject()
+                    .SetProperty("gameObjectPath", JsonValue.String("TraversalSource"))
+                    .SetProperty("assetPath", JsonValue.String("Assets/../Escaped.prefab"));
+
+                var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("prefab.create", @params)));
+                StringAssert.Contains("Escaped.prefab", ex.Message);
+                Assert.IsFalse(File.Exists(AbsolutePath("Escaped.prefab")));
+
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
+        [Test]
+        public void CreatePrefab_ExistingFile_Refused_OriginalUntouched_LeaseCleanlyReleased()
+        {
+            var existing = new GameObject("Existing");
+            var assetPath = ScratchDir + "/AlreadyThere.prefab";
+            PrefabUtility.SaveAsPrefabAsset(existing, assetPath);
+            UnityEngine.Object.DestroyImmediate(existing);
+
+            new GameObject("NewOne");
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject()
+                    .SetProperty("gameObjectPath", JsonValue.String("NewOne"))
+                    .SetProperty("assetPath", JsonValue.String(assetPath));
+
+                var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("prefab.create", @params)));
+                StringAssert.Contains("already exists", ex.Message);
+                StringAssert.Contains("prefab_apply", ex.Message);
+
+                var stillOriginal = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+                Assert.IsNotNull(stillOriginal);
+                // SaveAsPrefabAsset names the root after the FILE, not the source GameObject - "AlreadyThere"
+                // (from "AlreadyThere.prefab"), not "Existing". The point being proven is it isn't "NewOne".
+                Assert.AreEqual("AlreadyThere", stillOriginal.name, "the pre-existing prefab must be untouched, not replaced by 'NewOne'");
+
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
         // ------------------------------------------------------------------------- prefab.instantiate
 
         [Test]
@@ -765,6 +818,94 @@ namespace Hades.Tests.Editor
 
                 var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("prefab.create_variant", @params)));
                 StringAssert.Contains("NoSuchBase.prefab", ex.Message);
+
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
+        // ------------------------------------------------ prefab.create_variant - path guard (F16/F17/F20/F21)
+
+        [Test]
+        public void CreateVariant_TraversalVariantPath_RefusedBeforeAnyWrite_LeaseCleanlyReleased()
+        {
+            var baseGo = new GameObject("TraversalBase");
+            var basePrefabPath = ScratchDir + "/TraversalBase.prefab";
+            PrefabUtility.SaveAsPrefabAsset(baseGo, basePrefabPath);
+            UnityEngine.Object.DestroyImmediate(baseGo);
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject()
+                    .SetProperty("basePrefabPath", JsonValue.String(basePrefabPath))
+                    .SetProperty("variantPath", JsonValue.String("Assets/../EscapedVariant.prefab"));
+
+                var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("prefab.create_variant", @params)));
+                StringAssert.Contains("EscapedVariant.prefab", ex.Message);
+                Assert.IsFalse(File.Exists(AbsolutePath("EscapedVariant.prefab")));
+
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
+        [Test]
+        public void CreateVariant_ExistingFile_Refused_OriginalUntouched_LeaseCleanlyReleased()
+        {
+            var baseGo = new GameObject("ExistBase");
+            var basePrefabPath = ScratchDir + "/ExistBase.prefab";
+            PrefabUtility.SaveAsPrefabAsset(baseGo, basePrefabPath);
+            UnityEngine.Object.DestroyImmediate(baseGo);
+
+            var otherGo = new GameObject("Other");
+            var variantPath = ScratchDir + "/AlreadyThereVariant.prefab";
+            PrefabUtility.SaveAsPrefabAsset(otherGo, variantPath);
+            UnityEngine.Object.DestroyImmediate(otherGo);
+            var originalGuid = AssetDatabase.AssetPathToGUID(variantPath);
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject()
+                    .SetProperty("basePrefabPath", JsonValue.String(basePrefabPath))
+                    .SetProperty("variantPath", JsonValue.String(variantPath));
+
+                var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("prefab.create_variant", @params)));
+                StringAssert.Contains("already exists", ex.Message);
+                StringAssert.Contains("prefab_apply", ex.Message);
+
+                Assert.AreEqual(originalGuid, AssetDatabase.AssetPathToGUID(variantPath), "the pre-existing file at variantPath must be untouched");
+
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
+        /// <summary>F21: accepting basePrefabPath == variantPath destroyed the target during the
+        /// tester's own repro (the variant save silently replaced the base prefab file it was
+        /// meant to be based on). Verified via GUID stability and asset TYPE (must stay Regular,
+        /// never become a Variant of itself), not just "a file still exists at this path" - the
+        /// destructive version of this bug leaves a file there too, just the wrong one.</summary>
+        [Test]
+        public void CreateVariant_BaseEqualsVariant_Refused_TargetUntouched_LeaseCleanlyReleased()
+        {
+            var baseGo = new GameObject("SelfBase");
+            var basePrefabPath = ScratchDir + "/SelfBase.prefab";
+            PrefabUtility.SaveAsPrefabAsset(baseGo, basePrefabPath);
+            UnityEngine.Object.DestroyImmediate(baseGo);
+            var originalGuid = AssetDatabase.AssetPathToGUID(basePrefabPath);
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject()
+                    .SetProperty("basePrefabPath", JsonValue.String(basePrefabPath))
+                    .SetProperty("variantPath", JsonValue.String(basePrefabPath));
+
+                var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("prefab.create_variant", @params)));
+                StringAssert.Contains("basePrefabPath", ex.Message);
+                StringAssert.Contains("variantPath", ex.Message);
+
+                Assert.AreEqual(originalGuid, AssetDatabase.AssetPathToGUID(basePrefabPath));
+                Assert.AreEqual(PrefabAssetType.Regular, PrefabUtility.GetPrefabAssetType(AssetDatabase.LoadAssetAtPath<GameObject>(basePrefabPath)));
 
                 AssertLeaseCleanlyReleased(fake, gate);
             }

@@ -1,8 +1,10 @@
 using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Hades.Core;
 using Hades.Core.Editors;
 using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using WireJson = Hades.Contract.Wire.JsonValue;
 using WireKind = Hades.Contract.Wire.JsonValueKind;
@@ -130,7 +132,7 @@ public sealed record PrefabApplyResult
 /// underlying command actually expects.</para>
 /// </summary>
 [McpServerToolType]
-public sealed class PrefabApplyTool(EditorProxy editor)
+public sealed class PrefabApplyTool(EditorProxy editor, ProjectService projects)
 {
     static readonly string[] ValidOps = ["create", "instantiate", "applyOverrides", "editProperty", "createVariant"];
 
@@ -169,7 +171,8 @@ public sealed class PrefabApplyTool(EditorProxy editor)
                    + "'prefabPath' always names the prefab asset the op is about (a file on disk); "
                    + "'gameObjectPath' always names a scene object, never a file on disk.")]
         IReadOnlyList<PrefabApplyOperation> operations,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         if (operations is null || operations.Count == 0)
             throw new McpException("prefab_apply needs a non-empty 'operations' array.");
@@ -194,7 +197,8 @@ public sealed class PrefabApplyTool(EditorProxy editor)
         foreach (var op in operations) wireOperations.Add(BuildOperation(op));
 
         var @params = WireJson.NewObject().SetProperty("operations", wireOperations);
-        var result = await editor.SendCommandAsync(project, "prefab.apply", @params).ConfigureAwait(false);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
+        var result = await editor.SendCommandAsync(productGuid, "prefab.apply", @params).ConfigureAwait(false);
 
         return MapResult(result, operations.Count);
     }

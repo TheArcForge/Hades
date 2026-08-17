@@ -123,6 +123,94 @@ public class AssetIndexerTests : IDisposable
         Assert.Single(db.SearchByName("Stay"));
     }
 
+    // ---------------------------------------------------------------- I1 / I3: hostile files
+    //
+    // I1: one file whose class id header cannot be parsed (an adversarial ">int.MaxValue" value,
+    // or any other UnityYamlParseException) must not abort the whole batch — every other file
+    // still indexes, and the bad one is named in a warning rather than thrown as a bare, untyped
+    // exception. I3: a file that WAS a valid, indexed asset and has since become unparseable (or
+    // lost its recognisable Unity-YAML shape entirely) must lose its old nodes exactly as a
+    // deleted file would — the early "nothing to index" returns used to skip DeleteNodesForPath
+    // entirely, leaving a confident, permanently stale answer with no expiry.
+
+    [Fact]
+    public void APoisonClassIdHeaderDoesNotAbortIndexingTheRestOfTheProject()
+    {
+        Write("Assets/Poison.prefab", Header + "--- !u!4294967296 &1\nGameObject:\n  m_Name: Poison\n");
+        WriteAsset("Assets/Good.prefab", "--- !u!1 &2\nGameObject:\n  m_Name: Good\n", guid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        using var db = OpenGraph();
+
+        var result = AssetIndexer.IndexProject(_projectRoot, db);
+
+        Assert.Single(db.SearchByName("Good"));
+        Assert.Empty(db.SearchByName("Poison"));
+        Assert.Contains(result.Warnings, w => w.Contains("Assets/Poison.prefab"));
+    }
+
+    [Fact]
+    public void APoisonClassIdHeaderDoesNotAbortAnIncrementalBatch()
+    {
+        Write("Assets/Poison.prefab", Header + "--- !u!4294967296 &1\nGameObject:\n  m_Name: Poison\n");
+        WriteAsset("Assets/Good.prefab", "--- !u!1 &2\nGameObject:\n  m_Name: Good\n", guid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        using var db = OpenGraph();
+
+        var result = AssetIndexer.IndexFiles(_projectRoot, db, ["Assets/Poison.prefab", "Assets/Good.prefab"]);
+
+        Assert.Single(db.SearchByName("Good"));
+        Assert.Contains(result.Warnings, w => w.Contains("Assets/Poison.prefab"));
+    }
+
+    [Fact]
+    public void CorruptingAPreviouslyValidPrefabWithAPoisonHeader_RemovesItsNodes_OnFullReindex()
+    {
+        WriteAsset("Assets/Player.prefab", "--- !u!1 &111\nGameObject:\n  m_Name: Player\n",
+            guid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        using var db = OpenGraph();
+        AssetIndexer.IndexProject(_projectRoot, db);
+        Assert.Single(db.SearchByName("Player"));
+
+        // Still passes the %YAML sniff, but the class id header is now unparseable.
+        Write("Assets/Player.prefab", Header + "--- !u!4294967296 &111\nGameObject:\n  m_Name: Player\n");
+        var result = AssetIndexer.IndexProject(_projectRoot, db);
+
+        Assert.Empty(db.SearchByName("Player"));
+        Assert.Contains(result.Warnings, w => w.Contains("Assets/Player.prefab"));
+    }
+
+    [Fact]
+    public void CorruptingAPreviouslyValidPrefabWithAPoisonHeader_RemovesItsNodes_OnIncrementalReindex()
+    {
+        WriteAsset("Assets/Player.prefab", "--- !u!1 &111\nGameObject:\n  m_Name: Player\n",
+            guid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        using var db = OpenGraph();
+        AssetIndexer.IndexProject(_projectRoot, db);
+        Assert.Single(db.SearchByName("Player"));
+
+        Write("Assets/Player.prefab", Header + "--- !u!4294967296 &111\nGameObject:\n  m_Name: Player\n");
+        var result = AssetIndexer.IndexFiles(_projectRoot, db, ["Assets/Player.prefab"]);
+
+        Assert.Empty(db.SearchByName("Player"));
+        Assert.Contains(result.Warnings, w => w.Contains("Assets/Player.prefab"));
+    }
+
+    [Fact]
+    public void OverwritingAPreviouslyValidPrefabWithNonYamlGarbage_RemovesItsNodes()
+    {
+        // The OTHER early-return this indexer has always had (LooksLikeUnityYaml false) carried
+        // the exact same I3 defect as the "zero objects parsed" case above — corrupted-into-not-
+        // even-YAML-shaped must disappear from the graph too, not just corrupted-but-still-tagged.
+        WriteAsset("Assets/Player.prefab", "--- !u!1 &111\nGameObject:\n  m_Name: Player\n",
+            guid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        using var db = OpenGraph();
+        AssetIndexer.IndexProject(_projectRoot, db);
+        Assert.Single(db.SearchByName("Player"));
+
+        Write("Assets/Player.prefab", "not unity yaml at all");
+        AssetIndexer.IndexProject(_projectRoot, db);
+
+        Assert.Empty(db.SearchByName("Player"));
+    }
+
     [Fact]
     public void DoesNotSweepScriptNodesBelongingToTheOtherIndexer()
     {

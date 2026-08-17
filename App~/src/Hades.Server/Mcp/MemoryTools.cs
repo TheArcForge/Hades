@@ -122,9 +122,16 @@ public sealed class MemoryTools(ProjectService projects)
 
         var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
 
-        var hits = projects.RecallMemory(productGuid, query, limit + 1);
-        var truncated = hits.Count > limit;
-        var results = hits.Take(limit)
+        // Clamped to this tool's own documented maximum BEFORE the "+1" - the same fix
+        // validate_memory carries. Without it a caller-supplied limit above 50 skips the clamp: the
+        // underlying store caps at MemoryIndex.MaxResults (200), so a large 'limit' makes
+        // 'hits.Count > limit' unreachable and 'truncated' reports false while real matches beyond
+        // the returned window are silently dropped.
+        var clampedLimit = Math.Clamp(limit, 1, 50);
+
+        var hits = projects.RecallMemory(productGuid, query, clampedLimit + 1);
+        var truncated = hits.Count > clampedLimit;
+        var results = hits.Take(clampedLimit)
             .Select(h => new MemoryRecallHit { Document = h.Name, Excerpt = h.Excerpt, Score = h.Score })
             .ToList();
 
@@ -138,7 +145,7 @@ public sealed class MemoryTools(ProjectService projects)
                + "directly accepts a proposal into it. Call get_memory_summary first to see what "
                + "authored documents already exist.")]
     public async Task<MemoryProposalResult> ProposeMemoryUpdate(
-        [Description("Plain basename of the authored document this proposal is about, e.g. \"patterns.md\" or \"patterns\" — not a path, and not empty.")] string targetFile,
+        [Description("Plain basename of the authored document this proposal is about, e.g. \"patterns.md\" or \"patterns\" (\".md\" is appended automatically when omitted) — not a path, and not empty.")] string targetFile,
         [Description("The proposed markdown text, to be reviewed and (if accepted) merged into targetFile by a human.")] string content,
         [Description("Why this is being proposed - evidence, reasoning, or context for the human reviewer.")] string? rationale = null,
         [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
@@ -188,9 +195,16 @@ public sealed class MemoryTools(ProjectService projects)
     {
         var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
 
-        var found = projects.ValidateMemory(productGuid, limit + 1);
-        var truncated = found.Count > limit;
-        var hits = found.Take(limit)
+        // Clamped to this tool's own documented maximum BEFORE the "+1" below - see
+        // SummaryTools.GetRecentlyChanged's identical clampedLimit pattern. Without this, a
+        // caller-supplied limit above 500 skips the clamp entirely, and 'truncated' computed
+        // against the UNCLAMPED limit could under-report even though ProjectService.ValidateMemory
+        // still caps what actually comes back at 500 either way.
+        var clampedLimit = Math.Clamp(limit, 1, 500);
+
+        var found = projects.ValidateMemory(productGuid, clampedLimit + 1);
+        var truncated = found.Count > clampedLimit;
+        var hits = found.Take(clampedLimit)
             .Select(f => new MemoryValidationHit { Document = f.Document, ScriptPath = f.ScriptPath })
             .ToList();
 

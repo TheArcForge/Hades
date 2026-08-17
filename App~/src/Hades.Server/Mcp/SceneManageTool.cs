@@ -1,8 +1,10 @@
 using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Hades.Core;
 using Hades.Core.Editors;
 using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using WireJson = Hades.Contract.Wire.JsonValue;
 using WireKind = Hades.Contract.Wire.JsonValueKind;
@@ -95,7 +97,7 @@ public sealed record SceneManageResult
 /// scene_apply's.</para>
 /// </summary>
 [McpServerToolType]
-public sealed class SceneManageTool(EditorProxy editor)
+public sealed class SceneManageTool(EditorProxy editor, ProjectService projects)
 {
     static readonly string[] ValidOps = ["save", "create", "open", "duplicate"];
 
@@ -123,7 +125,8 @@ public sealed class SceneManageTool(EditorProxy editor)
                    + "save{path?}, create{path,template?}, open{path,additive?}, "
                    + "duplicate{sourcePath,destPath}.")]
         IReadOnlyList<SceneManageOperation> operations,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         if (operations is null || operations.Count == 0)
             throw new McpException("scene_manage needs a non-empty 'operations' array.");
@@ -148,7 +151,8 @@ public sealed class SceneManageTool(EditorProxy editor)
         foreach (var op in operations) wireOperations.Add(BuildOperation(op));
 
         var @params = WireJson.NewObject().SetProperty("operations", wireOperations);
-        var result = await editor.SendCommandAsync(project, "scene.manage", @params).ConfigureAwait(false);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
+        var result = await editor.SendCommandAsync(productGuid, "scene.manage", @params).ConfigureAwait(false);
 
         return MapResult(result, operations.Count);
     }

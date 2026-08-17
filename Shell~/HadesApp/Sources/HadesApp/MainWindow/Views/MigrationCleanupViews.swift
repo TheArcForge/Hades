@@ -54,6 +54,16 @@ struct MigrationCleanClaudeMdRow: View {
             if !result.removed {
                 Button("Clean Up…") { isConfirming = true }
             }
+            // The most recent CONFIRMED action's own server-authored failure text, verbatim - see
+            // MigrationCleanupViewModel.lastActionMessage's own doc comment. Same presentation
+            // idiom ProjectsView/MemoryView already use for their own lastActionMessage.
+            if let message = viewModel.lastActionMessage {
+                Text(message)
+                    .font(.callout)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
         }
         .confirmationDialog(
             "Remove the HADES:START/END block from CLAUDE.md?",
@@ -90,6 +100,16 @@ struct MigrationCleanManifestRow: View {
                     .textSelection(.enabled)
                 Button("Clean Up…") { isConfirming = true }
             }
+            // The most recent CONFIRMED action's own server-authored failure text, verbatim - see
+            // MigrationCleanupViewModel.lastActionMessage's own doc comment. Same presentation
+            // idiom ProjectsView/MemoryView already use for their own lastActionMessage.
+            if let message = viewModel.lastActionMessage {
+                Text(message)
+                    .font(.callout)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
         }
         .confirmationDialog(
             "Remove the com.arcforge.hades entry from Packages/manifest.json?",
@@ -124,6 +144,16 @@ struct MigrationCleanMcpConfigRow: View {
                 .textSelection(.enabled)
             if !result.removed {
                 Button("Clean Up…") { isConfirming = true }
+            }
+            // The most recent CONFIRMED action's own server-authored failure text, verbatim - see
+            // MigrationCleanupViewModel.lastActionMessage's own doc comment. Same presentation
+            // idiom ProjectsView/MemoryView already use for their own lastActionMessage.
+            if let message = viewModel.lastActionMessage {
+                Text(message)
+                    .font(.callout)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
             }
         }
         .confirmationDialog(

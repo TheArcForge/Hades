@@ -678,6 +678,7 @@ namespace Hades.Tests.Editor
 
                 Assert.AreEqual(3, IntProp(result, "count"));
                 Assert.AreEqual(3, IntProp(result, "totalBuffered"));
+                Assert.AreEqual(3, IntProp(result, "totalMatching"), "no 'type' filter: totalMatching covers the whole buffer, same as totalBuffered");
                 Assert.IsTrue(result.TryGetProperty("entries", out var entries) && entries.Kind == JsonValueKind.Array);
                 Assert.AreEqual(3, entries.Items.Count);
 
@@ -715,8 +716,37 @@ namespace Hades.Tests.Editor
 
                 Assert.AreEqual(1, IntProp(result, "count"));
                 Assert.AreEqual(5, IntProp(result, "totalBuffered"), "totalBuffered reports the WHOLE buffer, independent of 'type'/'count'");
+                Assert.AreEqual(1, IntProp(result, "totalMatching"), "exactly one Error is buffered, so totalMatching must be 1 regardless of totalBuffered");
                 Assert.IsTrue(result.TryGetProperty("entries", out var entries) && entries.Items.Count == 1);
                 Assert.AreEqual("the-error", StringProp(entries.Items[0], "message"));
+
+                AssertNeverTouchedLease(fake, gate);
+            }
+        }
+
+        [Test]
+        public void GetConsoleLog_TypeFilterApplied_ReportsTotalMatchingIndependentOfCountAndTotalBuffered()
+        {
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                ConsoleLogBuffer.Clear(); // see GetConsoleLog_ReturnsCapturedEntries... for why
+
+                // 7 errors and 3 logs buffered (10 total); asking for the 2 most recent errors
+                // must still report that 7 errors exist, not the 2 returned (count) or the
+                // 10-entry whole buffer (totalBuffered) - otherwise a caller taking 'count' back
+                // at face value cannot tell "exactly 2 errors exist" from "7 errors exist, only
+                // the newest 2 were returned".
+                for (var i = 0; i < 7; i++) ConsoleLogBuffer.Capture(LogType.Error, "error-" + i, "");
+                for (var i = 0; i < 3; i++) ConsoleLogBuffer.Capture(LogType.Log, "log-" + i, "");
+
+                var @params = JsonValue.NewObject().SetProperty("count", JsonValue.Integer(2)).SetProperty("type", JsonValue.String("Error"));
+                var result = CommandTable.Dispatch(gate, Request("project.get_console_log", @params));
+
+                Assert.AreEqual(2, IntProp(result, "count"), "'count' is the number of entries actually returned, capped by the requested limit");
+                Assert.AreEqual(10, IntProp(result, "totalBuffered"), "totalBuffered reports the WHOLE buffer, independent of 'type'");
+                Assert.AreEqual(7, IntProp(result, "totalMatching"), "totalMatching must report every buffered entry matching 'type', not just the ones returned");
+                Assert.IsTrue(result.TryGetProperty("entries", out var entries) && entries.Items.Count == 2);
 
                 AssertNeverTouchedLease(fake, gate);
             }

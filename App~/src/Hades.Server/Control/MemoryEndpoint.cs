@@ -160,7 +160,16 @@ public static class MemoryEndpoint
     /// <see cref="TryRun"/> as the proposal read, so an unsafe <c>target_file</c> (see this class's
     /// own doc comment on why that is possible despite Task 6's own basename discipline) is caught
     /// and reported exactly like an unsafe <paramref name="fileName"/> would be, never left to
-    /// throw past this method as an unhandled 500.</summary>
+    /// throw past this method as an unhandled 500.
+    ///
+    /// <b>Idempotent, not just non-destructive.</b> Only a "pending" or "deferred" proposal may be
+    /// accepted; a proposal that is already "accepted" (or carries any other status) is refused
+    /// with a 400 naming its current status, BEFORE either the target-document read or write
+    /// happens - a second accept of the same proposal must never append its content into
+    /// target_file a second time. Checked here, ahead of the merge, rather than inside
+    /// <see cref="Memory.MemoryProposals.SetStatus"/>: that method's own job is recording whatever
+    /// status transition it is given, not deciding which ones this specific caller considers
+    /// valid.</summary>
     public static IResult AcceptProposal(ProjectService projects, string? project, string? fileName) =>
         WithResolvedProject(projects, project, productGuid => TryRun(() =>
         {
@@ -168,6 +177,13 @@ public static class MemoryEndpoint
             if (proposal is null)
             {
                 return Results.Json(new { error = $"Unknown proposal '{fileName}'." }, statusCode: StatusCodes.Status404NotFound);
+            }
+
+            if (proposal.Status is not ("pending" or "deferred"))
+            {
+                return Results.Json(
+                    new { error = $"Proposal '{fileName}' is already '{proposal.Status}' - accept only applies to a pending or deferred proposal." },
+                    statusCode: StatusCodes.Status400BadRequest);
             }
 
             var existing = projects.ReadMemoryDocument(productGuid, proposal.TargetFile);
@@ -295,7 +311,22 @@ public static class MemoryEndpoint
         }
         catch (ArgumentException ex)
         {
-            return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status400BadRequest);
+            return Results.Json(new { error = CleanMessage(ex) }, statusCode: StatusCodes.Status400BadRequest);
         }
+    }
+
+    /// <summary>Strips the " (Parameter 'x')" suffix .NET's own <see cref="ArgumentException.Message"/>
+    /// getter appends whenever <see cref="ArgumentException.ParamName"/> is set, so a 400 body reads
+    /// as clean, actionable text a caller can act on directly - not an implementation detail about
+    /// which C# parameter of which internal method happened to throw. Built from <paramref name="ex"/>'s
+    /// own <see cref="ArgumentException.ParamName"/> rather than a hard-coded or regex guess at the
+    /// suffix's shape, and falls back to the untouched message whenever that exact suffix is not
+    /// present, so this can never mangle a message it does not recognise.</summary>
+    static string CleanMessage(ArgumentException ex)
+    {
+        if (string.IsNullOrEmpty(ex.ParamName)) return ex.Message;
+
+        var suffix = $" (Parameter '{ex.ParamName}')";
+        return ex.Message.EndsWith(suffix, StringComparison.Ordinal) ? ex.Message[..^suffix.Length] : ex.Message;
     }
 }

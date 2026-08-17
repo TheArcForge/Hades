@@ -103,7 +103,11 @@ public sealed class ObservationService(ProjectService projects) : IDisposable
     /// </summary>
     public void Sync(string productGuid)
     {
-        if (!_indexGate.Wait(TimeSpan.FromMinutes(2))) return;
+        bool acquired;
+        try { acquired = _indexGate.Wait(TimeSpan.FromMinutes(2)); }
+        catch (ObjectDisposedException) { return; } // disposed before we could even acquire - nothing to sync, nothing to release
+
+        if (!acquired) return;
 
         try
         {
@@ -136,6 +140,14 @@ public sealed class ObservationService(ProjectService projects) : IDisposable
             // would trade a rare, harmless race for a routine, user-visible stall. Once _indexGate
             // is disposed there is nothing left to release into - the semaphore it would have
             // signalled is already gone - so there is nothing to do here but let it pass.
+            //
+            // The same race can also land BEFORE this call ever acquires the gate - Dispose()
+            // beating a scheduled Sync() to _indexGate.Dispose() entirely - in which case
+            // _indexGate.Wait() above throws ObjectDisposedException itself. That throw is caught
+            // right at the call above, not here: it happens outside this try, so this finally
+            // never runs for that case, and there is equally nothing to release into. Both ends of
+            // the same teardown race are now handled: the acquire returns quietly, the release
+            // no-ops.
             try { _indexGate.Release(); }
             catch (ObjectDisposedException) { }
         }

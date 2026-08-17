@@ -106,6 +106,16 @@ namespace Hades.Tools
 
             var newParentTransform = ResolveOptionalParent(JsonParams.OptionalString(@params, "newParent"));
 
+            // F21: reparenting under itself or one of its own descendants would create a cycle in the
+            // hierarchy - Transform.SetParent has no such guard of its own (verified: it was silently
+            // accepted during the tester's own repro), so this must be checked here before it runs.
+            if (newParentTransform != null && IsSelfOrDescendant(newParentTransform, go.transform))
+            {
+                throw new ArgumentException(
+                    "Cannot reparent '" + GameObjectPaths.GetPath(go) + "' under '" + GameObjectPaths.GetPath(newParentTransform.gameObject)
+                    + "' - the new parent is the object itself or one of its own descendants, which would create a cycle.");
+            }
+
             Undo.SetTransformParent(go.transform, newParentTransform, "Hades Reparent " + go.name);
 
             return BuildGameObjectResult(go);
@@ -288,6 +298,17 @@ namespace Hades.Tools
             if (string.IsNullOrEmpty(parentPath)) return null;
             var parentGo = GameObjectPaths.FindByPath(parentPath) ?? throw GameObjectPaths.NotFoundError(parentPath);
             return parentGo.transform;
+        }
+
+        /// <summary>True if <paramref name="candidate"/> IS <paramref name="of"/>, or a descendant of
+        /// it - walks up candidate's OWN parent chain rather than down from 'of' (bounded by
+        /// candidate's depth, not the size of 'of's subtree) - see ReparentGameObject's own doc
+        /// comment (F21) for why this check exists.</summary>
+        static bool IsSelfOrDescendant(Transform candidate, Transform of)
+        {
+            for (var t = candidate; t != null; t = t.parent)
+                if (t == of) return true;
+            return false;
         }
 
         static JsonValue BuildGameObjectResult(GameObject go) =>

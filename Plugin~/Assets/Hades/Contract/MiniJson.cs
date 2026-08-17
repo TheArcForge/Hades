@@ -599,8 +599,39 @@ namespace Hades.Contract.Wire
                                     error = $"Invalid \\u escape at position {_pos}.";
                                     return false;
                                 }
-                                sb.Append((char)code);
                                 _pos += 4;
+
+                                // A lone (unpaired) UTF-16 surrogate half decodes into an
+                                // ill-formed .NET string - accepted silently before this check, but
+                                // a strict downstream consumer (System.Text.Json) throws on it
+                                // later, far from this parse call. Rejected here instead, the same
+                                // treatment every other malformed escape above already gets.
+                                if (char.IsLowSurrogate((char)code))
+                                {
+                                    error = $"Unpaired low surrogate \\u{code:x4} at position {_pos - 4}.";
+                                    return false;
+                                }
+
+                                if (char.IsHighSurrogate((char)code))
+                                {
+                                    // Well-formed only when immediately followed by a \u escape for
+                                    // its matching low surrogate - anything else (plain text, a
+                                    // different escape, end of string) leaves it unpaired.
+                                    if (_pos + 6 > _text.Length || _text[_pos] != '\\' || _text[_pos + 1] != 'u'
+                                        || !ushort.TryParse(_text.AsSpan(_pos + 2, 4), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var low)
+                                        || !char.IsLowSurrogate((char)low))
+                                    {
+                                        error = $"Unpaired high surrogate \\u{code:x4} at position {_pos - 4}.";
+                                        return false;
+                                    }
+
+                                    sb.Append((char)code);
+                                    sb.Append((char)low);
+                                    _pos += 6;
+                                    break;
+                                }
+
+                                sb.Append((char)code);
                                 break;
                             default:
                                 error = $"Invalid escape sequence '\\{escape}' at position {_pos}.";

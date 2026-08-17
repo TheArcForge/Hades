@@ -38,9 +38,30 @@ public sealed record LeaseOutcome
 /// </summary>
 public sealed class EditorSession : IDisposable
 {
+    /// <summary>
+    /// Default bound on one line read by <see cref="ReceiveLoopAsync"/>, once the connection has
+    /// graduated past the handshake and this class owns the read loop - see
+    /// <see cref="ReadBoundedLineAsync"/>'s own doc comment for the read mechanism this bounds.
+    /// Mirrors <see cref="EditorListener"/>'s own <c>MaxHandshakeLineBytes</c> (8KB) for the two
+    /// raw handshake lines, at a far more generous size: a session message can legitimately carry
+    /// a serialized scene/component result (e.g. project_get_console_log's up to 200 buffered
+    /// entries - see Plugin~'s ConsoleLogBuffer.Capacity - each with a message and stack trace,
+    /// or a batched scene_apply/prefab_apply request), which the tiny handshake bound was never
+    /// sized for. No hard limit exists anywhere else on this wire today (checked: no
+    /// max-message-size concept in the MCP/editor layer), so 16 MiB is a deliberately chosen,
+    /// generous multiple of the largest plausible legitimate payload - comfortably above it, while
+    /// still finite: a connected buggy/hostile/skewed peer sending a huge payload with no '\n' now
+    /// hits this bound and faults the session instead of growing this reader's buffer without
+    /// limit. Overridable per-instance via the constructor below purely so tests can prove the
+    /// bound is enforced without moving megabytes of data; production code always gets this
+    /// default.
+    /// </summary>
+    public const int DefaultMaxSessionLineChars = 16 * 1024 * 1024;
+
     readonly Stream _stream;
     readonly StreamWriter _writer;
     readonly StreamReader _reader;
+    readonly int _maxLineChars;
     readonly Dictionary<long, TaskCompletionSource<JsonRpcResponse>> _pending = [];
     readonly Lock _gate = new();
 
@@ -49,7 +70,7 @@ public sealed class EditorSession : IDisposable
     Task? _receiveLoop;
     bool _disposed;
 
-    public EditorSession(Stream stream, Hello hello)
+    public EditorSession(Stream stream, Hello hello, int maxLineChars = DefaultMaxSessionLineChars)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(hello);
@@ -57,6 +78,7 @@ public sealed class EditorSession : IDisposable
         _stream = stream;
         _writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)) { AutoFlush = true, NewLine = "\n" };
         _reader = new StreamReader(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        _maxLineChars = maxLineChars;
         Hello = hello;
     }
 
@@ -186,11 +208,25 @@ public sealed class EditorSession : IDisposable
         var success = result.TryGetProperty("success", out var successValue) && successValue!.Kind == JsonValueKind.Boolean && successValue.AsBoolean();
         var resultLeaseId = result.TryGetProperty("leaseId", out var idValue) && idValue!.Kind == JsonValueKind.String ? idValue.AsString() : null;
         var expiresAtUtc = result.TryGetProperty("expiresAtUtcMs", out var expiresValue) && expiresValue!.Kind == JsonValueKind.Integer
-            ? DateTimeOffset.FromUnixTimeMilliseconds(expiresValue.AsInteger())
+            ? ClampToUnixTimeMilliseconds(expiresValue.AsInteger())
             : (DateTimeOffset?)null;
 
         return new LeaseOutcome { Success = success, LeaseId = resultLeaseId, ExpiresAtUtc = expiresAtUtc };
     }
+
+    static readonly long MinUnixTimeMilliseconds = DateTimeOffset.MinValue.ToUnixTimeMilliseconds();
+    static readonly long MaxUnixTimeMilliseconds = DateTimeOffset.MaxValue.ToUnixTimeMilliseconds();
+
+    /// <summary>Converts an untrusted Unix-milliseconds value - the plugin's own reported
+    /// expiresAtUtcMs - into a <see cref="DateTimeOffset"/> by CLAMPING into the range
+    /// <see cref="DateTimeOffset.FromUnixTimeMilliseconds"/> can represent, rather than calling it
+    /// directly, which throws <see cref="ArgumentOutOfRangeException"/> outside that range. A
+    /// garbage or out-of-range value from a peer becomes "as far future/past as DateTimeOffset can
+    /// represent" instead of an unhandled exception out of this JSON-RPC response parse - see
+    /// EditorProjectTools.ScriptEditingSession's identical helper (Hades.Server.Mcp) for the
+    /// caller where an equivalent throw is NOT already contained.</summary>
+    static DateTimeOffset ClampToUnixTimeMilliseconds(long milliseconds) =>
+        DateTimeOffset.FromUnixTimeMilliseconds(Math.Clamp(milliseconds, MinUnixTimeMilliseconds, MaxUnixTimeMilliseconds));
 
     async Task ReceiveLoopAsync(CancellationToken token)
     {
@@ -201,14 +237,14 @@ public sealed class EditorSession : IDisposable
                 string? line;
                 try
                 {
-                    line = await _reader.ReadLineAsync(token).ConfigureAwait(false);
+                    line = await ReadBoundedLineAsync(token).ConfigureAwait(false);
                 }
                 catch (Exception e) when (e is IOException or ObjectDisposedException or OperationCanceledException)
                 {
                     break;
                 }
 
-                if (line is null) break; // EOF: the peer closed the connection.
+                if (line is null) break; // EOF, or a line over _maxLineChars - see ReadBoundedLineAsync.
 
                 // A line that doesn't parse as a response - or whose id matches nothing pending -
                 // is not this loop's problem: a malformed line from a hostile or buggy peer must
@@ -226,6 +262,43 @@ public sealed class EditorSession : IDisposable
             FailAllPending();
             Disconnected?.Invoke();
         }
+    }
+
+    /// <summary>
+    /// Reads one line, same observable contract as <see cref="StreamReader.ReadLineAsync(CancellationToken)"/>
+    /// (a trailing partial line with no terminating '\n' is returned as-is at end of stream, same
+    /// as that method) EXCEPT bounded: once accumulating a line would exceed
+    /// <see cref="_maxLineChars"/> with no '\n' yet found, this returns null - exactly what "end of
+    /// stream with nothing read" already means to <see cref="ReceiveLoopAsync"/>'s own null check,
+    /// so an over-limit line ends the receive loop (and, via its own <c>finally</c> block,
+    /// disconnects this session) the same way a dropped connection already does. Mirrors
+    /// <see cref="EditorListener.ReadRawLineAsync"/>'s identical "over-limit treated the same as no
+    /// data at all" contract for the two raw handshake lines - see
+    /// <see cref="DefaultMaxSessionLineChars"/>'s own doc comment for why the bound itself is so
+    /// much larger here.
+    ///
+    /// Reads one character at a time off the SAME buffering <see cref="_reader"/> every other read
+    /// on this connection already uses, rather than a second, competing buffer over the raw
+    /// <see cref="_stream"/> - see ReadRawLineAsync's own doc comment for why a second reader over
+    /// the same stream is the thing to avoid. The per-character call overhead this trades away only
+    /// matters for a message that approaches the bound; an ordinary few-KB response notices nothing.
+    /// </summary>
+    async Task<string?> ReadBoundedLineAsync(CancellationToken token)
+    {
+        var sb = new StringBuilder();
+        var single = new char[1];
+
+        while (sb.Length <= _maxLineChars)
+        {
+            var read = await _reader.ReadAsync(single.AsMemory(0, 1), token).ConfigureAwait(false);
+            if (read == 0) return sb.Length > 0 ? sb.ToString() : null;
+            if (single[0] == '\n') return sb.ToString();
+            sb.Append(single[0]);
+        }
+
+        // Over the bound with no terminating '\n' in sight - signal exactly like EOF (see this
+        // method's own doc comment) so the caller's existing null check faults the session.
+        return null;
     }
 
     void CompletePending(JsonRpcResponse response)

@@ -18,7 +18,7 @@ struct MenuBarViewModelTests {
 
     static let idleSummary = SummaryResult(
         iconState: .idle, headline: "No Unity Editor attached",
-        rows: [SummaryRow(project: "Hades-Unity-Client", status: "No Editor attached \u{00b7} indexed 32s ago", severity: .ok)],
+        rows: [SummaryRow(project: "Hades-Unity-Client", productGuid: "15c012f27331e49229cef25e74537816", status: "No Editor attached \u{00b7} indexed 32s ago", severity: .ok)],
         lease: nil
     )
 

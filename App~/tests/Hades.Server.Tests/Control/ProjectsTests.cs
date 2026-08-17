@@ -2,11 +2,13 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Hades.Contract.Wire;
 using Hades.Core;
 using Hades.Core.Editors;
+using Hades.Core.Projects;
 using Hades.Core.Storage;
 using Hades.Server.Control;
 using Microsoft.AspNetCore.Http;
@@ -409,7 +411,7 @@ public sealed class ProjectsBuildRebuildMessageTests
 public sealed class ProjectsBuildAsyncTests : IDisposable
 {
     const string ProjectGuid = "aaaabbbbccccddddeeeeffff40000004";
-    const string RealAppPluginVersion = "1.3.0"; // Plugin~/Assets/Hades/Runtime/HadesBoot.cs's own PluginVersion constant, confirmed by reading it directly. Keep in sync if that constant ever changes (every other test in this codebase already pins this exact literal too).
+    const string RealAppPluginVersion = "1.4.0"; // Plugin~/Assets/Hades/Runtime/HadesBoot.cs's own PluginVersion constant, confirmed by reading it directly. Keep in sync if that constant ever changes (every other test in this codebase already pins this exact literal too).
 
     readonly string _appRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
     readonly string _projectRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
@@ -427,6 +429,25 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         {
             CharonProbeTimeout = TimeSpan.FromMilliseconds(300),
         };
+    }
+
+    /// <summary>
+    /// Test-only realpath oracle - invokes the actual (internal) <see cref="ProjectStore.Canonicalize"/>
+    /// via reflection rather than re-implementing it, so this helper can never drift from what the
+    /// endpoints under test actually do. Needed because <see cref="Path.GetTempPath"/> itself sits
+    /// under a symlinked ancestor on macOS (<c>/var</c> -&gt; <c>/private/var</c>): now that
+    /// Canonicalize resolves the FULL chain, a path <see cref="ProjectService.Adopt"/>/<see
+    /// cref="ProjectService.AdoptAndIndex"/> stores - and so a path <see cref="ProjectsEndpoint"/>
+    /// echoes back or hands to a launcher - is the resolved spelling, not the raw fixture one. Only
+    /// the two tests that assert a full path string need this; every other test in this class
+    /// compares names, guids, or counts, none of which this affects.
+    /// </summary>
+    static string RealPath(string path)
+    {
+        var method = typeof(ProjectStore).GetMethod("Canonicalize", BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("ProjectStore.Canonicalize not found — has it been renamed?");
+
+        return (string)method.Invoke(null, [path])!;
     }
 
     void WriteEditorSettings(int serializationMode)
@@ -763,7 +784,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
 
             var json = await ResultBodyAsync(response);
             Assert.Equal(Path.GetFileName(freshRoot), json.GetProperty("name").GetString());
-            Assert.Equal(freshRoot, json.GetProperty("path").GetString());
+            Assert.Equal(RealPath(freshRoot), json.GetProperty("path").GetString());
             Assert.Equal(freshGuid, json.GetProperty("productGuid").GetString());
             Assert.Equal("indexed", json.GetProperty("indexState").GetString());
 
@@ -919,6 +940,66 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         // same numbers under test, rather than hardcoding a magic node count this test does not
         // control (real Roslyn scanning of an on-disk fixture project).
         Assert.Equal(ProjectsEndpoint.BuildRebuildMessage(result.NodesBefore, result.NodesAfter), result.Message);
+
+        // I5 gap fix: the exact-equality assertion above already implies no warning suffix was
+        // appended (this fixture project has no poison asset), but that is easy to miss reading
+        // the assertion alone - made explicit here so the no-warning case's Message is pinned as
+        // carrying NO suffix, not merely inferred. See Rebuild_OnePoisonAsset_... /
+        // Rebuild_TwoPoisonAssets_... below for the warning-suffix cases themselves.
+        Assert.DoesNotContain("could not be fully indexed", result.Message);
+    }
+
+    [Fact]
+    public async Task Rebuild_OnePoisonAsset_MessageNamesTheSingleFileAndItsPath()
+    {
+        // I5's last wiring step (see ProjectsEndpoint.Rebuild's own comment): the per-file
+        // diagnostics RebuildGraph carries must reach the operation's user-visible Message. One
+        // poison asset - the same unparseable class-id header AssetIndexerTests' own poison
+        // fixture uses (Assets/Poison.prefab) - alongside one healthy asset.
+        _projects.Adopt(_projectRoot);
+        Directory.CreateDirectory(Path.Combine(_projectRoot, "Assets"));
+        File.WriteAllText(Path.Combine(_projectRoot, "Assets", "Poison.prefab"),
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!4294967296 &1\nGameObject:\n  m_Name: Poison\n");
+        File.WriteAllText(Path.Combine(_projectRoot, "Assets", "Good.prefab"),
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1\nGameObject:\n  m_Name: Good\n");
+
+        var operations = new OperationRegistry();
+        var response = ProjectsEndpoint.Rebuild(_projects, operations, ProjectGuid);
+        var json = await ResultBodyAsync(response);
+        var operationId = json.GetProperty("operationId").GetString()!;
+
+        await operations.WhenComplete(operationId);
+        var op = operations.Get(operationId);
+        Assert.NotNull(op);
+        var result = Assert.IsType<RebuildOperationResult>(op!.Result);
+
+        Assert.Contains("1 file could not be fully indexed", result.Message);
+        Assert.Contains("Assets/Poison.prefab", result.Message);
+    }
+
+    [Fact]
+    public async Task Rebuild_TwoPoisonAssets_MessageNamesTheCountAndTheFirstFile()
+    {
+        _projects.Adopt(_projectRoot);
+        Directory.CreateDirectory(Path.Combine(_projectRoot, "Assets"));
+        File.WriteAllText(Path.Combine(_projectRoot, "Assets", "PoisonA.prefab"),
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!4294967296 &1\nGameObject:\n  m_Name: PoisonA\n");
+        File.WriteAllText(Path.Combine(_projectRoot, "Assets", "PoisonB.prefab"),
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!4294967296 &1\nGameObject:\n  m_Name: PoisonB\n");
+
+        var operations = new OperationRegistry();
+        var response = ProjectsEndpoint.Rebuild(_projects, operations, ProjectGuid);
+        var json = await ResultBodyAsync(response);
+        var operationId = json.GetProperty("operationId").GetString()!;
+
+        await operations.WhenComplete(operationId);
+        var op = operations.Get(operationId);
+        Assert.NotNull(op);
+        var result = Assert.IsType<RebuildOperationResult>(op!.Result);
+
+        // Which of the two poison files sorts "first" is filesystem enumeration order, not
+        // something this test controls - only the count and the "; first:" shape are pinned here.
+        Assert.Contains("2 files could not be fully indexed; first:", result.Message);
     }
 
     [Fact]
@@ -1010,7 +1091,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var json = await ResultBodyAsync(response);
 
         Assert.Equal("open", capturedExecutable);
-        Assert.Equal(["-R", _projectRoot], capturedArgs);
+        Assert.Equal(["-R", RealPath(_projectRoot)], capturedArgs);
         Assert.True(json.GetProperty("success").GetBoolean());
     }
 

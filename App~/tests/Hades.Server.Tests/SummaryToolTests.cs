@@ -229,6 +229,22 @@ public class SummaryToolTests : IClassFixture<WebApplicationFactory<Program>>, I
         Assert.False(tool.GetProperty("annotations").GetProperty("readOnlyHint").GetBoolean());
     }
 
+    [Fact]
+    public async Task RebuildGraph_DescriptionIsHonestAboutBeingSynchronousWithNoCancellation()
+    {
+        // F18-class honesty half of the same fix that made this tool serialize against
+        // EnsureIndexed (ProjectServiceTests.RebuildGraph_BlocksWhileEnsureIndexedsGateIsHeld...):
+        // a caller deciding whether to await this on a large project needs to know up front that
+        // there is no cancellation and no progress reporting, not discover it by timing out.
+        var tool = Assert.Single((await McpTestClient.ListTools(_factory))
+            .GetProperty("result").GetProperty("tools").EnumerateArray(),
+            t => t.GetProperty("name").GetString() == "hades_rebuild_graph");
+
+        var description = tool.GetProperty("description").GetString()!;
+        Assert.Contains("synchronous", description, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no cancellation", description, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ---------------------------------------------------------------- hades_ping
 
     [Fact]

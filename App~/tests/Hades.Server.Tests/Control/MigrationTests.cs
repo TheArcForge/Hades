@@ -209,6 +209,45 @@ public sealed class MigrationEndpointHttpTests : IDisposable
         return (files, dirs);
     }
 
+    // ---- M6: a project registered with Hades whose folder has since gone missing must be
+    // distinguishable from a genuine, freshly-scanned, v1.2-free project ----
+
+    [Fact]
+    public async Task Detect_ProjectPathNoLongerExistsOnDisk_ReportsProjectRootExistsFalse_Returns200NotAnError()
+    {
+        // _productGuid is already known to _projects (adopted in the constructor) - only the
+        // FOLDER is gone, exactly the "moved, deleted, or its volume is unmounted" case this field
+        // exists for. Detection stays safe to call at any time (this class's own doc comment): a
+        // missing path is reported honestly, not thrown as an error.
+        Directory.Delete(_projectRoot, recursive: true);
+
+        using var listener = StartListener();
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Get, $"/control/migration/{_productGuid}/detect", listener.Token));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.False(doc.RootElement.GetProperty("projectRootExists").GetBoolean());
+        // Every other field must still resolve to its ordinary absent value rather than throwing -
+        // the honest claim is "could not look", not a crash.
+        Assert.False(doc.RootElement.GetProperty("isV12Project").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Detect_ProjectPathExists_ReportsProjectRootExistsTrue()
+    {
+        using var listener = StartListener();
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Get, $"/control/migration/{_productGuid}/detect", listener.Token));
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.True(doc.RootElement.GetProperty("projectRootExists").GetBoolean());
+    }
+
     // ---- auth spot check ----
 
     [Fact]
@@ -311,6 +350,171 @@ public sealed class MigrationEndpointHttpTests : IDisposable
         var response = await client.SendAsync(Request(HttpMethod.Post, "/control/migration/does-not-exist/importMemory", listener.Token));
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    // ==================================================================
+    // M4: concurrent imports for the SAME project used to race MemoryStore.ImportFromArcforge's
+    // and V12Importer.ImportTraces' own check-then-act destination checks and surface as a raw
+    // 500 - TryClaimImportGate/ReleaseImportGate serialise per project instead.
+    // ==================================================================
+
+    [Fact]
+    public void ImportGate_SecondClaimForSameProjectFails_ReleaseAllowsClaimingAgain()
+    {
+        // Direct test of the gate primitive itself - deterministic, no HTTP or real threading
+        // needed. Exposed as its own testable primitive for exactly this reason - see
+        // MigrationEndpoint's own doc comment.
+        const string guid = "gate-only-test-guid-never-a-real-project";
+        MigrationEndpoint.ReleaseImportGate(guid); // defensive: never assume clean state up front
+
+        Assert.True(MigrationEndpoint.TryClaimImportGate(guid));
+        Assert.False(MigrationEndpoint.TryClaimImportGate(guid)); // already claimed
+        MigrationEndpoint.ReleaseImportGate(guid);
+        Assert.True(MigrationEndpoint.TryClaimImportGate(guid)); // released, so claimable again
+
+        MigrationEndpoint.ReleaseImportGate(guid); // leave it clean for any other test
+    }
+
+    [Fact]
+    public async Task ImportMemory_AnotherImportAlreadyInProgressForThisProject_Returns409WithCleanErrorShape()
+    {
+        WriteMemoryFile("conventions.md");
+        Assert.True(MigrationEndpoint.TryClaimImportGate(_productGuid)); // simulate one already running
+
+        try
+        {
+            using var listener = StartListener();
+            listener.Start();
+            using var client = ClientFor(listener);
+
+            var response = await client.SendAsync(Request(HttpMethod.Post, $"/control/migration/{_productGuid}/importMemory", listener.Token));
+
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.False(string.IsNullOrWhiteSpace(doc.RootElement.GetProperty("error").GetString()));
+        }
+        finally
+        {
+            MigrationEndpoint.ReleaseImportGate(_productGuid);
+        }
+    }
+
+    [Fact]
+    public async Task ImportTraces_AnotherImportAlreadyInProgressForThisProject_Returns409()
+    {
+        // Proves the gate is SHARED across importMemory/importTraces for the same project - this
+        // class's own doc comment: "a single gate ... rather than one per route".
+        WriteTracesDb();
+        Assert.True(MigrationEndpoint.TryClaimImportGate(_productGuid));
+
+        try
+        {
+            using var listener = StartListener();
+            listener.Start();
+            using var client = ClientFor(listener);
+
+            var response = await client.SendAsync(Request(HttpMethod.Post, $"/control/migration/{_productGuid}/importTraces", listener.Token));
+
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        }
+        finally
+        {
+            MigrationEndpoint.ReleaseImportGate(_productGuid);
+        }
+    }
+
+    // ==================================================================
+    // M10/M2: every route's body now runs through TryRun, so an otherwise-unhandled exception
+    // becomes the SAME { "error": "..." } shape every other failure path here already uses -
+    // never ASP.NET's own bare, possibly body-less default 500.
+    // ==================================================================
+
+    [Fact]
+    public async Task ImportMemory_UnreadableSourceFile_IsReportedSkipped_AndTheRestStillImports()
+    {
+        // M2, both halves now closed end-to-end: MemoryStore.ImportFromArcforge no longer aborts
+        // on one unreadable source file (it skips it with a reason and keeps going), so this route
+        // reports 200 with the skip named in the result - not the 500 the pre-fix abort produced.
+        // The "never a body-less 500" half stays pinned by this class's other TryRun tests, whose
+        // failure triggers are not per-file reads.
+        if (OperatingSystem.IsWindows()) return;
+        if (Environment.IsPrivilegedProcess) return; // root bypasses permission bits entirely
+
+        WriteMemoryFile("conventions.md", "# Conventions\n");
+        WriteMemoryFile("patterns.md", "# Patterns\n");
+        var path = Path.Combine(_projectRoot, ".arcforge", "memory", "conventions.md");
+        var originalMode = File.GetUnixFileMode(path);
+        File.SetUnixFileMode(path, UnixFileMode.None); // unreadable even to its own owner
+
+        try
+        {
+            using var listener = StartListener();
+            listener.Start();
+            using var client = ClientFor(listener);
+
+            var response = await client.SendAsync(Request(HttpMethod.Post, $"/control/migration/{_productGuid}/importMemory", listener.Token));
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(body);
+            var imported = doc.RootElement.GetProperty("imported").EnumerateArray().Select(e => e.GetString()).ToList();
+            Assert.Contains("patterns.md", imported);
+            Assert.DoesNotContain("conventions.md", imported);
+            var skip = Assert.Single(doc.RootElement.GetProperty("skipped").EnumerateArray().ToList());
+            Assert.Equal("conventions.md", skip.GetProperty("source").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(skip.GetProperty("reason").GetString()));
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, originalMode);
+        }
+    }
+
+    [Fact]
+    public async Task CleanManifest_TargetFileBecomesUnmovableMidWrite_Returns500WithNonEmptyJsonErrorBody()
+    {
+        // A different failure trigger than the read-only case (which this class's own M9 fix now
+        // refuses cleanly, BEFORE ever reaching a write) - macOS's user-immutable flag (chflags
+        // uchg) is a BSD mechanism entirely separate from the POSIX owner-write bit .NET's
+        // FileAttributes.ReadOnly reflects, so V12Cleanup's own read-only pre-check does not
+        // intercept it: the underlying File.Move genuinely throws, uncaught by V12Cleanup itself,
+        // and this proves THIS endpoint's own TryRun catches it into the same clean error shape
+        // every other failure path here uses.
+        if (!OperatingSystem.IsMacOS()) return; // chflags is macOS-specific; CI also runs ubuntu-latest
+
+        WriteManifest("""{ "dependencies": { "com.arcforge.hades": "1.2.3" } }""");
+        var manifestPath = Path.Combine(_projectRoot, "Packages", "manifest.json");
+        RunChflags("uchg", manifestPath);
+
+        try
+        {
+            using var listener = StartListener();
+            listener.Start();
+            using var client = ClientFor(listener);
+
+            var response = await client.SendAsync(Request(HttpMethod.Post, $"/control/migration/{_productGuid}/cleanManifest", listener.Token,
+                jsonBody: new { proceed = true }));
+
+            Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.False(string.IsNullOrWhiteSpace(body));
+            using var doc = JsonDocument.Parse(body);
+            Assert.False(string.IsNullOrWhiteSpace(doc.RootElement.GetProperty("error").GetString()));
+        }
+        finally
+        {
+            RunChflags("nouchg", manifestPath);
+        }
+    }
+
+    static void RunChflags(string flag, string path)
+    {
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/usr/bin/chflags", [flag, path])
+        {
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+        })!;
+        process.WaitForExit();
     }
 
     // ==================================================================
@@ -455,8 +659,11 @@ public sealed class MigrationEndpointHttpTests : IDisposable
     }
 
     [Fact]
-    public async Task CleanMcpConfig_ProceedTrue_DeletesTheFile()
+    public async Task CleanMcpConfig_ProceedTrue_RemovesHadesEntry_NeverDeletesTheFile()
     {
+        // M1: this used to wholesale File.Delete the file - proven fixed over HTTP: the file
+        // survives (even with hades as the only server, matching CleanClaudeDesktopConfig's own
+        // documented "never delete" behaviour) and reports how many occurrences were spliced out.
         WriteMcpJson();
 
         using var listener = StartListener();
@@ -468,7 +675,125 @@ public sealed class MigrationEndpointHttpTests : IDisposable
 
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.True(doc.RootElement.GetProperty("removed").GetBoolean());
-        Assert.False(File.Exists(McpJsonPath));
+        Assert.Equal(1, doc.RootElement.GetProperty("occurrencesFound").GetInt32());
+        Assert.True(File.Exists(McpJsonPath));
+        using var written = JsonDocument.Parse(File.ReadAllText(McpJsonPath));
+        Assert.False(written.RootElement.GetProperty("mcpServers").TryGetProperty("hades", out _));
+    }
+
+    [Fact]
+    public async Task CleanMcpConfig_HadesPlusOtherServer_OnlyHadesRemoved_OtherServerByteIdentical()
+    {
+        // The headline M1 fix, proven over real HTTP with an explicit (not the compact default)
+        // fixture so the expected bytes are exact: a hand-added second server in a project-level
+        // .mcp.json must survive a hades cleanup untouched, not be destroyed alongside it.
+        File.WriteAllText(McpJsonPath,
+            "{\n" +
+            "  \"mcpServers\": {\n" +
+            "    \"hades\": {\n" +
+            "      \"command\": \"node\"\n" +
+            "    },\n" +
+            "    \"other-server\": {\n" +
+            "      \"command\": \"npx\"\n" +
+            "    }\n" +
+            "  }\n" +
+            "}\n");
+
+        using var listener = StartListener();
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Post, $"/control/migration/{_productGuid}/cleanMcpConfig", listener.Token,
+            jsonBody: new { proceed = true }));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.True(doc.RootElement.GetProperty("removed").GetBoolean());
+        Assert.Equal(1, doc.RootElement.GetProperty("occurrencesFound").GetInt32());
+        Assert.Equal(
+            "{\n" +
+            "  \"mcpServers\": {\n" +
+            "    \"other-server\": {\n" +
+            "      \"command\": \"npx\"\n" +
+            "    }\n" +
+            "  }\n" +
+            "}\n",
+            File.ReadAllText(McpJsonPath));
+    }
+
+    [Fact]
+    public async Task CleanMcpConfig_NoGoAhead_ReportsOccurrencesFoundWithoutRemoving()
+    {
+        // Dry-run parity (this class's own documented convention - see
+        // CleanClaudeDesktopConfig_NoGoAhead_ReportsOccurrencesFoundWithoutRemoving above): a dry
+        // run must report exactly what the real run would do.
+        WriteMcpJson();
+        var before = Snapshot(McpJsonPath);
+
+        using var listener = StartListener();
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Post, $"/control/migration/{_productGuid}/cleanMcpConfig", listener.Token,
+            jsonBody: new { proceed = false }));
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.False(doc.RootElement.GetProperty("removed").GetBoolean());
+        Assert.Equal(1, doc.RootElement.GetProperty("occurrencesFound").GetInt32());
+        AssertUnchanged(McpJsonPath, before);
+    }
+
+    [Fact]
+    public async Task CleanMcpConfig_NestedMcpServersDecoyElsewhereInFile_OnlyTopLevelHadesRemoved_DecoyUntouched()
+    {
+        // M8: the span scanner used to match "hades" inside ANY container literally named
+        // "mcpServers", regardless of nesting depth - live-shaped repro: a backup blob elsewhere in
+        // the file carries its own nested mcpServers/hades pair, which must survive untouched.
+        File.WriteAllText(McpJsonPath,
+            "{\n" +
+            "  \"mcpServers\": {\n" +
+            "    \"hades\": {\n" +
+            "      \"command\": \"node\"\n" +
+            "    }\n" +
+            "  },\n" +
+            "  \"backupOfOldConfig\": {\n" +
+            "    \"mcpServers\": {\n" +
+            "      \"hades\": {\n" +
+            "        \"command\": \"node\",\n" +
+            "        \"args\": [\n" +
+            "          \"decoy - must survive\"\n" +
+            "        ]\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }\n" +
+            "}\n");
+
+        using var listener = StartListener();
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Post, $"/control/migration/{_productGuid}/cleanMcpConfig", listener.Token,
+            jsonBody: new { proceed = true }));
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.True(doc.RootElement.GetProperty("removed").GetBoolean());
+        Assert.Equal(1, doc.RootElement.GetProperty("occurrencesFound").GetInt32());
+        Assert.Equal(
+            "{\n" +
+            "  \"mcpServers\": {\n" +
+            "  },\n" +
+            "  \"backupOfOldConfig\": {\n" +
+            "    \"mcpServers\": {\n" +
+            "      \"hades\": {\n" +
+            "        \"command\": \"node\",\n" +
+            "        \"args\": [\n" +
+            "          \"decoy - must survive\"\n" +
+            "        ]\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }\n" +
+            "}\n",
+            File.ReadAllText(McpJsonPath));
     }
 
     [Fact]

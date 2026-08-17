@@ -11,5 +11,12 @@
         "state": "absent",
         "status": "No Editor attached"
     },
-    "warnings": []
+    "warnings": [
+        {
+            "code": "pluginVersionMismatch",
+            "severity": "warning",
+            "message": "The installed Hades plugin (v1.2.0) is a different major version from this app (v2.0.0-dev) — compatibility is not assured, and most Editor-dependent tools should be expected to fail until it is updated.",
+            "remedy": "Use Install/Update Plugin for this project, then restart Unity if it is already running."
+        }
+    ]
 }

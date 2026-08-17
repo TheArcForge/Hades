@@ -173,6 +173,50 @@ public sealed class EditorProxyTests : IDisposable
         Assert.Contains("timed out", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task CommandTimesOut_MessageIsHonestThatUnityMayStillBeRunningIt()
+    {
+        // F18: a bridge timeout only means THIS call gave up waiting - it does not mean Unity
+        // stopped. Measured against a real Editor, a batch that blows through the 30s budget
+        // keeps applying operations long after the caller was told it "failed" (material_apply,
+        // 800 ops: 569 landed by the time of the error, 1,225 by the time the batch actually
+        // finished) - so the message must say so instead of letting a caller assume "nothing
+        // happened".
+        var (reads, writes) = await AttachFakeUnityAsync();
+        var responder = AnswerOneAsync(reads, writes);
+
+        var ex = await Assert.ThrowsAsync<McpException>(
+            () => _proxy.SendCommandAsync(ProjectGuid, "material_apply"));
+        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Contains("may still be executing", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("not rolled back", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("more may land", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("hades_charon_status", ex.Message);
+        Assert.Contains("project_get_console_log", ex.Message);
+    }
+
+    [Fact]
+    public async Task CommandTimesOut_WithAnOperationsBatch_ReportsHowManyWereInFlight()
+    {
+        // The 'operations' array is the one shape every batch tool (material_apply, scene_apply,
+        // prefab_apply, animation_apply, project_settings_apply - see e.g. MaterialApplyTool.
+        // MaterialApply) sends its params as, so EditorProxy can report a useful count at this
+        // seam without knowing which specific tool timed out.
+        var (reads, writes) = await AttachFakeUnityAsync();
+        var responder = AnswerOneAsync(reads, writes);
+
+        var operations = JsonValue.NewArray();
+        for (var i = 0; i < 3; i++) operations.Add(JsonValue.NewObject().SetProperty("op", JsonValue.String("setProperty")));
+        var @params = JsonValue.NewObject().SetProperty("operations", operations);
+
+        var ex = await Assert.ThrowsAsync<McpException>(
+            () => _proxy.SendCommandAsync(ProjectGuid, "material_apply", @params));
+        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Contains("3 operation", ex.Message);
+    }
+
     // ---------------------------------------------------------------- success path (sanity)
 
     [Fact]

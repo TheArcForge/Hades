@@ -36,6 +36,8 @@ namespace Hades.Tools
         internal static JsonValue CreateMaterial(ReloadGate gate, JsonValue @params)
         {
             var path = JsonParams.RequireString(@params, "path", "material.create");
+            path = AssetPathGuard.RequireNewAssetPath(
+                path, "material.create", "Material", "material_apply's setProperty/assign/duplicate/swapShader operations");
             var shaderName = JsonParams.OptionalString(@params, "shader");
             if (string.IsNullOrEmpty(shaderName)) shaderName = "Standard";
 
@@ -155,6 +157,8 @@ namespace Hades.Tools
         {
             var sourcePath = JsonParams.RequireString(@params, "sourcePath", "material.duplicate");
             var destPath = JsonParams.RequireString(@params, "destPath", "material.duplicate");
+            destPath = AssetPathGuard.RequireNewAssetPath(
+                destPath, "material.duplicate", "Material", "material_apply's setProperty/assign/swapShader operations");
 
             if (AssetDatabase.LoadAssetAtPath<Material>(sourcePath) == null)
                 throw new ArgumentException("Source material not found at path: '" + sourcePath + "'.");

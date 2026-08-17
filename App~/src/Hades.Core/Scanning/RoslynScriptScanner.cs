@@ -38,6 +38,13 @@ public static class RoslynScriptScanner
 
         foreach (var declaration in root.DescendantNodes().OfType<BaseTypeDeclarationSyntax>())
         {
+            // I11: a syntactically broken declaration (a file mid-edit, or a genuine syntax
+            // error) still produces a node here in Roslyn's error-tolerant tree, but with a
+            // MISSING identifier - empty text. Recording it would put a real, searchable, but
+            // permanently nameless Class/Struct/... node in the graph; skipping it is honest
+            // about there being nothing here yet worth naming.
+            if (declaration.Identifier.IsMissing) continue;
+
             results.Add(new ScriptType
             {
                 Name = QualifiedName(declaration),

@@ -85,10 +85,11 @@ public sealed class GraphTools(ProjectService projects)
         + "often still resolve the GUID directly from the referencing file's own properties.";
 
     [McpServerTool(Name = "trace_dependencies", Title = "Trace Dependencies", ReadOnly = true, UseStructuredContent = true)]
-    [Description("Everything a Unity asset depends on, walking `references` edges outward up to "
-               + "a depth — the outward-facing twin of find_references_to. Only `references` "
-               + "edges count as a dependency; instantiating a prefab (`instance_of`) or standing "
-               + "in for a nested prefab's object (`corresponds_to`) are not included. Terminates "
+    [Description("Everything a Unity asset depends on, walking `references` and `instance_of` "
+               + "edges outward up to a depth — the outward-facing twin of find_references_to, so "
+               + "nested-prefab chains (a prefab instantiating another) are walked too. Only "
+               + "`corresponds_to` is excluded: every nested instance that writes one also writes "
+               + "an `instance_of` edge to the same file, so it would duplicate hits. Terminates "
                + "safely on reference cycles, which Unity projects contain routinely (a prefab "
                + "referencing a manager that references the prefab back). Takes the "
                + "project-relative path exactly as search_by_name returns it. A dependency whose "

@@ -177,14 +177,18 @@ public struct PingResult: Decodable, Equatable, Sendable {
 // MARK: - GET /control/summary
 
 /// Mirrors `Hades.Server.Control.SummaryRow`. One project's line in the menu bar; `status` is the
-/// complete, human-readable string to print verbatim.
+/// complete, human-readable string to print verbatim. `productGuid` is this project's stable
+/// identity - a view must key/identify rows by this, never by `project` (the display name), which
+/// two different projects can share (e.g. two checkouts of the same repo).
 public struct SummaryRow: Decodable, Equatable, Sendable {
     public let project: String
+    public let productGuid: String
     public let status: String
     public let severity: ControlSeverity
 
-    public init(project: String, status: String, severity: ControlSeverity) {
+    public init(project: String, productGuid: String, status: String, severity: ControlSeverity) {
         self.project = project
+        self.productGuid = productGuid
         self.status = status
         self.severity = severity
     }

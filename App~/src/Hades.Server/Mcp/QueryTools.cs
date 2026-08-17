@@ -226,6 +226,7 @@ public sealed class QueryTools(ProjectService projects)
             ValidateFilters(kind, namePattern, pathPrefix, edgeKind, "graph_query");
         }
         ValidateEdgeDirection(edgeDirection);
+        ValidateEdgeKind(edgeKind);
 
         if (string.IsNullOrEmpty(edgeKind)
             && (!string.IsNullOrEmpty(edgeTargetPath) || !string.IsNullOrEmpty(edgeTargetNamePattern)
@@ -240,6 +241,27 @@ public sealed class QueryTools(ProjectService projects)
 
         var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
 
+        // F7-sibling, EAGER (unlike 'kind' below): 'edgeTargetKind' sits INSIDE the edge-existence
+        // subquery that 'edgeAbsent' negates, so — exactly like 'edgeKind' — a typo there does NOT
+        // empty the result the way a bad 'kind' does. With edgeAbsent:true it makes "no matching
+        // edge" vacuously true for every node: a confident false-positive (e.g. "every script that
+        // references no Class") that an after-the-fact found.Count==0 check can never see, because
+        // the result is not empty — it is wrong. So it must be validated before the query runs,
+        // against the same per-project KnownNodeKinds vocabulary 'kind' uses.
+        if (!string.IsNullOrWhiteSpace(edgeTargetKind))
+        {
+            var knownKinds = projects.KnownNodeKinds(productGuid);
+            if (!knownKinds.Contains(edgeTargetKind, StringComparer.Ordinal))
+            {
+                var vocabulary = knownKinds.Count > 0
+                    ? string.Join(", ", knownKinds)
+                    : "(this project's graph has no nodes at all yet)";
+                throw new McpException(
+                    $"'{edgeTargetKind}' does not match any node kind in this project's graph "
+                    + $"(kinds are case-sensitive). Known kinds: {vocabulary}.");
+            }
+        }
+
         var found = projects.QueryGraph(productGuid, kind, namePattern, pathPrefix, edgeKind,
             edgeDirection.ToLowerInvariant(), clampedLimit + 1, edgeTargetPath, edgeTargetNamePattern, edgeAbsent,
             kindPattern, edgeTargetKind);
@@ -252,6 +274,14 @@ public sealed class QueryTools(ProjectService projects)
         // so a valid kind combined with OTHER filters that happen to match nothing (namePattern,
         // pathPrefix, edge*) still returns an ordinary empty result, exactly as before - this only
         // fires when 'kind' ITSELF is the reason nothing matched.
+        //
+        // F7: an unrecognised 'kind' is validated after the fact, gated on an empty result -
+        // unlike edgeTargetKind above, 'kind' filters the NODES directly, so a bad value simply
+        // yields found.Count == 0 (never the edgeAbsent vacuous-true trap), and this on-empty gate
+        // is what lets a VALID kind that legitimately matches nothing (combined with a namePattern
+        // or pathPrefix) stay an ordinary empty result rather than a false error. Off the same
+        // per-project KnownNodeKinds vocabulary, so 'kind' and 'edgeTargetKind' can never name a
+        // different "known kind" list.
         if (!string.IsNullOrWhiteSpace(kind) && found.Count == 0)
         {
             var knownKinds = projects.KnownNodeKinds(productGuid);
@@ -260,12 +290,17 @@ public sealed class QueryTools(ProjectService projects)
                 var vocabulary = knownKinds.Count > 0
                     ? string.Join(", ", knownKinds)
                     : "(this project's graph has no nodes at all yet)";
-
                 throw new McpException(
                     $"'{kind}' does not match any node kind in this project's graph (kinds are "
                     + $"case-sensitive). Known kinds: {vocabulary}.");
             }
         }
+
+        // kindPattern, deliberately, gets no equivalent check: it is a case-insensitive SUBSTRING
+        // match (see its own parameter Description above), not a closed vocabulary like 'kind' - there
+        // is no fixed list of valid substrings to validate a pattern against. A kindPattern matching
+        // nothing is already an ordinary empty result, not a caller mistake this method could
+        // usefully flag, unlike 'kind' above where an unrecognised EXACT value is almost always a typo.
 
         return BuildResult(found, clampedLimit);
     }
@@ -289,6 +324,37 @@ public sealed class QueryTools(ProjectService projects)
             throw new McpException(
                 $"'{edgeDirection}' is not a recognised 'edgeDirection' - use \"outgoing\" or "
                 + "\"incoming\".");
+        }
+    }
+
+    /// <summary>
+    /// F7-sibling fix. Unlike 'kind' (an open, per-project, DATA-dependent vocabulary - see the F7
+    /// check in <see cref="GraphQuery"/> itself, which asks the graph what it actually contains),
+    /// 'edgeKind' is a closed, fixed, CODE-dependent vocabulary - <see
+    /// cref="Graph.GraphDatabase.KnownEdgeKinds"/> is the one place that list is written down, so
+    /// this and every other reader of it can never drift apart.
+    ///
+    /// Checked EAGERLY, before the query even runs - unlike 'kind', which is only checked after an
+    /// empty result. That is not an inconsistency, it is a necessity: 'edgeKind' feeds the
+    /// edge-exists subquery <c>edgeAbsent</c> NEGATES (see <see cref="Graph.GraphDatabase.QueryGraph"/>'s
+    /// own SQL), so a typo'd edgeKind does not zero the result out the way an unrecognised 'kind'
+    /// does - it makes the "no matching edge" check vacuously TRUE for every node instead, turning
+    /// find_orphan_scripts' shape (<c>kind: "Class", edgeKind: "references", edgeDirection:
+    /// "incoming", edgeAbsent: true</c>) into a silent false positive across the WHOLE result set -
+    /// every class reported "unreferenced", including ones genuinely referenced - rather than an
+    /// honest empty one. A check gated on "found nothing" can never catch that, because the query
+    /// does not find nothing; only a check that runs regardless of what the query would have
+    /// returned can.
+    /// </summary>
+    static void ValidateEdgeKind(string? edgeKind)
+    {
+        if (string.IsNullOrWhiteSpace(edgeKind)) return;
+
+        if (!GraphDatabase.KnownEdgeKinds.Contains(edgeKind, StringComparer.Ordinal))
+        {
+            throw new McpException(
+                $"'{edgeKind}' is not a recognised graph_query 'edgeKind' (edge kinds are "
+                + $"case-sensitive). Known edge kinds: {string.Join(", ", GraphDatabase.KnownEdgeKinds)}.");
         }
     }
 

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Hades.Core;
+using Hades.Core.Reading;
 using Hades.Core.Storage;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -58,6 +59,10 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
 
     const int BigHierarchyNodeCount = 150;
 
+    // E3: comfortably past InspectTool's own MaxValueUnits truncation cap - just needs to be an
+    // order of magnitude bigger than any plausible cap, not tuned to a specific number.
+    const int LargeFieldLength = 500_000;
+
     void Write(string relative, string body, string? guid = null)
     {
         var full = Path.Combine(_projectRoot, relative);
@@ -65,6 +70,24 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
         File.WriteAllText(full, body);
         if (guid is not null) File.WriteAllText(full + ".meta", $"fileFormatVersion: 2\nguid: {guid}\n");
     }
+
+    // E1 (Assemble): a straight m_Father parent chain `depth` Transforms long - fileId 1 is the
+    // root (m_Father: {fileID: 0} is Unity's own null reference, never recorded), fileId N's parent
+    // is fileId N-1, so the chain's deepest node sits at exactly `depth`. No GameObject is needed:
+    // BuildHierarchy tolerates an unresolved m_GameObject reference on a Transform (Name stays
+    // null), so this stays a minimal, pure parent-chain fixture.
+    static string MFatherChain(int depth)
+    {
+        var sb = new StringBuilder(Header);
+        for (var fileId = 1; fileId <= depth; fileId++)
+            sb.Append($"--- !u!4 &{fileId}\nTransform:\n  m_Father: {{fileID: {fileId - 1}}}\n");
+        return sb.ToString();
+    }
+
+    // E1 (ReadNode): a flow sequence nested `bracketDepth` brackets deep around one scalar - each
+    // "[" is one more SequenceStart ReadNode must recurse through before reaching the scalar at the
+    // bottom.
+    static string NestedList(int bracketDepth) => new string('[', bracketDepth) + "1" + new string(']', bracketDepth);
 
     public InspectToolTests(WebApplicationFactory<Program> factory)
     {
@@ -152,6 +175,61 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
             big.Append($"--- !u!4 &{trId}\nTransform:\n  m_GameObject: {{fileID: {goId}}}\n  m_Father: {{fileID: 0}}\n");
         }
         Write("Assets/Big.prefab", big.ToString());
+
+        // ---- E1/E2/E3: read-path crash/swallow fixtures ----
+
+        // E1 (Assemble): a chain exactly AT ReadThrough.MaxInspectDepth must still succeed; one
+        // level PAST it must fail cleanly rather than recurse further - the bracketing pair proving
+        // the guard sits exactly at the documented bound, neither early nor late.
+        Write("Assets/DeepChainAtBound.prefab", MFatherChain(ReadThrough.MaxInspectDepth));
+        Write("Assets/DeepChainPastBound.prefab", MFatherChain(ReadThrough.MaxInspectDepth + 1));
+
+        // E1 (ReadNode): a component field nested well under, and well past, the same depth bound -
+        // generous margins on both sides rather than an exact boundary, since the field's own
+        // key/value wrapping inside the component's outer mapping shifts the exact offset by a
+        // small, deliberately-not-load-bearing amount.
+        Write("Assets/DeepFieldUnderBound.prefab", Header
+            + "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 2}\n  - component: {fileID: 3}\n  m_Name: Deep\n"
+            + "--- !u!4 &2\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Father: {fileID: 0}\n"
+            + "--- !u!114 &3\nMonoBehaviour:\n  m_GameObject: {fileID: 1}\n"
+            + $"  deepField: {NestedList(100)}\n");
+        Write("Assets/DeepFieldPastBound.prefab", Header
+            + "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 2}\n  - component: {fileID: 3}\n  m_Name: Deep\n"
+            + "--- !u!4 &2\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Father: {fileID: 0}\n"
+            + "--- !u!114 &3\nMonoBehaviour:\n  m_GameObject: {fileID: 1}\n"
+            + $"  deepField: {NestedList(1000)}\n");
+
+        // E2: the same poison class-id header shape as AssetIndexerTests.cs's I1 fixture (a class
+        // id overflowing Int32) - UnityYamlReader.Read throws UnityYamlParseException for this,
+        // which InspectTool.Guarded must translate to a clean, named error rather than letting it
+        // fall through to the MCP SDK's own generic "an error occurred invoking..." text.
+        Write("Assets/Poison.prefab", Header + "--- !u!4294967296 &1\nGameObject:\n  m_Name: Poison\n");
+
+        // E3: one huge field, a normal-sized one, and a UnityEvent whose one listener carries a
+        // huge m_StringArgument - the "properties" depth's own equivalent of a huge raw field,
+        // reached through Events[].arguments rather than Value directly - all on the same
+        // component, to prove InspectTool's own output cap engages for both depths and leaves a
+        // normal-sized field alone.
+        Write("Assets/LargeField.prefab", Header
+            + "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 2}\n  - component: {fileID: 3}\n  m_Name: Large\n"
+            + "--- !u!4 &2\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Father: {fileID: 0}\n"
+            + "--- !u!114 &3\nMonoBehaviour:\n  m_GameObject: {fileID: 1}\n"
+            + $"  hugeField: {new string('a', LargeFieldLength)}\n"
+            + "  normalField: hi\n"
+            + "  hugeEvent:\n"
+            + "    m_PersistentCalls:\n"
+            + "      m_Calls:\n"
+            + "      - m_Target: {fileID: 1}\n"
+            + "        m_MethodName: DoThing\n"
+            + "        m_Mode: 1\n"
+            + "        m_Arguments:\n"
+            + "          m_ObjectArgument: {fileID: 0}\n"
+            + "          m_ObjectArgumentAssemblyTypeName: \n"
+            + "          m_IntArgument: 0\n"
+            + "          m_FloatArgument: 0\n"
+            + $"          m_StringArgument: {new string('b', LargeFieldLength)}\n"
+            + "          m_BoolArgument: 0\n"
+            + "        m_CallState: 2\n");
 
         // ---- depth "structure": material, animator controller, plain asset ----
 
@@ -430,6 +508,34 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
         Assert.Equal(BigHierarchyNodeCount, hierarchy.GetProperty("roots").GetArrayLength());
     }
 
+    // ---------------- E1: Assemble's m_Father recursion is depth-bounded, not just cycle-guarded
+
+    [Fact]
+    public async Task Structure_MFatherChainExactlyAtTheDepthBound_StillSucceeds()
+    {
+        // A real StackOverflowException cannot be caught to prove the "before" - this instead pins
+        // that the guard does NOT misfire for a chain sitting exactly at the documented bound.
+        // ReadThrough.GetHierarchy walks the FULL 512-deep chain unconditionally, before 'limit'
+        // ever truncates anything (E1's own point: limit does not protect against the unbounded
+        // walk) - a small 'limit' here only keeps the RESPONSE shallow, so serializing it does not
+        // separately trip System.Text.Json's own unrelated default 64-level object-graph cap; it
+        // does not shrink what Assemble itself has to walk to build the hierarchy in the first place.
+        var structured = Structured(await McpTestClient.CallTool(_factory, "inspect_asset",
+            new { path = "Assets/DeepChainAtBound.prefab", limit = 1 }));
+
+        Assert.Equal("structure", structured.GetProperty("depth").GetString());
+    }
+
+    [Fact]
+    public async Task Structure_MFatherChainOneLevelPastTheDepthBound_ReturnsACleanDepthErrorNotACrash()
+    {
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "inspect_asset",
+            new { path = "Assets/DeepChainPastBound.prefab" }));
+
+        Assert.Contains(ReadThrough.MaxInspectDepth.ToString(), text);
+        Assert.Contains("DeepChainPastBound.prefab", text);
+    }
+
     [Fact]
     public async Task Structure_Material_ReturnsFloatsColorsAndAResolvedTexture()
     {
@@ -543,6 +649,27 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
         var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "inspect_asset",
             new { path = "Assets/../../../../../../etc/passwd" }));
         Assert.Contains("outside the project", text);
+    }
+
+    // ---------------- E2: UnityYamlParseException (a poison class-id header) is caught by Guarded
+
+    [Fact]
+    public async Task Structure_APoisonClassIdHeader_NamesTheFileAndReasonRatherThanTheGenericSdkError()
+    {
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "inspect_asset",
+            new { path = "Assets/Poison.prefab" }));
+
+        // The MCP SDK wraps every tool error in "An error occurred invoking 'inspect_asset': ..."
+        // regardless of cause, so that prefix alone proves nothing either way - the actual signal is
+        // whether the file and reason are appended after it (this fix) or the message is left at
+        // just the bare generic sentence, with nothing appended at all (confirmed by temporarily
+        // reverting this fix: the text was exactly "An error occurred invoking 'inspect_asset'." -
+        // no file, no reason).
+        Assert.Contains("Assets/Poison.prefab", text);
+        // The parse reason itself, byte-for-byte from UnityYamlParseException's own message shape
+        // (see UnityYamlReaderTests.PoisonClassIdHeaderIsReportedAsUnparseable_NotAnUnhandledOverflow).
+        Assert.Contains("not a valid Int32", text);
+        Assert.NotEqual("An error occurred invoking 'inspect_asset'.", text);
     }
 
     // ================================================================== inspect_asset: depth "components"
@@ -677,6 +804,40 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
         Assert.Contains("target", text);
     }
 
+    // ---------------- E1: ReadNode's field recursion is depth-bounded the same way Assemble is
+
+    [Fact]
+    public async Task Properties_FieldNestedWellUnderTheDepthBound_StillSucceeds()
+    {
+        var structured = Structured(await McpTestClient.CallTool(_factory, "inspect_asset",
+            new { path = "Assets/DeepFieldUnderBound.prefab", target = 1, component = 3 }));
+
+        Assert.Equal("properties", structured.GetProperty("depth").GetString());
+        Assert.Contains("deepField",
+            structured.GetProperty("properties").EnumerateArray().Select(p => p.GetString()));
+    }
+
+    [Fact]
+    public async Task Properties_FieldNestedWellPastTheDepthBound_ReturnsACleanDepthErrorNotACrash()
+    {
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "inspect_asset",
+            new { path = "Assets/DeepFieldPastBound.prefab", target = 1, component = 3 }));
+
+        Assert.Contains(ReadThrough.MaxInspectDepth.ToString(), text);
+    }
+
+    // ---------------- E3: a UnityEvent listener's own raw argument has an output bound too
+
+    [Fact]
+    public async Task Properties_AVeryLargeEventArgumentIsCappedAndReportsTruncatedTrue()
+    {
+        var structured = Structured(await McpTestClient.CallTool(_factory, "inspect_asset",
+            new { path = "Assets/LargeField.prefab", target = 1, component = 3 }));
+
+        Assert.Equal("properties", structured.GetProperty("depth").GetString());
+        Assert.True(structured.GetProperty("truncated").GetBoolean());
+    }
+
     // ================================================================== inspect_asset: depth "value"
 
     [Fact]
@@ -755,6 +916,30 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
             new { path = "Assets/Enemy.prefab", property = "maxHealth" }));
 
         Assert.Contains("component", text);
+    }
+
+    // ---------------- E3: a raw field value has an output bound, like the hierarchy result does
+
+    [Fact]
+    public async Task Value_AVeryLargeFieldIsCappedAndReportsTruncatedTrue()
+    {
+        var structured = Structured(await McpTestClient.CallTool(_factory, "inspect_asset",
+            new { path = "Assets/LargeField.prefab", target = 1, component = 3, property = "hugeField" }));
+
+        Assert.Equal("value", structured.GetProperty("depth").GetString());
+        Assert.True(structured.GetProperty("truncated").GetBoolean());
+        Assert.True(structured.GetProperty("value").GetString()!.Length < LargeFieldLength,
+            "a ~500,000-character field must be capped, not returned wholesale");
+    }
+
+    [Fact]
+    public async Task Value_ANormalSizedFieldIsNotMarkedTruncated()
+    {
+        var structured = Structured(await McpTestClient.CallTool(_factory, "inspect_asset",
+            new { path = "Assets/LargeField.prefab", target = 1, component = 3, property = "normalField" }));
+
+        Assert.Equal("hi", structured.GetProperty("value").GetString());
+        Assert.False(structured.GetProperty("truncated").GetBoolean());
     }
 
     // ================================================================== inspect_asset: metadata

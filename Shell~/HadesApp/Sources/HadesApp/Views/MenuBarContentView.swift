@@ -79,7 +79,10 @@ private struct RunningContentView: View {
             if !summary.rows.isEmpty {
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(summary.rows, id: \.project) { row in
+                    // Keyed by productGuid, never project (the display name): two different
+                    // projects can share a name (e.g. two checkouts of the same repo), and keying
+                    // on name alone collided them into one row - see SummaryRow's own doc comment.
+                    ForEach(summary.rows, id: \.productGuid) { row in
                         ProjectRowView(row: row)
                     }
                 }

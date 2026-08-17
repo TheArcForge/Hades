@@ -1,8 +1,10 @@
 using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Hades.Core;
 using Hades.Core.Editors;
 using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using WireJson = Hades.Contract.Wire.JsonValue;
 using WireKind = Hades.Contract.Wire.JsonValueKind;
@@ -113,7 +115,7 @@ public sealed record MaterialApplyResult
 /// underlying command actually expects.</para>
 /// </summary>
 [McpServerToolType]
-public sealed class MaterialApplyTool(EditorProxy editor)
+public sealed class MaterialApplyTool(EditorProxy editor, ProjectService projects)
 {
     static readonly string[] ValidOps = ["create", "setProperty", "assign", "duplicate", "swapShader"];
 
@@ -149,7 +151,8 @@ public sealed class MaterialApplyTool(EditorProxy editor)
                    + "(a file on disk); duplicate's 'sourcePath' is the separate, existing material "
                    + "it copies from; assign's 'gameObjectPath' is a scene object, not a file.")]
         IReadOnlyList<MaterialApplyOperation> operations,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         if (operations is null || operations.Count == 0)
             throw new McpException("material_apply needs a non-empty 'operations' array.");
@@ -175,7 +178,8 @@ public sealed class MaterialApplyTool(EditorProxy editor)
         foreach (var op in operations) wireOperations.Add(BuildOperation(op));
 
         var @params = WireJson.NewObject().SetProperty("operations", wireOperations);
-        var result = await editor.SendCommandAsync(project, "material.apply", @params).ConfigureAwait(false);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
+        var result = await editor.SendCommandAsync(productGuid, "material.apply", @params).ConfigureAwait(false);
 
         return MapResult(result, operations.Count);
     }

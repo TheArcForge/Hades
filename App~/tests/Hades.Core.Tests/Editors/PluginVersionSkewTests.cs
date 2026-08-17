@@ -83,10 +83,43 @@ public sealed class PluginVersionSkewTests
     [InlineData("", "1.2.0")]
     [InlineData("not-a-version", "1.2.0")]
     [InlineData("1", "1.2.0")]
-    [InlineData("1.2.3.4", "1.2.0")]
     [InlineData("1.x.0", "1.2.0")]
     public void UnparseableOrMissingVersion_IsUnknown_NothingTrustworthyToCompare(string? pluginVersion, string? appVersion)
     {
         Assert.Equal(PluginVersionSkew.Unknown, PluginVersionComparison.Classify(pluginVersion, appVersion));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // A 4-part version or a semver prerelease/build suffix used to fall all the way to Unknown
+    // (nothing trustworthy to compare), which suppressed the skew warning even across a major
+    // version gap - e.g. a "2.0.0-beta" plugin talking to a 1.4.0 app warned about nothing.
+    // TryParse now reads the numeric MAJOR.MINOR(.patch) core and ignores a trailing "-"/"+"
+    // suffix or any component past the third, so classification still fires on that core.
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public void FourPartVersion_ParsesTheNumericCore_IgnoringTheExtraComponent()
+    {
+        // Core (1,2,3) vs (1,2,0): same major, not identical - ordinary Minor skew, not Unknown.
+        Assert.Equal(PluginVersionSkew.Minor, PluginVersionComparison.Classify("1.2.3.4", "1.2.0"));
+    }
+
+    [Fact]
+    public void PrereleaseSuffix_IsStripped_SoAMajorGapStillWarns_TheSpecsOwnLiteralExample()
+    {
+        // The finding's own motivating case: "a '2.0.0-beta' plugin vs a 1.4.0 app should warn".
+        Assert.Equal(PluginVersionSkew.Major, PluginVersionComparison.Classify(pluginVersion: "2.0.0-beta", appVersion: "1.4.0"));
+    }
+
+    [Fact]
+    public void PrereleaseSuffix_WithAnIdenticalNumericCore_IsSame()
+    {
+        Assert.Equal(PluginVersionSkew.Same, PluginVersionComparison.Classify("1.2.0-beta", "1.2.0"));
+    }
+
+    [Fact]
+    public void BuildMetadataSuffix_IsAlsoStripped_NotJustPrerelease()
+    {
+        Assert.Equal(PluginVersionSkew.Same, PluginVersionComparison.Classify("1.2.0+build5", "1.2.0"));
     }
 }

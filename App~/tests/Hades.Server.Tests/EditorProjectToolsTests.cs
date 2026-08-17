@@ -125,7 +125,8 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
                 ("message", JsonValue.String("NullReferenceException")),
                 ("stackTrace", JsonValue.String("at Foo.Bar()"))))),
             ("count", JsonValue.Integer(1)),
-            ("totalBuffered", JsonValue.Integer(37)));
+            ("totalBuffered", JsonValue.Integer(37)),
+            ("totalMatching", JsonValue.Integer(9)));
         var responder = AnswerBusyProbeThenRespondAsync(reads, writes, pluginResult);
 
         var structured = Structured(await McpTestClient.CallTool(Factory, "project_get_console_log", new { count = 10, type = "Error" }));
@@ -137,6 +138,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
 
         Assert.Equal(1, structured.GetProperty("count").GetInt32());
         Assert.Equal(37, structured.GetProperty("totalBuffered").GetInt32());
+        Assert.Equal(9, structured.GetProperty("totalMatching").GetInt32());
         var entry = structured.GetProperty("entries")[0];
         Assert.Equal("Error", entry.GetProperty("type").GetString());
         Assert.Equal("NullReferenceException", entry.GetProperty("message").GetString());
@@ -167,6 +169,22 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
         await responder.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Contains("'type' must be", McpTestClient.ErrorText(envelope));
+    }
+
+    [Fact]
+    public async Task ProjectGetConsoleLog_OutputSchema_DeclaresTotalMatching()
+    {
+        // 'totalMatching' (the count of buffered entries matching 'type', before 'count' capped
+        // the take) must be advertised in the tool's own outputSchema - the same "independent
+        // match count" shape find_references_to's totalReferences uses - so a caller can tell
+        // whether more matches exist beyond what 'entries' returned without cross-referencing
+        // undocumented wire behaviour.
+        var tools = (await McpTestClient.ListTools(Factory)).GetProperty("result").GetProperty("tools");
+        var tool = Assert.Single(tools.EnumerateArray(), t => t.GetProperty("name").GetString() == "project_get_console_log");
+
+        var properties = tool.GetProperty("outputSchema").GetProperty("properties");
+        Assert.True(properties.TryGetProperty("totalMatching", out _),
+            "project_get_console_log's outputSchema is missing 'totalMatching'");
     }
 
     // ---------------------------------------------------------------- project_get_test_results
@@ -313,6 +331,58 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
         var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.True(request.Params!.TryGetProperty("ttlSeconds", out var t) && t!.AsDouble() == 120.0);
+    }
+
+    // ---------------------------------------------------------------- script_editing_session out-of-range expiresAtUtcMs (B-F2)
+    //
+    // DateTimeOffset.FromUnixTimeMilliseconds throws ArgumentOutOfRangeException outside its
+    // representable range. Thrown here, between the plugin taking Unity's reload lock (this
+    // 'begin' call already told it to) and leases.RecordHeld below, that would leave the plugin
+    // holding the lock with the app never having recorded it - a desync that only self-heals at
+    // the plugin's own lease TTL - and would surface as a raw, non-McpException error instead of
+    // a clean tool failure. Clamping instead of throwing means the call still succeeds and
+    // RecordHeld still runs.
+
+    [Fact]
+    public async Task ScriptEditingSession_Begin_ExpiresAtUtcMsAboveValidRange_ClampsAndStillRecordsTheLease()
+    {
+        var (reads, writes) = await ConnectAsFakeUnityAsync();
+        var responder = AnswerBusyProbeThenRespondAsync(reads, writes, Obj(
+            ("leaseId", JsonValue.String("hades-script-editing")), ("expiresAtUtcMs", JsonValue.Integer(long.MaxValue))));
+
+        var structured = Structured(await McpTestClient.CallTool(Factory, "script_editing_session", new { action = "begin" }));
+        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // No raw ArgumentOutOfRangeException surfaced - the call completed normally with a
+        // clamped, still-usable expiry. Not literally DateTimeOffset.MaxValue: round-tripping
+        // through Unix milliseconds (what the clamp actually computes with) loses MaxValue's
+        // sub-millisecond ticks, so the true clamp boundary is a hair below it.
+        var expectedClamp = DateTimeOffset.FromUnixTimeMilliseconds(DateTimeOffset.MaxValue.ToUnixTimeMilliseconds());
+        Assert.Equal(expectedClamp, structured.GetProperty("expiresAtUtc").GetDateTimeOffset());
+
+        // And the lease WAS recorded - RecordHeld ran despite the garbage expiry, so the
+        // plugin-holds-lock-app-unaware desync cannot occur here.
+        var lease = Factory.Services.GetRequiredService<LeaseRegistry>().Get(ProjectGuid);
+        Assert.NotNull(lease);
+        Assert.Equal("hades-script-editing", lease!.LeaseId);
+        Assert.Equal(expectedClamp, lease.ExpiresAtUtc);
+    }
+
+    [Fact]
+    public async Task ScriptEditingSession_Begin_ExpiresAtUtcMsBelowValidRange_ClampsWithoutThrowing()
+    {
+        var (reads, writes) = await ConnectAsFakeUnityAsync();
+        var responder = AnswerBusyProbeThenRespondAsync(reads, writes, Obj(
+            ("leaseId", JsonValue.String("hades-script-editing")), ("expiresAtUtcMs", JsonValue.Integer(long.MinValue))));
+
+        var structured = Structured(await McpTestClient.CallTool(Factory, "script_editing_session", new { action = "begin" }));
+        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Clamped to the other end of the representable range - still no raw exception - even
+        // though a this-far-in-the-past expiry self-expires immediately in LeaseRegistry (a
+        // separate, correct concern - see LeaseRegistry.Get's own doc comment - so it is not
+        // asserted as still-held here).
+        Assert.Equal(DateTimeOffset.MinValue, structured.GetProperty("expiresAtUtc").GetDateTimeOffset());
     }
 
     [Fact]

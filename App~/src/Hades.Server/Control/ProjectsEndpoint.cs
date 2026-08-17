@@ -574,11 +574,22 @@ public static class ProjectsEndpoint
             var result = projects.RebuildGraph(productGuid) ?? throw new InvalidOperationException(
                 $"Project '{productGuid}' is no longer known to Hades — it may have been removed while the rebuild was queued.");
 
+            // I5's last wiring step: the per-file diagnostics RebuildGraph now carries (a file
+            // that could not be read or parsed) reach the operation's user-visible Message
+            // instead of being dropped at this mapping - the count plus the first warning keeps
+            // the message bounded no matter how many files a hostile project trips on.
+            var warningSuffix = result.Warnings.Count switch
+            {
+                0 => "",
+                1 => $" 1 file could not be fully indexed: {result.Warnings[0]}",
+                var n => $" {n} files could not be fully indexed; first: {result.Warnings[0]}",
+            };
+
             return new RebuildOperationResult
             {
                 NodesBefore = result.NodesBefore,
                 NodesAfter = result.NodesAfter,
-                Message = BuildRebuildMessage(result.NodesBefore, result.NodesAfter),
+                Message = BuildRebuildMessage(result.NodesBefore, result.NodesAfter) + warningSuffix,
             };
         });
 

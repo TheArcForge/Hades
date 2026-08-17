@@ -74,7 +74,7 @@ public sealed record StatusResult
 [McpServerToolType]
 public sealed class HadesTools(ProjectService projects)
 {
-    public const string ServerVersion = "2.0.0-beta.2";
+    public const string ServerVersion = "2.0.0-beta.3";
 
     [McpServerTool(Name = "hades_status", Title = "Hades Status", ReadOnly = true, UseStructuredContent = true)]
     [Description("Hades server state and the list of projects it knows, each with the 'project' "
@@ -131,6 +131,30 @@ public sealed class HadesTools(ProjectService projects)
         // One more than the cap, so truncation is reported honestly rather than the agent
         // silently believing it has seen everything.
         var found = projects.Search(productGuid, namePattern, kind, clampedLimit + 1);
+
+        // F7-sibling: search_by_name's own 'kind' never got graph_query's F7 fix (see
+        // QueryTools.GraphQuery's identical check) - an unrecognised kind (a typo, or a retired
+        // term like "Texture") used to return exactly the same {results: [], totalReturned: 0} as a
+        // genuinely empty area of the graph, indistinguishable from each other. Same fix, off the
+        // SAME live vocabulary source (KnownNodeKinds) graph_query's own check uses, so the two
+        // tools can never name a different "known kind" list. Gated on an empty result, exactly
+        // like graph_query's: a valid kind combined with a namePattern that happens to match
+        // nothing must stay an ordinary empty result, not a false-positive error.
+        if (!string.IsNullOrWhiteSpace(kind) && found.Count == 0)
+        {
+            var knownKinds = projects.KnownNodeKinds(productGuid);
+            if (!knownKinds.Contains(kind, StringComparer.Ordinal))
+            {
+                var vocabulary = knownKinds.Count > 0
+                    ? string.Join(", ", knownKinds)
+                    : "(this project's graph has no nodes at all yet)";
+
+                throw new McpException(
+                    $"'{kind}' does not match any node kind in this project's graph (kinds are "
+                    + $"case-sensitive). Known kinds: {vocabulary}.");
+            }
+        }
+
         var truncated = found.Count > clampedLimit;
 
         var hits = found.Take(clampedLimit).Select(node => new SearchHit

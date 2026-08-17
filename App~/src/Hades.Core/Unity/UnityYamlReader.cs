@@ -1,7 +1,22 @@
+using System.Text.RegularExpressions;
 using YamlDotNet.Core;
 using YamlDotNet.Core.Events;
 
 namespace Hades.Core.Unity;
+
+/// <summary>
+/// Thrown by <see cref="UnityYamlReader.Read"/> when the content cannot be parsed at all — e.g. a
+/// document header whose class id overflows <see cref="int"/> — as opposed to a
+/// <see cref="YamlException"/> mid-parse, which <see cref="UnityYamlReader.Read"/> already treats
+/// as a partial, salvageable read (a file mid-write). I1: callers catch this exactly like an
+/// IOException — named in a per-file warning, never left to abort a whole batch — see
+/// <see cref="UnityYamlReader"/>'s own class doc comment.
+/// </summary>
+public sealed class UnityYamlParseException(string assetPath, string reason, Exception inner)
+    : Exception($"{assetPath}: unparseable Unity YAML ({reason})", inner)
+{
+    public string AssetPath { get; } = assetPath;
+}
 
 /// <summary>
 /// Streams Unity YAML into <see cref="UnityObject"/>s.
@@ -20,11 +35,28 @@ public static class UnityYamlReader
 
         // Class ids live in the document headers the preprocessor is about to rewrite, so
         // capture them first, in order. Document N in the parsed stream is header N here.
-        var headers = UnityYamlPreprocessor.DocumentHeaderPattern().Matches(content)
-            .Select(m => (
-                ClassId: int.Parse(m.Groups["classId"].Value),
-                IsStripped: m.Value.TrimEnd().EndsWith("stripped", StringComparison.Ordinal)))
-            .ToList();
+        //
+        // I1: a header this malformed (a class id that overflows Int32, e.g. "!u!4294967296")
+        // must not throw an untyped exception naming no file straight out of this method — that
+        // used to abort a full rebuild entirely and vanish silently, via ObservationService's
+        // blanket catch, from an incremental sync. Caught per-header and reported as the file's
+        // own diagnostic instead: unparseable-with-diagnostic, the same stance the YamlException
+        // catch below already takes for a mid-parse fault, but named rather than swallowed — see
+        // UnityYamlParseException's own doc comment.
+        var headers = new List<(int ClassId, bool IsStripped)>();
+        foreach (Match m in UnityYamlPreprocessor.DocumentHeaderPattern().Matches(content))
+        {
+            try
+            {
+                headers.Add((
+                    ClassId: int.Parse(m.Groups["classId"].Value),
+                    IsStripped: m.Value.TrimEnd().EndsWith("stripped", StringComparison.Ordinal)));
+            }
+            catch (Exception ex) when (ex is OverflowException or FormatException)
+            {
+                throw new UnityYamlParseException(assetPath, $"class id header \"{m.Value.Trim()}\" is not a valid Int32", ex);
+            }
+        }
 
         var objects = new List<UnityObject>();
 

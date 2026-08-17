@@ -42,6 +42,15 @@ namespace Hades.Transport
     {
         static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(30);
 
+        // Default bound on one request line read by ServeRequests, once a connection is past the
+        // handshake - see Hades.Core.Editors.EditorSession.DefaultMaxSessionLineChars (App~ side)
+        // for the identical reasoning applied symmetrically to this direction of the same wire: a
+        // connected buggy/hostile/skewed app peer sending a huge payload with no trailing '\n'
+        // must not grow this reader's buffer without bound. Overridable via the constructor purely
+        // so tests can prove the bound is enforced without moving megabytes of data; production
+        // always gets this default.
+        const int DefaultMaxRequestLineChars = 16 * 1024 * 1024;
+
         readonly Func<EditorConnectionInfo> _resolveConnection;
         readonly Hello _hello;
         readonly MainThreadPump _pump;
@@ -50,6 +59,7 @@ namespace Hades.Transport
         readonly TimeSpan _maxBackoff;
         readonly TimeSpan _requestTimeout;
         readonly Action _onDisconnected;
+        readonly int _maxRequestLineChars;
 
         readonly ManualResetEventSlim _shutdown = new ManualResetEventSlim(false);
         readonly object _clientGate = new object();
@@ -88,10 +98,13 @@ namespace Hades.Transport
         /// listening. A connection that never completed its handshake (e.g. connection refused)
         /// does not count as a disconnect - there was never a live connection to have been holding
         /// anything.</param>
+        /// <param name="maxRequestLineChars">Bound on one request line read from the app - see
+        /// <see cref="DefaultMaxRequestLineChars"/>'s own doc comment. Defaults to it; overridden
+        /// only by tests.</param>
         public HadesClient(Func<EditorConnectionInfo> resolveConnection, Hello hello, MainThreadPump pump,
             Func<JsonRpcRequest, JsonValue> handleRequest,
             TimeSpan? minBackoff = null, TimeSpan? maxBackoff = null, TimeSpan? requestTimeout = null,
-            Action onDisconnected = null)
+            Action onDisconnected = null, int? maxRequestLineChars = null)
         {
             _resolveConnection = resolveConnection ?? throw new ArgumentNullException(nameof(resolveConnection));
             _hello = hello ?? throw new ArgumentNullException(nameof(hello));
@@ -101,6 +114,7 @@ namespace Hades.Transport
             _maxBackoff = maxBackoff ?? TimeSpan.FromSeconds(30);
             _requestTimeout = requestTimeout ?? DefaultRequestTimeout;
             _onDisconnected = onDisconnected;
+            _maxRequestLineChars = maxRequestLineChars ?? DefaultMaxRequestLineChars;
         }
 
         /// <summary>True while the background I/O thread is alive. Used by tests to prove
@@ -284,14 +298,14 @@ namespace Hades.Transport
                 string line;
                 try
                 {
-                    line = reader.ReadLine();
+                    line = ReadBoundedLine(reader);
                 }
                 catch
                 {
                     return; // socket died - normal end of this connection, not a fault.
                 }
 
-                if (line == null) return; // EOF: the app closed the connection.
+                if (line == null) return; // EOF, or a line over _maxRequestLineChars - see ReadBoundedLine.
                 if (line.Length == 0) continue;
 
                 if (!JsonRpcRequest.TryParse(line, out var request, out _) || request?.Method == null)
@@ -317,6 +331,37 @@ namespace Hades.Transport
                     WriteResponse(response);
                 });
             }
+        }
+
+        /// <summary>
+        /// Reads one line, same observable contract as <see cref="StreamReader.ReadLine()"/> (a
+        /// trailing partial line with no terminating '\n' is returned as-is at end of stream, same
+        /// as that method) EXCEPT bounded: once accumulating a line would exceed
+        /// <see cref="_maxRequestLineChars"/> with no '\n' yet found, this returns null - exactly
+        /// what "end of stream with nothing read" already means to <see cref="ServeRequests"/>'s
+        /// own null check, so an over-limit line ends this connection (the I/O thread simply
+        /// reconnects - see <see cref="RunOneConnection"/>) the same way a dropped socket already
+        /// does. Mirrors <c>Hades.Core.Editors.EditorListener.ReadRawLineAsync</c>'s identical
+        /// "over-limit treated the same as no data at all" contract on the app side of this same
+        /// wire - see <see cref="DefaultMaxRequestLineChars"/>'s own doc comment for why the bound
+        /// itself is so much larger than the app's own (8KB) handshake-line bound.
+        /// </summary>
+        string ReadBoundedLine(StreamReader reader)
+        {
+            var sb = new StringBuilder();
+
+            while (sb.Length <= _maxRequestLineChars)
+            {
+                var next = reader.Read();
+                if (next == -1) return sb.Length > 0 ? sb.ToString() : null;
+                if (next == '\n') return sb.ToString();
+                sb.Append((char)next);
+            }
+
+            // Over the bound with no terminating '\n' in sight - signal exactly like end of
+            // stream (see this method's own doc comment) so the caller's existing null check ends
+            // this connection.
+            return null;
         }
 
         static string DescribeFailure(AggregateException exception)

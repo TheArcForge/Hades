@@ -402,6 +402,20 @@ namespace Hades.Tests.Editor
         }
 
         [Test]
+        public void CreateController_TraversalPath_RefusedBeforeAnyWrite()
+        {
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String("Assets/../Escaped.controller"));
+
+            var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("animation.create_controller", @params)));
+
+            StringAssert.Contains("Escaped.controller", ex.Message);
+            Assert.IsNull(AssetDatabase.LoadAssetAtPath<AnimatorController>("Assets/Escaped.controller"));
+        }
+
+        [Test]
         public void CreateController_PathNotEndingInController_ThrowsActionableError()
         {
             using var pump = new MainThreadPump();

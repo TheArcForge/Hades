@@ -1,28 +1,38 @@
 #!/usr/bin/env python3
 """Hades regression suite — executable form of FINDINGS.md.
 
-Adopted from an internal tester's findings bundle (2026-08-12) into this repo. Anchors below
-are re-pointed at Hades-Unity-Client; everything else — cases, expectations, fixture — is
-unchanged. See README.md in this directory for how to run it and how to read the output.
+Adopted from an internal tester's findings bundle into this repo. Round 2 (2026-08-14 bundle: 22
+Part B cases, up from 17). Anchors are re-pointed at Hades-Unity-Client, as in round 1; layered on
+top of the tester's round-2 cases and harness are our own additions carried forward from round 1
+— the --url flag / HADES_URL env var, and HADES_HOME awareness in case A1. See README.md in this
+directory for how to run it and how to read the output.
 
-Two parts, because hades_regression cannot see most of the defects:
+Two parts:
 
   PART A  replayed through the app's own `hades_regression` tool from a recorded fixture.
-          Covers the Editor-routed mutation surface only — that is all the recorder captures
-          (measured: of 6 mixed calls, only the 2 Editor-routed ones were recorded).
 
-  PART B  run directly over MCP by this script, because the graph/read surface is invisible to
-          the recorder and therefore cannot be expressed as a fixture at all.
+  PART B  run directly over MCP by this script. Originally because of F15 — at 0.1.0 the recorder
+          captured only Editor-routed calls (2 of 6 in a mixed probe), so the graph/read surface
+          could not be expressed as a fixture at all. F15 is fixed as of 2.0.0-beta.2 (5 of 6), but
+          Part B stays direct: P1-P3 assert on tools/list and initialize, which are not tool calls
+          and can never be fixtures, and several cases assert structure ("must error", "GUID must
+          not change") rather than "equals the recorded value".
 
 Every case declares what it should do TODAY:
 
   expect="fail"  an open finding. Failing = the bug is still there. PASSING IS NEWS: the bug is
                  fixed and the case should be flipped to expect="pass" to guard it.
   expect="pass"  behaviour that is currently correct, asserted so a future change cannot break it
-                 silently. F8 is here because it is a fixed bug worth pinning down.
+                 silently.
 
-Exit code is 0 when every case matched its expectation, 1 otherwise — so "all findings still
-present, nothing regressed" is a green run. Read the table, not just the code.
+Exit code is 0 when every case matched its expectation, 1 otherwise. Read the table, not just the
+exit code.
+
+STATE AS OF THIS ADOPTION (2026-08-15, building on 2.0.0-beta.2): Part B is 24 cases, every one
+declaring expect="pass" — fixed findings held as regression guards (including E7-E13, the
+F16/F19/F20/F21 stress-round cases), plus the pre-existing structural guards E5/E6. F12, F17 and
+F18 are excluded by design — reproducing any of them writes to a tracked scene, wedges the Editor
+on a modal dialog, or dumps 1,000+ files (see README.md).
 
 Usage:
     python3 hades_suite.py                 # everything (needs a live Unity Editor for D/E cases)
@@ -56,27 +66,42 @@ UNITY_ROOT = "/Users/mike/Projects/Hades-Unity-Client"
 # Enemy_Tank.prefab:71):
 #   m_SourcePrefab: {fileID: 100100000, guid: b2461a69f8268425f9005f9b0c5a0829, type: 3}
 # matches Enemy.prefab's own guid (Assets/Demo/Prefabs/Enemy.prefab.meta) — three prefab
-# variants demonstrably reference this prefab as their source.
+# variants demonstrably reference this prefab as their source. Re-verified for round 2, 2026-08-15
+# (byte-identical to the original round-1 evidence).
 REFERENCED_PREFAB = "Assets/Demo/Prefabs/Enemy.prefab"
 
 # Assets/Readme.asset:15:
 #   icon: {fileID: 2800000, guid: 727a75301c3d24613a3ebcec4a24c2c8, type: 3}
 # matches Assets/TutorialInfo/Icons/URP.png's own guid (URP.png.meta). This is the only
 # texture anywhere in this project, and this Readme icon field is its only reference.
+# Re-verified for round 2, 2026-08-15 (byte-identical to the original round-1 evidence).
 REFERENCED_TEXTURE = "Assets/TutorialInfo/Icons/URP.png"
 
 # No material in this project references a texture: Assets/Demo/Materials/M_Enemy.mat's
 # _BaseMap and _MainTex are both {fileID: 0} (verified) — the project has exactly one texture
-# total (REFERENCED_TEXTURE above), used only as a Readme icon, never by a material. Falling
-# back to the suite's other named option instead: the URP renderer asset.
-# Assets/Settings/PC_Renderer.asset:87-95 references seven blue-noise textures
-# (m_BlueNoise256Textures) and a shader (m_Shader) by GUID through its
-# ScreenSpaceAmbientOcclusion renderer feature — real, resolvable references to unindexed
-# asset kinds (Texture2D + Shader), the same shape of test as the original anchor. Those GUIDs
-# are package-bundled (verified: none resolve to a file under this project's own Assets/),
-# unlike the original project-local texture, because this project has no project-authored
-# texture that any material or renderer asset actually uses.
-MAT_WITH_TEXTURES = "Assets/Settings/PC_Renderer.asset"
+# total (REFERENCED_TEXTURE above), used only as a Readme icon, never by a material.
+#
+# Round 1 fell back to Assets/Settings/PC_Renderer.asset (its ScreenSpaceAmbientOcclusion
+# feature references seven blue-noise textures + a shader by GUID). Re-verifying that choice
+# live for round 2 (2026-08-15) showed it does not actually exercise F6: trace_dependencies
+# returns totalReturned=0 for it, but NOT because the dependency is unresolved in the F6
+# sense — the response's own `dangling` array lists all of them (danglingCount=21, truncated),
+# each with the same danglingNote: their target GUIDs are package-bundled and live outside
+# every root Hades scans (Library/PackageCache, built-in shaders), so they can never resolve
+# to a graph node regardless of F6's fix status. That's a different, legitimate "outside the
+# scanned roots" case, not the F6 gap (in-project textures/shaders absent from the graph) —
+# using it here would make this case fail forever even after F6 is completely fixed.
+#
+# Re-anchored to Assets/Readme.asset instead: it has exactly two GUID references (m_Script ->
+# Assets/TutorialInfo/Scripts/Readme.cs, icon -> Assets/TutorialInfo/Icons/URP.png, both
+# Assets/Readme.asset:12,15) and both are project-local, in-scan-root assets. Verified live
+# against the running core, 2026-08-15: trace_dependencies("Assets/Readme.asset") returns
+# totalReturned=2, dangling=[] — a real, fully-resolved forward walk, the exact complement of
+# REFERENCED_TEXTURE/G2's reverse lookup on the same Readme.asset -> URP.png edge (the only
+# real texture reference this project has, walked in the other direction). Not literally a
+# material — same naming compromise round 1 already made with the renderer-asset substitute,
+# kept for minimal diff against the rest of this file.
+MAT_WITH_TEXTURES = "Assets/Readme.asset"
 
 TMP = "Assets/HadesRegressionTmp"
 
@@ -125,9 +150,9 @@ def not_in_graph(res):
 # Each returns (ok: bool, detail: str). ok=True means "behaved correctly".
 
 def c_f1_no_boolean_schemas():
-    """F1: no tool may declare a boolean-form subschema at the top level of `properties`.
-    One such field (`inspect_asset.outputSchema.properties.value`) makes Claude Code reject the
-    entire 32-tool list, so this is the single highest-impact assertion in the suite."""
+    """F1 (fixed in 2.0.0-beta.2): no tool may declare a boolean-form subschema at the top level
+    of `properties`. At 0.1.0 one such field (`inspect_asset.outputSchema.properties.value`) made
+    Claude Code reject the entire 32-tool list — the single highest-impact assertion here."""
     r = rpc("tools/list", {})
     if "_err" in r:
         return False, r["_err"]
@@ -144,8 +169,9 @@ def c_f1_no_boolean_schemas():
 
 
 def c_f1_nested_boolean_schemas():
-    """F1 (latent): the same boolean form nested under `items`. Inert against Claude Code
-    2.1.220, which does not descend there, but a stricter validator would reject these too."""
+    """F1 (fixed): the same boolean form nested under `items`. 16 existed at 0.1.0; 15 of them
+    were inert against Claude Code 2.1.220, which does not descend there, but a stricter validator
+    would have rejected those too. All 16 are gone as of 2.0.0-beta.2."""
     r = rpc("tools/list", {})
     if "_err" in r:
         return False, r["_err"]
@@ -173,9 +199,9 @@ def c_f1_nested_boolean_schemas():
 
 
 def c_f5_server_version():
-    """F5: the initialize handshake should advertise the product version. It reports the
-    assembly version instead, which is the only version string readable when F1 blocks the
-    tool list — and it looks like a v1 server."""
+    """F5 (fixed): the initialize handshake should advertise the product version. At 0.1.0 it
+    reported the assembly version `1.0.0.0` — which was the only version string readable while F1
+    blocked the tool list, and it looked like a v1 server."""
     r = rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
                            "clientInfo": {"name": "hades-suite", "version": "1"}})
     v = (r.get("serverInfo") or {}).get("version")
@@ -185,21 +211,23 @@ def c_f5_server_version():
 
 
 def c_f6_trace_material():
-    """F6: an asset with real, resolved texture/shader dependencies must not report zero
-    dependencies. MAT_WITH_TEXTURES here is a URP renderer asset (no material in this project
-    references a texture, see the anchor comment above) with seven texture bindings and a
-    shader, all resolved by GUID."""
+    """F6: an asset with real, resolved dependencies must not report zero dependencies.
+    MAT_WITH_TEXTURES here is Assets/Readme.asset (no material in this project references a
+    texture, and the project's only other real GUID-referencing asset resolves solely to
+    package-bundled, out-of-scan-root GUIDs that would dangle regardless of F6 — see the anchor
+    comment above); Readme.asset's icon field resolves to this project's one real texture."""
     r = call("trace_dependencies", {"assetPath": MAT_WITH_TEXTURES, "maxDepth": 2, "limit": 10})
     if "_err" in r:
         return False, r["_err"]
     n = r.get("totalReturned", 0)
     if n and n > 0:
         return True, f"{n} dependency(ies)"
-    return False, "0 dependencies, while inspect_asset resolves its texture + shader bindings"
+    return False, "0 dependencies, despite Readme.asset's icon field resolving to a real project texture"
 
 
 def c_f6_refs_to_texture():
-    """F6: reverse lookup on a texture that something in the project references."""
+    """F6 (fixed): reverse lookup on a texture that something in the project references. At 0.1.0
+    textures were not graph nodes at all, so this errored with "not in the graph"."""
     r = call("find_references_to", {"assetPath": REFERENCED_TEXTURE, "limit": 5})
     if not_in_graph(r):
         return False, "'not in the graph' for a texture this project demonstrably references"
@@ -415,6 +443,159 @@ def c_material_setproperty_on_disk():
             else "value absent from YAML despite reported success")
 
 
+def c_f16_traversal_refused():
+    """F16: a `..` path must not be able to write outside Assets/. Cleans up after itself, and
+    reports the escape as a failure rather than leaving it on disk."""
+    _clean_tmp()
+    escape_rel = "Assets/../HadesSuiteEscape.mat"
+    target = os.path.join(os.path.dirname(UNITY_ROOT.rstrip("/")),
+                          os.path.basename(UNITY_ROOT.rstrip("/")), "HadesSuiteEscape.mat")
+    r = call("material_apply", {"operations": [{"op": "create", "path": escape_rel}]})
+    landed = [p for p in (target, target + ".meta") if os.path.exists(p)]
+    for p in landed:
+        os.remove(p)
+    refused = ("_err" in r) or bool(r.get("failed"))
+    if refused and not landed:
+        return True, "traversal refused, nothing written outside Assets/"
+    return False, (f"accepted={not refused}; "
+                   f"{len(landed)} file(s) landed outside Assets/ (removed by this test)")
+
+
+def c_f16_no_clobber():
+    """F16: `create` must not silently overwrite an existing file of a different type. Uses a
+    prefab this test created as the victim — never a real project asset."""
+    _clean_tmp()
+    call("scene_apply", {"operations": [{"op": "create", "name": "SuiteClobberSrc"}]})
+    mk = call("prefab_apply", {"operations": [
+        {"op": "create", "gameObjectPath": "SuiteClobberSrc",
+         "prefabPath": f"{TMP}/Victim.prefab"}]})
+    victim = os.path.join(UNITY_ROOT, TMP, "Victim.prefab")
+    if mk.get("failed") or not os.path.exists(victim):
+        call("scene_apply", {"operations": [{"op": "delete", "target": "SuiteClobberSrc"}]})
+        return False, "SETUP FAILED: victim prefab not created"
+    r = call("material_apply", {"operations": [
+        {"op": "create", "path": f"{TMP}/Victim.prefab"}]})
+    body = open(victim, encoding="utf-8", errors="replace").read(400)
+    clobbered = "Material:" in body and "GameObject" not in body
+    call("scene_apply", {"operations": [{"op": "delete", "target": "SuiteClobberSrc"}]})
+    refused = ("_err" in r) or bool(r.get("failed"))
+    if refused and not clobbered:
+        return True, "refused; the prefab was left intact"
+    return False, f"accepted={not refused}; prefab overwritten with material YAML={clobbered}"
+
+
+def c_f19_trace_nested_prefab():
+    """F19: trace_dependencies must walk prefab->prefab nesting. find_references_to answers the
+    same edge in reverse, so a 0 here is a contradiction, not an empty project."""
+    _clean_tmp()
+    call("scene_apply", {"operations": [{"op": "create", "name": "SuiteInnerSrc"}]})
+    call("prefab_apply", {"operations": [
+        {"op": "create", "gameObjectPath": "SuiteInnerSrc",
+         "prefabPath": f"{TMP}/Inner.prefab"}]})
+    call("prefab_apply", {"operations": [{"op": "instantiate",
+                                         "prefabPath": f"{TMP}/Inner.prefab"}]})
+    call("scene_apply", {"operations": [
+        {"op": "create", "name": "SuiteOuterSrc"},
+        {"op": "reparent", "target": "SuiteInnerSrc", "newParent": "SuiteOuterSrc"}]})
+    call("prefab_apply", {"operations": [
+        {"op": "create", "gameObjectPath": "SuiteOuterSrc",
+         "prefabPath": f"{TMP}/Outer2.prefab"}]})
+    time.sleep(2)
+    rev = call("find_references_to", {"assetPath": f"{TMP}/Inner.prefab", "limit": 5})
+    fwd = call("trace_dependencies", {"assetPath": f"{TMP}/Outer2.prefab",
+                                      "maxDepth": 3, "limit": 20})
+    call("scene_apply", {"operations": [{"op": "delete", "target": "SuiteOuterSrc"}]})
+    rev_n = rev.get("totalReferences") if "_err" not in rev else 0
+    fwd_n = fwd.get("totalReturned") if "_err" not in fwd else -1
+    if not rev_n:
+        return False, "SETUP FAILED: nesting did not register in reverse either"
+    if fwd_n and fwd_n > 0:
+        return True, f"forward={fwd_n} dep(s), reverse={rev_n} ref(s)"
+    return False, (f"trace_dependencies={fwd_n} while find_references_to reports {rev_n} "
+                   f"ref(s) on the same edge")
+
+
+def c_f20_create_twice_signalled():
+    """F20: repeating a create must refuse, or distinguish created from replaced. animation_apply
+    already refuses with a pointer to the edit tool; the others report identical success."""
+    _clean_tmp()
+    a = call("material_apply", {"operations": [{"op": "create", "path": f"{TMP}/Twice.mat"}]})
+    b = call("material_apply", {"operations": [{"op": "create", "path": f"{TMP}/Twice.mat"}]})
+    if "_err" in a or a.get("failed"):
+        return False, "SETUP FAILED: first create did not succeed"
+    refused = ("_err" in b) or bool(b.get("failed"))
+    if refused:
+        return True, "second create refused"
+    blob = json.dumps(b).lower()
+    if "replaced" in blob or "overwrit" in blob or "existed" in blob:
+        return True, "second create reported as a replacement"
+    return False, "second create returned an identical success — created and replaced are indistinguishable"
+
+
+def c_f21_self_reparent_refused():
+    """F21: reparenting a GameObject under itself must be refused."""
+    call("scene_apply", {"operations": [{"op": "create", "name": "SuiteSelfP"}]})
+    r = call("scene_apply", {"operations": [
+        {"op": "reparent", "target": "SuiteSelfP", "newParent": "SuiteSelfP"}]})
+    call("scene_apply", {"operations": [{"op": "delete", "target": "SuiteSelfP"}]})
+    refused = ("_err" in r) or bool(r.get("failed"))
+    return (refused, "refused" if refused else "accepted a self-parent")
+
+
+def c_f21_scene_duplicate_self_refused():
+    """F21-sibling: scene_manage duplicate with sourcePath==destPath must refuse. Unlike
+    createVariant's own explicit basePrefabPath==variantPath check (see the createVariant sibling
+    case below), duplicate has no dedicated self-check of its own - it is refused as a side effect
+    of destPath's own already-exists guard (AssetPathGuard.RequireNewAssetPath): a self-duplicate's
+    destination trivially already exists, being the source itself. Guards the scene file is left
+    untouched on disk, not just that the call errors."""
+    _clean_tmp()
+    path = f"{TMP}/SelfDup.unity"
+    mk = call("scene_manage", {"operations": [{"op": "create", "path": path}]})
+    on_disk = os.path.join(UNITY_ROOT, path)
+    if mk.get("failed") or not os.path.exists(on_disk):
+        return False, f"SETUP FAILED: scene not written: {json.dumps(mk)[:150]}"
+    before = open(on_disk, "rb").read()
+    r = call("scene_manage", {"operations": [
+        {"op": "duplicate", "sourcePath": path, "destPath": path}]})
+    after = open(on_disk, "rb").read() if os.path.exists(on_disk) else b""
+    refused = ("_err" in r) or bool(r.get("failed"))
+    unchanged = before == after
+    blob = json.dumps(r).lower()
+    mentions = "selfdup.unity" in blob or "already exist" in blob
+    if refused and unchanged and mentions:
+        return True, "refused (already-exists guard), scene left untouched"
+    return False, f"accepted={not refused}; unchanged={unchanged}; error mentions path/reason={mentions}"
+
+
+def c_f21_prefab_createvariant_self_refused():
+    """F21: prefab_apply createVariant with basePrefabPath==variantPath must refuse -
+    PrefabCommands.DoCreateVariant's own dedicated check (its doc comment: accepting base ==
+    variant "destroyed the target during the tester's own repro", the variant save silently
+    replacing the very base prefab it was meant to be based on). Guards the base prefab file is
+    left byte-identical, not just that the call errors."""
+    _clean_tmp()
+    base_path = f"{TMP}/SelfVariantBase.prefab"
+    call("scene_apply", {"operations": [{"op": "create", "name": "SuiteSelfVariantSrc"}]})
+    mk = call("prefab_apply", {"operations": [
+        {"op": "create", "gameObjectPath": "SuiteSelfVariantSrc", "prefabPath": base_path}]})
+    call("scene_apply", {"operations": [{"op": "delete", "target": "SuiteSelfVariantSrc"}]})
+    on_disk = os.path.join(UNITY_ROOT, base_path)
+    if mk.get("failed") or not os.path.exists(on_disk):
+        return False, f"SETUP FAILED: base prefab not created: {json.dumps(mk)[:150]}"
+    before = open(on_disk, "rb").read()
+    r = call("prefab_apply", {"operations": [
+        {"op": "createVariant", "basePrefabPath": base_path, "variantPath": base_path}]})
+    after = open(on_disk, "rb").read() if os.path.exists(on_disk) else b""
+    refused = ("_err" in r) or bool(r.get("failed"))
+    unchanged = before == after
+    blob = json.dumps(r).lower()
+    mentions = "differ" in blob or "selfvariantbase.prefab" in blob
+    if refused and unchanged and mentions:
+        return True, "refused (must-differ guard), base prefab left byte-identical"
+    return False, f"accepted={not refused}; unchanged={unchanged}; error mentions reason={mentions}"
+
+
 # --------------------------------------------------------------------------- registry
 
 CASES = [
@@ -425,8 +606,8 @@ CASES = [
      "no boolean subschemas anywhere (latent against a stricter validator)"),
     ("P3", "F5",  False, "pass", c_f5_server_version,
      "initialize advertises the product version, not the assembly version"),
-    ("G1", "F6",  False, "fail", c_f6_trace_material,
-     "trace_dependencies reports a material's texture/shader dependencies"),
+    ("G1", "F6",  False, "pass", c_f6_trace_material,
+     "trace_dependencies resolves a real asset's dependencies (script + project texture)"),
     ("G2", "F6",  False, "pass", c_f6_refs_to_texture,
      "find_references_to answers for a referenced texture"),
     ("G3", "F6",  False, "pass", c_f6_search_texture,
@@ -453,6 +634,20 @@ CASES = [
      "GUARD: asset_manage move preserves GUID and removes the stale .meta"),
     ("E6", "-",   True,  "pass", c_material_setproperty_on_disk,
      "GUARD: material_apply setProperty is present in the saved YAML"),
+    ("E7", "F16", True,  "pass", c_f16_traversal_refused,
+     "a '..' path cannot write outside Assets/ (test removes any escape it finds)"),
+    ("E8", "F16", True,  "pass", c_f16_no_clobber,
+     "create does not silently overwrite an existing file of another type"),
+    ("E9", "F19", True,  "pass", c_f19_trace_nested_prefab,
+     "trace_dependencies walks prefab->prefab nesting that find_references_to sees in reverse"),
+    ("E10", "F20", True, "pass", c_f20_create_twice_signalled,
+     "a repeated create refuses, or distinguishes created from replaced"),
+    ("E11", "F21", True, "pass", c_f21_self_reparent_refused,
+     "reparenting a GameObject under itself is refused"),
+    ("E12", "F21", True, "pass", c_f21_scene_duplicate_self_refused,
+     "scene_manage duplicate with sourcePath==destPath is refused, not silently self-overwritten"),
+    ("E13", "F21", True, "pass", c_f21_prefab_createvariant_self_refused,
+     "prefab_apply createVariant with basePrefabPath==variantPath is refused, base left byte-identical"),
 ]
 
 
@@ -538,8 +733,10 @@ def main():
             print(f"  {cid} ({fid}): expected {exp}, got {act} — {detail}")
         print("\nIf a case flipped to NOW FIXED, change its expect to \"pass\" to guard it.")
     else:
-        print("No deviations: every open finding still reproduces, nothing previously")
-        print("correct has regressed.")
+        n_open = sum(1 for c in CASES if c[3] == "fail")
+        print(f"No deviations. {len(CASES) - n_open} case(s) behaving correctly"
+              + (f", {n_open} open finding(s) still reproducing." if n_open
+                 else " — nothing has regressed."))
     _clean_tmp()
     return 1 if deviations else 0
 

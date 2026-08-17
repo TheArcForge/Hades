@@ -65,6 +65,69 @@ public class ToolCallTests : IClassFixture<WebApplicationFactory<Program>>, IDis
     }
 
     [Fact]
+    public async Task SearchByName_KindParameterIsAdvertisedAsSupportingImportedAssetKinds()
+    {
+        // search_by_name's 'kind' filter covers imported assets too (Texture2D, Model, AudioClip,
+        // ...), not just script-declared kinds (Class, Struct, ...) - the parameter's own
+        // Description is the only place a caller learns that without trial and error.
+        var tool = Assert.Single((await McpTestClient.ListTools(_factory))
+            .GetProperty("result").GetProperty("tools").EnumerateArray(),
+            t => t.GetProperty("name").GetString() == "search_by_name");
+
+        var kindDescription = tool.GetProperty("inputSchema").GetProperty("properties")
+            .GetProperty("kind").GetProperty("description").GetString()!;
+
+        Assert.Contains("Texture2D", kindDescription);
+        Assert.Contains("Model", kindDescription);
+        Assert.Contains("AudioClip", kindDescription);
+    }
+
+    // ---------------------------------------------------------------- F7-sibling: unrecognised 'kind' errors, never a silent empty set
+    //
+    // search_by_name.kind never got graph_query.kind's own F7 fix (QueryTools.GraphQuery): a typo
+    // or wrong-case kind silently returned {results: [], totalReturned: 0}, indistinguishable from
+    // a genuinely empty area of the graph - even though CLAUDE.md tells an agent to reach for this
+    // tool FIRST. Same fix, same vocabulary source (ProjectService.KnownNodeKinds) as graph_query's
+    // own check, so the two tools can never name a different "known kind" list.
+
+    [Fact]
+    public async Task SearchByName_UnrecognisedKind_ErrorsInsteadOfSilentlyEmpty()
+    {
+        // "Texture" - a retired v1.2 term, never a real node kind (the real one is "Texture2D",
+        // per this tool's own [Description]) - used to return an ordinary-looking empty result.
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "search_by_name",
+            new { namePattern = "player", kind = "Texture" }));
+
+        Assert.Contains("Texture", text);
+        Assert.Contains("does not match any node kind", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("case-sensitive", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Class", text);
+        Assert.Contains("Interface", text);
+    }
+
+    [Fact]
+    public async Task SearchByName_WrongCaseKind_Errors()
+    {
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "search_by_name",
+            new { namePattern = "player", kind = "class" }));
+
+        Assert.Contains("class", text);
+        Assert.Contains("Class", text); // the real, correctly-cased kind
+    }
+
+    [Fact]
+    public async Task SearchByName_ValidKindWithNoNameMatch_StillAnOrdinaryEmptyResult_NotAnError()
+    {
+        // The same F7 caveat graph_query's own check documents: a REAL kind combined with a
+        // namePattern that happens to match nothing must stay an ordinary empty result, not a
+        // false-positive error - this only fires when 'kind' ITSELF is the reason nothing matched.
+        var structured = Structured(await McpTestClient.CallTool(_factory, "search_by_name",
+            new { namePattern = "zzzznomatchzzzz", kind = "Class" }));
+
+        Assert.Equal(0, structured.GetProperty("totalReturned").GetInt32());
+    }
+
+    [Fact]
     public async Task SearchByName_ReportsTruncationWhenCapped()
     {
         var structured = Structured(await McpTestClient.CallTool(

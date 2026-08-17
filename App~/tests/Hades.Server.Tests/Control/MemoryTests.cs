@@ -35,6 +35,7 @@ public sealed class MemoryEndpointHttpTests : IDisposable
     readonly string _projectRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
     string ConnectionFilePath => Path.Combine(_tempDir, "control.token");
 
+    readonly AppPaths _paths;
     readonly ProjectService _projects;
 
     public MemoryEndpointHttpTests()
@@ -42,7 +43,8 @@ public sealed class MemoryEndpointHttpTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_projectRoot, "ProjectSettings"));
         File.WriteAllText(Path.Combine(_projectRoot, "ProjectSettings", "ProjectSettings.asset"), $"  productGUID: {ProjectGuid}\n");
 
-        _projects = new ProjectService(new AppPaths(Path.Combine(_tempDir, "app")));
+        _paths = new AppPaths(Path.Combine(_tempDir, "app"));
+        _projects = new ProjectService(_paths);
         _projects.Adopt(_projectRoot);
     }
 
@@ -314,6 +316,25 @@ public sealed class MemoryEndpointHttpTests : IDisposable
 
     [Theory]
     [MemberData(nameof(UnsafeNames))]
+    public async Task GetDocument_UnsafeName_400BodyContainsNoParameterNameLeak(string name)
+    {
+        // ArgumentException.Message appends " (Parameter 'x')" whenever ParamName is set - a 400
+        // body must read as clean, actionable text, not an implementation detail about which C#
+        // parameter of which internal method happened to throw.
+        using var listener = StartListener();
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Get,
+            $"/control/memory/document?project={ProjectGuid}&name={Uri.EscapeDataString(name)}", listener.Token));
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.DoesNotContain("(Parameter", body.GetProperty("error").GetString());
+    }
+
+    [Theory]
+    [MemberData(nameof(UnsafeNames))]
     public async Task WriteDocument_UnsafeName_Returns400_NeverA500OrAFileOutsideMemoryDir(string name)
     {
         using var listener = StartListener();
@@ -437,6 +458,104 @@ public sealed class MemoryEndpointHttpTests : IDisposable
         var proposal = _projects.ReadMemoryProposal(ProjectGuid, fileName);
         Assert.NotNull(proposal);
         Assert.Equal("accepted", proposal!.Status);
+    }
+
+    // ---------------------------------------------------------------- proposals: accept is idempotent (P3)
+
+    [Fact]
+    public async Task AcceptProposal_AlreadyAccepted_SecondCallIsRefused_AndTargetContentIsUnchanged()
+    {
+        // No status gate used to mean a second accept of the same proposal appended its content
+        // into target_file AGAIN - reproduced simply by calling accept twice.
+        var written = _projects.ProposeMemoryUpdate(ProjectGuid, "patterns.md", "New proposed entry.", "why")!;
+        var fileName = written.FileName;
+
+        using var listener = StartListener();
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var first = await client.SendAsync(Request(HttpMethod.Post,
+            $"/control/memory/proposals/accept?project={ProjectGuid}&fileName={Uri.EscapeDataString(fileName)}", listener.Token));
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+
+        var targetAfterFirstAccept = _projects.ReadMemoryDocument(ProjectGuid, "patterns.md")!.RawText;
+
+        var second = await client.SendAsync(Request(HttpMethod.Post,
+            $"/control/memory/proposals/accept?project={ProjectGuid}&fileName={Uri.EscapeDataString(fileName)}", listener.Token));
+
+        Assert.Equal(HttpStatusCode.BadRequest, second.StatusCode);
+        var body = await second.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains("accepted", body.GetProperty("error").GetString(), StringComparison.OrdinalIgnoreCase);
+
+        // Exactly one merge: the target document is byte-identical to what it was after the FIRST
+        // accept - the proposed content was never appended a second time.
+        var targetAfterSecondAccept = _projects.ReadMemoryDocument(ProjectGuid, "patterns.md")!.RawText;
+        Assert.Equal(targetAfterFirstAccept, targetAfterSecondAccept);
+        Assert.Equal("New proposed entry.", targetAfterSecondAccept);
+    }
+
+    [Fact]
+    public async Task AcceptProposal_DeferredThenAccepted_Succeeds()
+    {
+        // "pending" is not the only status accept must still work from - a proposal a human
+        // deferred earlier must remain acceptable later.
+        var written = _projects.ProposeMemoryUpdate(ProjectGuid, "patterns.md", "content", "why")!;
+        var fileName = written.FileName;
+        _projects.SetMemoryProposalStatus(ProjectGuid, fileName, "deferred");
+
+        using var listener = StartListener();
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Post,
+            $"/control/memory/proposals/accept?project={ProjectGuid}&fileName={Uri.EscapeDataString(fileName)}", listener.Token));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("accepted", _projects.ReadMemoryProposal(ProjectGuid, fileName)!.Status);
+    }
+
+    // ---------------------------------------------------------------- proposals: accept normalizes
+    // an extension-less target_file (P2)
+
+    [Fact]
+    public async Task AcceptProposal_ExtensionLessTargetFile_LandsInADotMdFile_VisibleViaSummaryRecallAndValidate()
+    {
+        // Simulates a real v1.2 .arcforge import: target_file frontmatter with no ".md" - the
+        // server has always documented this as valid input, but accepting it used to write the
+        // merged content into an extension-less file that no *.md listing surface ever showed
+        // again, reachable only by asking for that exact bare name back.
+        var proposalsDir = Path.Combine(_paths.MemoryDir(ProjectGuid), "proposals");
+        Directory.CreateDirectory(proposalsDir);
+        const string fileName = "20260801-160000-conventions.md";
+        File.WriteAllText(Path.Combine(proposalsDir, fileName),
+            "---\ntarget_file: conventions\nrationale: why\nstatus: pending\n---\nMentions a jackfruit convention.\n");
+
+        using var listener = StartListener();
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Post,
+            $"/control/memory/proposals/accept?project={ProjectGuid}&fileName={Uri.EscapeDataString(fileName)}", listener.Token));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var memoryDir = _paths.MemoryDir(ProjectGuid);
+        Assert.True(File.Exists(Path.Combine(memoryDir, "conventions.md")));
+        Assert.False(File.Exists(Path.Combine(memoryDir, "conventions")));
+
+        // get_memory_summary's surface
+        var summary = _projects.GetMemorySummary(ProjectGuid);
+        Assert.Contains(summary!.Documents, d => d.Name == "conventions.md");
+
+        // recall_memory's surface
+        var recallHits = _projects.RecallMemory(ProjectGuid, "jackfruit");
+        Assert.Contains(recallHits, h => h.Name == "conventions.md");
+
+        // validate_memory's surface - proves the file is actually being scanned, not just present
+        _projects.WriteMemoryDocument(ProjectGuid, "conventions.md",
+            _projects.ReadMemoryDocument(ProjectGuid, "conventions.md")!.RawText
+            + "\nSee `Assets/Scripts/GoneNow.cs` for details.\n");
+        var findings = _projects.ValidateMemory(ProjectGuid);
+        Assert.Contains(findings, f => f.Document == "conventions.md" && f.ScriptPath == "Assets/Scripts/GoneNow.cs");
     }
 
     // ---------------------------------------------------------------- proposals: dismiss

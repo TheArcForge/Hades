@@ -83,6 +83,19 @@ public sealed record V12DetectionResult
 {
     public required string ProjectRoot { get; init; }
 
+    /// <summary>Whether <see cref="ProjectRoot"/> exists as a directory AT ALL - checked first, and
+    /// reported honestly. Every OTHER field below still resolves to its ordinary "absent" value even
+    /// when this is false (<see cref="File.Exists(string)"/>/<see cref="Directory.Exists(string)"/>
+    /// on a path under a nonexistent root safely return false, never throw), but a caller must not
+    /// read those as "confirmed nothing here" when this is false - the honest claim is "could not
+    /// even look," not "looked and found nothing." Before this field existed, a project whose folder
+    /// had moved, been deleted, or sat on an unmounted volume - despite still being a KNOWN,
+    /// previously-adopted project - reported the exact same "every item absent" shape as a genuine,
+    /// freshly-scanned, v1.2-free project, with no way for a caller to tell the two apart. The
+    /// Control API's migration-detect route maps this straight onto its own wire response so a
+    /// caller over HTTP gets the same distinction.</summary>
+    public required bool ProjectRootExists { get; init; }
+
     public required V12ManifestEntry ManifestEntry { get; init; }
 
     /// <summary>True on the one condition spec #4 §5 defines for offering migration at all: the
@@ -166,6 +179,7 @@ public static class V12Detector
     public static V12DetectionResult Detect(string projectRoot) => new()
     {
         ProjectRoot = projectRoot,
+        ProjectRootExists = Directory.Exists(projectRoot),
         ManifestEntry = ReadManifestEntry(projectRoot),
         HasMemory = Directory.Exists(MemoryDir(projectRoot)),
         MemoryDocumentCount = CountMemoryDocuments(projectRoot),

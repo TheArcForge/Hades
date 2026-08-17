@@ -33,10 +33,19 @@ public enum ControlSeverity
 
 /// <summary>One project's line in the menu bar. <see cref="Status"/> is the complete,
 /// human-readable string to print verbatim - including any relative time - never raw fields
-/// (a timestamp, a boolean) for the shell to format itself.</summary>
+/// (a timestamp, a boolean) for the shell to format itself. <see cref="ProductGuid"/> is this
+/// project's stable identity - present because <see cref="Project"/> (the display name) is NOT
+/// unique: two different projects can share a name (e.g. two checkouts of the same repo), and a
+/// shell keying rows by name alone collides them into one. The shell must key/identify rows by
+/// <see cref="ProductGuid"/>, never by <see cref="Project"/>.</summary>
 public sealed record SummaryRow
 {
     [JsonPropertyName("project")] public required string Project { get; init; }
+
+    /// <summary>This project's stable identity - see this record's own doc comment for why the
+    /// shell must key rows on this, never on <see cref="Project"/>.</summary>
+    [JsonPropertyName("productGuid")] public required string ProductGuid { get; init; }
+
     [JsonPropertyName("status")] public required string Status { get; init; }
     [JsonPropertyName("severity")] public required ControlSeverity Severity { get; init; }
 }
@@ -92,6 +101,10 @@ public sealed record SummaryResult
 public sealed record ProjectSnapshot
 {
     public required string Name { get; init; }
+
+    /// <summary>This project's stable identity, threaded straight through to
+    /// <see cref="SummaryRow.ProductGuid"/> - see that property's own doc comment for why.</summary>
+    public required string ProductGuid { get; init; }
 
     /// <summary>False when the project's directory no longer exists on disk - an unmounted
     /// volume, a move, or a deletion. The one <see cref="ControlIconState.Error"/> condition this
@@ -196,6 +209,7 @@ public static class SummaryEndpoint
             return new ProjectSnapshot
             {
                 Name = project.Name,
+                ProductGuid = project.ProductGuid,
                 PathExists = Directory.Exists(project.Path),
                 Attached = charon?.Attached ?? false,
                 Busy = charon?.Busy ?? false,
@@ -305,6 +319,7 @@ public static class SummaryEndpoint
             return new SummaryRow
             {
                 Project = project.Name,
+                ProductGuid = project.ProductGuid,
                 Status = "Project path not found — check that the volume is mounted.",
                 Severity = ControlSeverity.Error,
             };
@@ -324,6 +339,7 @@ public static class SummaryEndpoint
         return new SummaryRow
         {
             Project = project.Name,
+            ProductGuid = project.ProductGuid,
             Status = $"{editorPart} · {indexPart}",
             Severity = project.Busy ? ControlSeverity.Warning : ControlSeverity.Ok,
         };

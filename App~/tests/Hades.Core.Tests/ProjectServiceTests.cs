@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Reflection;
 using Hades.Core;
 using Hades.Core.Storage;
 
@@ -42,6 +44,51 @@ public class ProjectServiceTests : IDisposable
         Directory.CreateDirectory(_projectRoot);
 
         Assert.Null(NewService().AdoptAndIndex(_projectRoot));
+    }
+
+    [Fact]
+    public void Adopt_WhenTheArcforgeMemoryImportFails_StillAdoptsAndAnnounces_AndALaterAdoptRetriesTheImport()
+    {
+        // Unix permissions are the failure mechanism under test; there is no Windows equivalent
+        // of an unreadable-but-present mode-000 directory.
+        if (OperatingSystem.IsWindows()) return;
+
+        MakeUnityProject();
+        var memorySource = Path.Combine(_projectRoot, ".arcforge", "memory");
+        Directory.CreateDirectory(memorySource);
+        File.WriteAllText(Path.Combine(memorySource, "conventions.md"), "# Conventions\n");
+        File.SetUnixFileMode(memorySource, UnixFileMode.None);
+
+        try
+        {
+            var service = NewService();
+            var announced = false;
+            service.ProjectAdopted += _ => announced = true;
+
+            var adopted = service.Adopt(_projectRoot);
+
+            // The project genuinely registered (project.json written) before the import ran, so
+            // Adopt must report it and announce it - a throw here would leave a half-adopted
+            // project no observer ever hears about.
+            Assert.NotNull(adopted);
+            Assert.True(announced);
+
+            // And the failed attempt must not consume the once-per-process import: with the
+            // directory readable again, the next Adopt retries and the authored document arrives.
+            File.SetUnixFileMode(memorySource,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            service.Adopt(_projectRoot);
+
+            var summary = service.GetMemorySummary(adopted!.ProductGuid);
+            Assert.NotNull(summary);
+            Assert.Contains(summary!.Documents, d => d.Name == "conventions.md");
+        }
+        finally
+        {
+            if (Directory.Exists(memorySource))
+                File.SetUnixFileMode(memorySource,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
     }
 
     [Fact]
@@ -247,6 +294,230 @@ public class ProjectServiceTests : IDisposable
 
         foreach (var guid in guids)
             Assert.NotNull(service.Summary(guid)?.LastIndexedUtc);
+    }
+
+    // ---------------------------------------------------------------- RebuildGraph gating (F18-class)
+    //
+    // RebuildGraph used to call Reindex directly, bypassing the SAME per-project _indexGates
+    // semaphore EnsureIndexed uses — see that field's own doc comment: "nothing otherwise
+    // serialises EnsureIndexed for different projects" was equally true of RebuildGraph against
+    // its OWN project. A concurrent rebuild could therefore run its own Reindex at the same time
+    // as a routine EnsureIndexed (or the ObservationService sweep) reindexing the SAME project,
+    // through two independent database connections with no app-level exclusion between them.
+    //
+    // Proven deterministically rather than by racing real indexing (inherently flaky, and a false
+    // negative would prove nothing): grab the SAME private per-project SemaphoreSlim EnsureIndexed
+    // itself acquires via _indexGates — there is no other observable seam for "did this acquire
+    // THIS lock", and the real synchronization primitive is what's under test, not a stand-in for
+    // it — hold it exactly as EnsureIndexed would while mid-Reindex, and confirm RebuildGraph
+    // blocks on it rather than running straight through.
+
+    static SemaphoreSlim AcquireIndexGateForTest(ProjectService service, string productGuid)
+    {
+        var gatesField = typeof(ProjectService).GetField("_indexGates", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("ProjectService._indexGates not found — has it been renamed?");
+
+        var gates = (ConcurrentDictionary<string, SemaphoreSlim>)gatesField.GetValue(service)!;
+        return gates.GetOrAdd(productGuid, static _ => new SemaphoreSlim(1, 1));
+    }
+
+    [Fact]
+    public async Task RebuildGraph_BlocksWhileEnsureIndexedsGateIsHeld_ForTheSameProject()
+    {
+        MakeUnityProject();
+        var service = NewService();
+        var project = service.AdoptAndIndex(_projectRoot)!;
+
+        var gate = AcquireIndexGateForTest(service, project.ProductGuid);
+        await gate.WaitAsync(); // simulates EnsureIndexed already mid-Reindex for this project
+
+        var rebuildTask = Task.Run(() => service.RebuildGraph(project.ProductGuid));
+
+        var wonRace = await Task.WhenAny(rebuildTask, Task.Delay(TimeSpan.FromMilliseconds(500)));
+        Assert.NotSame(rebuildTask, wonRace); // RebuildGraph must NOT have run while the gate was held
+
+        gate.Release();
+
+        var result = await rebuildTask.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.NotNull(result);
+    }
+
+    [Fact]
+    public async Task RebuildGraph_ReleasesItsGate_SoASubsequentEnsureIndexedCallIsNotBlockedForever()
+    {
+        // The other half of the same proof: acquiring the gate must not leak it. If RebuildGraph
+        // acquired but never released, every future EnsureIndexed for this project would hang.
+        MakeUnityProject();
+        var service = NewService();
+        var project = service.AdoptAndIndex(_projectRoot)!;
+
+        var result = service.RebuildGraph(project.ProductGuid);
+        Assert.NotNull(result);
+
+        var gate = AcquireIndexGateForTest(service, project.ProductGuid);
+        var acquired = await gate.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(acquired, "the index gate was still held after RebuildGraph returned — it leaked the lock");
+        gate.Release();
+    }
+
+    // ---------------------------------------------------------------- I2: SyncChanges gating
+    //
+    // SyncChanges used to acquire no gate at all — neither the per-project _indexGates
+    // RebuildGraph/EnsureIndexed share, nor anything else — so a rebuild and an incremental sync
+    // (what the ObservationService periodic sweep and live watcher both drive) could run
+    // concurrently against the same project through two independent database connections, racing
+    // to interleave writes and permanently losing updates. Same deterministic proof technique as
+    // RebuildGraph's own gating tests above: grab the real per-project SemaphoreSlim directly.
+
+    [Fact]
+    public async Task SyncChanges_BlocksWhileRebuildGraphsGateIsHeld_ForTheSameProject()
+    {
+        MakeUnityProject();
+        var service = NewService();
+        var project = service.AdoptAndIndex(_projectRoot)!;
+
+        var gate = AcquireIndexGateForTest(service, project.ProductGuid);
+        await gate.WaitAsync(); // simulates RebuildGraph (or EnsureIndexed) already mid-Reindex
+
+        var syncTask = Task.Run(() => service.SyncChanges(project.ProductGuid));
+
+        var wonRace = await Task.WhenAny(syncTask, Task.Delay(TimeSpan.FromMilliseconds(500)));
+        Assert.NotSame(syncTask, wonRace); // SyncChanges must NOT have run while the gate was held
+
+        gate.Release();
+
+        var result = await syncTask.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.NotNull(result);
+    }
+
+    [Fact]
+    public async Task SyncChanges_ReleasesItsGate_SoASubsequentRebuildIsNotBlockedForever()
+    {
+        MakeUnityProject();
+        var service = NewService();
+        var project = service.AdoptAndIndex(_projectRoot)!;
+
+        var result = service.SyncChanges(project.ProductGuid);
+        Assert.NotNull(result);
+
+        var gate = AcquireIndexGateForTest(service, project.ProductGuid);
+        var acquired = await gate.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(acquired, "the index gate was still held after SyncChanges returned — it leaked the lock");
+        gate.Release();
+    }
+
+    // ---------------------------------------------------------------- I3: valid -> unparseable
+    //
+    // A file that WAS a valid, indexed asset and has since become unparseable must lose its old
+    // nodes exactly as a deleted file would — proven end to end here through BOTH the incremental
+    // (SyncChanges) and full (RebuildGraph) entry points, mirroring AssetIndexerTests' own
+    // lower-level proof of the same fix in IndexAsset itself.
+
+    const string PoisonPrefabHeader = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n";
+
+    void WritePrefab(string relativePath, string body, string guid)
+    {
+        var full = Path.Combine(_projectRoot, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllText(full, PoisonPrefabHeader + body);
+        File.WriteAllText(full + ".meta", $"fileFormatVersion: 2\nguid: {guid}\n");
+    }
+
+    [Fact]
+    public void CorruptingAValidPrefab_RemovesItsNodes_OnSync()
+    {
+        MakeUnityProject();
+        WritePrefab("Assets/Player.prefab", "--- !u!1 &111\nGameObject:\n  m_Name: Player\n",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        var service = NewService();
+        var project = service.AdoptAndIndex(_projectRoot)!;
+        // kind-filtered: MakeUnityProject's own fixture script is named "PlayerController",
+        // which substring-matches "Player" too and would otherwise make this setup assertion
+        // (and the post-corruption one below) ambiguous about which node actually disappeared.
+        Assert.Single(service.Search(project.ProductGuid, "Player", kind: "GameObject"));
+
+        File.WriteAllText(Path.Combine(_projectRoot, "Assets/Player.prefab"),
+            PoisonPrefabHeader + "--- !u!4294967296 &111\nGameObject:\n  m_Name: Player\n");
+        var sweep = service.SyncChanges(project.ProductGuid);
+
+        Assert.NotNull(sweep);
+        Assert.Empty(service.Search(project.ProductGuid, "Player", kind: "GameObject"));
+    }
+
+    [Fact]
+    public void CorruptingAValidPrefab_RemovesItsNodes_OnRebuild()
+    {
+        MakeUnityProject();
+        WritePrefab("Assets/Player.prefab", "--- !u!1 &111\nGameObject:\n  m_Name: Player\n",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        var service = NewService();
+        var project = service.AdoptAndIndex(_projectRoot)!;
+        Assert.Single(service.Search(project.ProductGuid, "Player", kind: "GameObject"));
+
+        File.WriteAllText(Path.Combine(_projectRoot, "Assets/Player.prefab"),
+            PoisonPrefabHeader + "--- !u!4294967296 &111\nGameObject:\n  m_Name: Player\n");
+        var result = service.RebuildGraph(project.ProductGuid);
+
+        Assert.NotNull(result);
+        Assert.Empty(service.Search(project.ProductGuid, "Player", kind: "GameObject"));
+    }
+
+    // ---------------------------------------------------------------- I8: file_state ghosts
+    //
+    // A full rebuild's SweepStaleNodes call (inside ScriptIndexer/AssetIndexer.IndexProject)
+    // always removed a deleted file's graph nodes, but never its file_state row — so the file
+    // kept a phantom "last indexed" record forever. RecentlyChanged reads file_state directly
+    // (see its own doc comment), so it is the existing public surface that can see a ghost.
+
+    [Fact]
+    public void RebuildGraph_RemovesFileStateForFilesDeletedSinceLastIndex()
+    {
+        MakeUnityProject(); // Assets/Scripts/PlayerController.cs
+        var service = NewService();
+        var project = service.AdoptAndIndex(_projectRoot)!;
+        Assert.Contains(service.RecentlyChanged(project.ProductGuid), f => f.Path == "Assets/Scripts/PlayerController.cs");
+
+        File.Delete(Path.Combine(_projectRoot, "Assets", "Scripts", "PlayerController.cs"));
+        var result = service.RebuildGraph(project.ProductGuid);
+
+        Assert.NotNull(result);
+        Assert.DoesNotContain(service.RecentlyChanged(project.ProductGuid), f => f.Path == "Assets/Scripts/PlayerController.cs");
+    }
+
+    // ---------------------------------------------------------------- I5: warnings surfaced
+    //
+    // ScriptIndexer/AssetIndexer already build a per-file IndexResult.Warnings list — Reindex and
+    // SyncChanges both discarded it entirely, so a poison file's own I1 diagnostic never reached
+    // any caller. Now carried on the existing RebuildResult / SweepResult surfaces.
+
+    [Fact]
+    public void RebuildGraph_SurfacesPerFileWarningsFromIndexing()
+    {
+        MakeUnityProject();
+        File.WriteAllText(Path.Combine(_projectRoot, "Assets", "Poison.prefab"),
+            PoisonPrefabHeader + "--- !u!4294967296 &1\nGameObject:\n  m_Name: Poison\n");
+        var service = NewService();
+        var project = service.Adopt(_projectRoot)!;
+
+        var result = service.RebuildGraph(project.ProductGuid);
+
+        Assert.NotNull(result);
+        Assert.Contains(result!.Warnings, w => w.Contains("Assets/Poison.prefab"));
+    }
+
+    [Fact]
+    public void SyncChanges_SurfacesPerFileWarningsFromIndexing()
+    {
+        MakeUnityProject();
+        var service = NewService();
+        var project = service.AdoptAndIndex(_projectRoot)!;
+
+        File.WriteAllText(Path.Combine(_projectRoot, "Assets", "Poison.prefab"),
+            PoisonPrefabHeader + "--- !u!4294967296 &1\nGameObject:\n  m_Name: Poison\n");
+        var sweep = service.SyncChanges(project.ProductGuid);
+
+        Assert.NotNull(sweep);
+        Assert.Contains(sweep!.Warnings, w => w.Contains("Assets/Poison.prefab"));
     }
 
     public void Dispose()

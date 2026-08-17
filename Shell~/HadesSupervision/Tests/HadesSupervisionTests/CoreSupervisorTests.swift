@@ -414,4 +414,67 @@ struct CoreSupervisorTests {
         #expect(launches.count == 1, "stop() followed by a late handler must not spawn a replacement core")
         #expect(canBindLoopback(port: port), "no orphan may be left holding the port after stop()")
     }
+
+    // MARK: - Quit races: stop() during an IN-FLIGHT restart cycle must not spawn afterward (D-B)
+
+    @Test("stop() called while a restart cycle is suspended in backoff between attempts must not let that cycle spawn a fresh core afterward, and must not leave state running with no ownership")
+    func stopDuringInFlightBackoffDoesNotSpawnFreshCore() async throws {
+        let home = try makeTempHome()
+        let configuration = testConfiguration(
+            home: home,
+            maxRestartAttempts: 5,
+            backoff: { _ in .seconds(1) },
+            pingTimeout: .milliseconds(500),
+            pingPollInterval: .milliseconds(20),
+            minimumStableUptime: .milliseconds(50)
+        )
+        let supervisor = CoreSupervisor(configuration: configuration)
+
+        // Arms attempt 1 to hang forever instead of ever answering ping, so spawnOnce's own
+        // pingTimeout path is what fails it (calling process.terminate() on its reaper and
+        // returning false) - a REAL in-flight restart cycle that then falls into
+        // spawnWithRetries' backoff sleep before trying attempt 2, exactly the suspension point
+        // D-B identifies. The reaper's own shutdown (a 250ms poll for the SIGTERM it was just
+        // sent, then a full second of grace before SIGKILL - see HadesCoreReaper's own
+        // killCoreProcessGroup) guarantees that reaper still reports `isRunning` for well over a
+        // second afterward, which is what lets stop()'s own guard (ownership == .spawned, a
+        // running reaperProcess) still pass during the backoff window below.
+        try Data().write(to: home.appendingPathComponent(".fakecore_hang_once"))
+
+        // start() does not return until spawnWithRetries() itself returns - which, for this
+        // in-flight cycle, is only after attempt 1 fails, the full backoff sleep, AND attempt 2
+        // all happen. So it must run concurrently with this test's own polling and the later
+        // stop() below, exactly like the menu bar's own call to start() runs concurrently with a
+        // later quit triggering stop() for real - awaiting it directly here would simply wait for
+        // the whole sequence to finish before this test ever got a chance to act mid-cycle.
+        let startTask = Task { await supervisor.start() }
+
+        // Deterministic, not a wall-clock guess: `state` is set to `.restarting(attempt: 2)`
+        // synchronously, immediately before the backoff `Task.sleep` begins (spawnWithRetries
+        // never awaits between them) - the instant this is observed, the restart cycle is
+        // suspended in that sleep and has not yet called spawnOnce() again.
+        let suspendedInBackoff = await waitUntil(timeout: .seconds(5), interval: .milliseconds(10)) {
+            await supervisor.state == .restarting(attempt: 2)
+        }
+        #expect(suspendedInBackoff, "attempt 1 (hung) must fail on its own pingTimeout and hand off to attempt 2's backoff sleep")
+
+        let launchesBeforeStop = readLaunchLog(home: home)
+        #expect(launchesBeforeStop.count == 1, "only the hung attempt 1 core should have launched so far")
+
+        await supervisor.stop()
+
+        #expect(await supervisor.state == .notStarted, "stop() must leave a terminal, not-running state")
+        #expect(await supervisor.currentOwnership == nil, "stop() must not leave ownership dangling")
+
+        // Let the suspended cycle actually resume from its backoff sleep and settle (bail, if
+        // fixed; wrongly spawn attempt 2, if not) before checking final state - deterministic,
+        // not a race against a fixed sleep.
+        await startTask.value
+
+        #expect(await supervisor.state == .notStarted, "no in-flight resume may move state off .notStarted after stop()")
+        #expect(await supervisor.currentOwnership == nil, "no in-flight resume may re-populate ownership after stop() cleared it")
+
+        let launchesAfterStop = readLaunchLog(home: home)
+        #expect(launchesAfterStop.count == 1, "no fresh core may be spawned by an in-flight restart cycle resuming after stop() - saw \(launchesAfterStop.count) launches")
+    }
 }

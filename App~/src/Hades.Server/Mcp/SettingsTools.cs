@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text.Json.Serialization;
 using Hades.Core;
 using Hades.Core.Reading;
+using Hades.Core.Unity;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -295,6 +296,13 @@ public sealed class SettingsTools(ProjectService projects)
     /// NOT in this list is a genuine surprise and is deliberately left to propagate rather than be
     /// papered over here. Same shape as InspectionTools' own Guarded - each tools file keeps its
     /// own copy rather than sharing one through ToolSupport, matching the existing convention.
+    ///
+    /// E2: <see cref="UnityYamlParseException"/> added alongside InspectTool's own Guarded, for the
+    /// same reason - see that copy's own doc comment. None of this file's own ReadThrough calls
+    /// (GetSettingsAsset, GetImportSettings, AnalyzeRenderPipeline) currently route through
+    /// UnityYamlReader.Read themselves, so today this is a consistency/defence-in-depth match
+    /// rather than a live gap here specifically, but a Guarded that silently omits a type the
+    /// sibling copy already catches is exactly the kind of drift this fix closes.
     /// </summary>
     static T Guarded<T>(Func<T> body)
     {
@@ -303,7 +311,7 @@ public sealed class SettingsTools(ProjectService projects)
             return body();
         }
         catch (Exception ex) when (ex is ArgumentException or FileNotFoundException
-            or InvalidDataException or NotSupportedException or IOException)
+            or InvalidDataException or NotSupportedException or IOException or UnityYamlParseException)
         {
             throw new McpException(ex.Message);
         }

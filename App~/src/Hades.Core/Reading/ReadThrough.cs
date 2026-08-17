@@ -20,6 +20,19 @@ namespace Hades.Core.Reading;
 public static class ReadThrough
 {
     /// <summary>
+    /// Recursion depth bound shared by every unbounded tree walk read-through does - <see
+    /// cref="Link"/>'s own <c>Assemble</c> (a GameObject hierarchy's <c>m_Father</c> parent chain)
+    /// and <see cref="ReadNode"/> (an arbitrarily-nested component field). E1: a
+    /// StackOverflowException is uncatchable in .NET, so a caller-supplied pathological asset (a
+    /// ~4000-deep chain, live-confirmed to crash the whole server process) can only be survived by
+    /// never recursing past a safe bound in the first place - <c>limit</c> does not help, since the
+    /// tree is built before truncation ever runs. 512 is comfortably above any realistic Unity
+    /// hierarchy or serialized-field depth (real projects rarely nest past a few dozen levels) yet
+    /// far below the ~3700-level threshold measured to actually overflow the thread stack.
+    /// </summary>
+    public const int MaxInspectDepth = 512;
+
+    /// <summary>
     /// Resolves a caller-supplied, project-relative path to an absolute one, refusing anything
     /// that would read outside the project's scan roots (<see cref="ProjectWalker.ResolveScanRoots"/>
     /// - Assets/, Packages/, and any local "file:" package).
@@ -341,7 +354,7 @@ public static class ReadThrough
             if (parser.Current is Scalar)
             {
                 parser.MoveNext(); // past the type-name key, onto its value
-                body = ReadNode(parser);
+                body = ReadNode(parser, relativePath);
             }
 
             if (parser.Current is MappingEnd) parser.MoveNext(); // close the outer mapping
@@ -482,7 +495,7 @@ public static class ReadThrough
                 $"'{relativePath}' has no document Unity declares as \"Material\" - it may not "
                 + "actually be a material asset.");
 
-        var document = ReadAllDocumentTrees(content).GetValueOrDefault(materialObject.FileId)
+        var document = ReadAllDocumentTrees(content, relativePath).GetValueOrDefault(materialObject.FileId)
             ?? new Dictionary<string, object?>(StringComparer.Ordinal);
 
         var shaderGuid = ReferenceGuid(document.GetValueOrDefault("m_Shader"));
@@ -630,7 +643,7 @@ public static class ReadThrough
     {
         var content = LoadValidatedContent(projectRoot, relativePath);
         var objects = UnityYamlReader.Read(content, relativePath);
-        var trees = ReadAllDocumentTrees(content);
+        var trees = ReadAllDocumentTrees(content, relativePath);
 
         var byFileId = objects.ToDictionary(o => o.FileId);
         var states = objects.Where(o => o.DeclaredTypeName == "AnimatorState").ToList();
@@ -746,9 +759,12 @@ public static class ReadThrough
     /// <see cref="Reading.ReferenceReading.FindUnsetReferences"/> relies on to scan every object in
     /// a file once rather than once per object. Internal rather than private for that second
     /// caller, in a different file by design - see ReferenceReading's own class doc comment for why
-    /// it is not folded into this already-large one.
+    /// it is not folded into this already-large one. <paramref name="displayName"/> only names
+    /// <see cref="ReadNode"/>'s own depth-limit error (E1); it defaults for
+    /// <see cref="Reading.ReferenceReading.FindUnsetReferences"/>'s call, which has no single asset
+    /// path of its own to offer - every OTHER caller here is one asset and passes its real path.
     /// </summary>
-    internal static Dictionary<long, Dictionary<string, object?>> ReadAllDocumentTrees(string content)
+    internal static Dictionary<long, Dictionary<string, object?>> ReadAllDocumentTrees(string content, string displayName = "this asset")
     {
         var trees = new Dictionary<long, Dictionary<string, object?>>();
         var parser = new Parser(new StringReader(UnityYamlPreprocessor.MakeStandardYaml(content)));
@@ -770,7 +786,7 @@ public static class ReadThrough
             if (parser.Current is Scalar)
             {
                 parser.MoveNext(); // past the type-name key, onto its value
-                body = ReadNode(parser);
+                body = ReadNode(parser, displayName);
             }
 
             if (parser.Current is MappingEnd) parser.MoveNext(); // close the outer mapping
@@ -804,10 +820,10 @@ public static class ReadThrough
                 var map = new Dictionary<string, object?>(StringComparer.Ordinal);
                 while (parser.Current is not MappingEnd)
                 {
-                    var key = ReadNode(parser) as string
+                    var key = ReadNode(parser, displayName) as string
                         ?? throw new InvalidDataException(
                             $"'{displayName}'.meta has an unexpected structure - a non-scalar top-level key.");
-                    map[key] = ReadNode(parser);
+                    map[key] = ReadNode(parser, displayName);
                 }
 
                 return map;
@@ -836,9 +852,24 @@ public static class ReadThrough
     /// duplicate keys (Animator controllers) cannot make it throw the way YamlStream does. A
     /// duplicate key here resolves last-write-wins, which is what a hand-rolled mapping walk does
     /// naturally without extra code to special-case it.
+    ///
+    /// E1: unlike <see cref="Link"/>'s <c>Assemble</c>, this recursion has no cycle to guard
+    /// against (an event stream cannot loop back on itself) but was otherwise just as unbounded -
+    /// a deeply-nested sequence or mapping in a caller-supplied file recursed once per level with
+    /// nothing to stop it, and a StackOverflowException from that is uncatchable, crashing the
+    /// whole server process. <paramref name="depth"/> refuses past <see cref="MaxInspectDepth"/>
+    /// instead, named by <paramref name="displayName"/> in the error so it reads like every other
+    /// read-through failure.
     /// </summary>
-    static object? ReadNode(IParser parser)
+    static object? ReadNode(IParser parser, string displayName, int depth = 0)
     {
+        if (depth > MaxInspectDepth)
+        {
+            throw new InvalidDataException(
+                $"'{displayName}' has a field nested more than {MaxInspectDepth} levels deep - "
+                + "past the depth inspect_asset reads through safely.");
+        }
+
         switch (parser.Current)
         {
             case Scalar scalar:
@@ -848,7 +879,7 @@ public static class ReadThrough
             case SequenceStart:
                 parser.MoveNext();
                 var list = new List<object?>();
-                while (parser.Current is not SequenceEnd) list.Add(ReadNode(parser));
+                while (parser.Current is not SequenceEnd) list.Add(ReadNode(parser, displayName, depth + 1));
                 parser.MoveNext(); // consume SequenceEnd
                 return list;
 
@@ -857,9 +888,9 @@ public static class ReadThrough
                 var map = new Dictionary<string, object?>(StringComparer.Ordinal);
                 while (parser.Current is not MappingEnd)
                 {
-                    var key = ReadNode(parser) as string
+                    var key = ReadNode(parser, displayName, depth + 1) as string
                         ?? throw new InvalidDataException("Expected a scalar mapping key while reading component properties.");
-                    map[key] = ReadNode(parser);
+                    map[key] = ReadNode(parser, displayName, depth + 1);
                 }
                 parser.MoveNext(); // consume MappingEnd
                 return map;
@@ -1057,7 +1088,7 @@ public static class ReadThrough
             // Not "the first document": GetMaterialProperties' own real-corpus lesson applies
             // here too - a render pipeline asset is not guaranteed to be exactly one document
             // either, so every document's m_Script is checked rather than assuming position.
-            scriptGuid = ReadAllDocumentTrees(assetContent).Values
+            scriptGuid = ReadAllDocumentTrees(assetContent, assetPath).Values
                 .Select(tree => ReferenceGuid(tree.GetValueOrDefault("m_Script")))
                 .FirstOrDefault(guid => guid is not null);
         }
@@ -1103,7 +1134,7 @@ public static class ReadThrough
             if (parser.Current is not Scalar) break;
             parser.MoveNext(); // past the type-name key, onto its value
 
-            return ReadNode(parser) as Dictionary<string, object?>
+            return ReadNode(parser, displayName) as Dictionary<string, object?>
                 ?? new Dictionary<string, object?>(StringComparer.Ordinal);
         }
 
@@ -1303,7 +1334,7 @@ public static class ReadThrough
             if (instance.TransformParent?.FileId is { } parentId) parentOf[fileId] = parentId;
         }
 
-        return new AssetHierarchy { Path = relativePath, Roots = Link(orderedIds, nodes, parentOf) };
+        return new AssetHierarchy { Path = relativePath, Roots = Link(relativePath, orderedIds, nodes, parentOf) };
 
         void AddNode(long fileId, string kind, string? name, string? sourcePrefabGuid, IReadOnlyList<string> components)
         {
@@ -1327,9 +1358,16 @@ public static class ReadThrough
     /// cycle: Unity should never produce one, but this must degrade gracefully rather than
     /// recurse forever if a hand-edited file has one. Anything a cycle leaves unreachable from
     /// every root is still surfaced afterward as an extra root, rather than silently dropped.
+    ///
+    /// E1: the cycle guard alone does not bound recursion DEPTH - a hand-edited or generated
+    /// m_Father chain with no cycle at all (a straight line thousands of objects long) recurses
+    /// once per level with nothing above to stop it, and a StackOverflowException from that is
+    /// uncatchable, crashing the whole server process. <c>Assemble</c> below refuses past
+    /// <see cref="MaxInspectDepth"/> instead, the same bound <see cref="ReadNode"/> enforces for
+    /// the other unbounded read-through walk.
     /// </summary>
     static IReadOnlyList<HierarchyNode> Link(
-        List<long> orderedIds, Dictionary<long, HierarchyNode> nodes, Dictionary<long, long> parentOf)
+        string relativePath, List<long> orderedIds, Dictionary<long, HierarchyNode> nodes, Dictionary<long, long> parentOf)
     {
         var childrenOf = new Dictionary<long, List<long>>();
         var rootIds = new List<long>();
@@ -1354,22 +1392,30 @@ public static class ReadThrough
 
         var visited = new HashSet<long>();
         var roots = new List<HierarchyNode>();
-        foreach (var rootId in rootIds) roots.Add(Assemble(rootId));
+        foreach (var rootId in rootIds) roots.Add(Assemble(rootId, 1));
 
         foreach (var fileId in orderedIds)
         {
-            if (!visited.Contains(fileId)) roots.Add(Assemble(fileId));
+            if (!visited.Contains(fileId)) roots.Add(Assemble(fileId, 1));
         }
 
         return roots;
 
-        HierarchyNode Assemble(long fileId)
+        HierarchyNode Assemble(long fileId, int depth)
         {
+            if (depth > MaxInspectDepth)
+            {
+                throw new InvalidDataException(
+                    $"'{relativePath}' has a GameObject hierarchy (via m_Father) nested more than "
+                    + $"{MaxInspectDepth} levels deep - past the depth inspect_asset reads through "
+                    + "safely.");
+            }
+
             var node = nodes[fileId];
             if (!visited.Add(fileId)) return node;
 
             var children = childrenOf.TryGetValue(fileId, out var kids)
-                ? kids.Select(Assemble).ToList()
+                ? kids.Select(kid => Assemble(kid, depth + 1)).ToList()
                 : (IReadOnlyList<HierarchyNode>)[];
 
             return node with { Children = children };

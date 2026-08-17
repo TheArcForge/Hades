@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Hades.Core;
 using Hades.Core.Editors;
+using Hades.Core.Projects;
 using Hades.Core.Observation;
 using Hades.Core.Storage;
 using Hades.Core.Tracing;
@@ -9,6 +10,7 @@ using Hades.Server.Control;
 using Hades.Server.Mcp;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
+using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -159,7 +161,8 @@ builder.Services.Configure<McpServerOptions>(options =>
         // nothing previously checked at all.
         if (UnknownParameterRejection(context) is { } rejection)
         {
-            RecordTrace(context, toolName, startUtcMs, stopwatch.ElapsedMilliseconds, ok: false, DescribeError(rejection), rejection);
+            await RecordTraceForRefusalAsync(context, toolName, startUtcMs, stopwatch.ElapsedMilliseconds,
+                DescribeError(rejection), rejection, cancellationToken).ConfigureAwait(false);
             return rejection;
         }
 
@@ -173,8 +176,13 @@ builder.Services.Configure<McpServerOptions>(options =>
             // A tool throwing all the way out to here is unusual — the SDK normally converts a
             // tool's own exception (e.g. McpException) into a non-throwing CallToolResult with
             // IsError = true before it reaches a request filter — but it is not impossible, so
-            // both paths are traced as a failure.
-            RecordTrace(context, toolName, startUtcMs, stopwatch.ElapsedMilliseconds, ok: false, ex.Message, result: null);
+            // both paths are traced as a failure. It is also exactly the shape a HOISTED guard
+            // refusal takes (a tool validating and throwing McpException before ever calling
+            // ToolSupport.ResolveProjectAsync — see SettingsTools.ProjectSettings's own comment on
+            // why those checks run first) — see RecordTraceForRefusalAsync's own doc comment for
+            // why that needs more than the synchronous fallback RecordTrace below still uses.
+            await RecordTraceForRefusalAsync(context, toolName, startUtcMs, stopwatch.ElapsedMilliseconds,
+                ex.Message, result: null, cancellationToken).ConfigureAwait(false);
             throw;
         }
 
@@ -416,6 +424,221 @@ static void RecordTrace(RequestContext<CallToolRequestParams> context, string to
 
 static string? SerializeArguments(IDictionary<string, JsonElement>? arguments) =>
     arguments is null ? null : JsonSerializer.Serialize(arguments);
+
+/// <summary>
+/// The failure-path counterpart to <see cref="RecordTrace"/> above, used ONLY by the filter's two
+/// refusal sites (F13a's own rejection, and a tool call that threw all the way out to the filter's
+/// own catch block) — never by the common call after <see cref="ToolSupport.AppendAnnouncement"/>,
+/// which stays on <see cref="RecordTrace"/>, unchanged, exactly as it behaved before this method
+/// existed: that call site already has a resolved project on <c>context.Items</c> whenever a tool
+/// actually reached <see cref="ToolSupport.ResolveProjectAsync(ProjectService,string?,RequestContext{CallToolRequestParams})"/>,
+/// so it never hits the gap this method exists to close.
+///
+/// A HOISTED refusal — one that validates and throws before ever calling that resolution (the whole
+/// point of hoisting — see SettingsTools.ProjectSettings's own comment) — never stamps
+/// <see cref="ToolSupport.ResolvedProjectItemsKey"/> on <c>context.Items</c>, so <see cref="RecordTrace"/>'s
+/// own synchronous fallback is all that would be left, and it throws the instant a caller has 2+
+/// known projects and no explicit 'project' argument — silently dropped by RecordTrace's own blanket
+/// catch (RecordTrace itself is unchanged; this method has its own, identically-shaped one). This
+/// recovers exactly that case: (1) an explicit 'project' argument still resolves synchronously, no
+/// roots needed — byte-identical to today; (2) otherwise, a BEST-EFFORT, side-effect-free peek at
+/// the client's current roots (<see cref="TryPeekKnownProjectFromRootsAsync"/> — deliberately never
+/// <see cref="RootsRouter.ResolveAsync"/>, which can auto-adopt; see that method's own doc comment
+/// for why this file implements its own peek instead) matches them against ALREADY-KNOWN projects
+/// only. When neither names a project, the never-fail guarantee still holds — the trace is skipped,
+/// same as today — but now with one structured log line naming the tool and why, so the drop itself
+/// is diagnosable instead of silent.
+/// </summary>
+static async Task RecordTraceForRefusalAsync(RequestContext<CallToolRequestParams> context, string toolName,
+    long startUtcMs, long durationMs, string? errorMessage, CallToolResult? result, CancellationToken cancellationToken)
+{
+    try
+    {
+        if (context.Services is not { } services) return;
+
+        var projects = services.GetRequiredService<ProjectService>();
+
+        var productGuid = ResolvedProjectFromItems(context) ?? TryResolveExplicitProjectHandle(context, projects);
+        productGuid ??= await TryPeekKnownProjectFromRootsAsync(context, projects, cancellationToken).ConfigureAwait(false);
+
+        if (productGuid is null)
+        {
+            services.GetService<ILoggerFactory>()?.CreateLogger("Hades.Server.Tracing").LogInformation(
+                "Trace dropped for {Tool}: refused before project resolution, and no already-known "
+                + "project matched the client's current roots.", toolName);
+            return;
+        }
+
+        var paths = services.GetRequiredService<AppPaths>();
+        paths.EnsureProjectDir(productGuid);
+        var tracer = new ToolCallTracer(paths.TracesDb(productGuid));
+        tracer.RecordOutcome(toolName, SerializeArguments(context.Params.Arguments), startUtcMs, durationMs,
+            ok: false, errorMessage, result);
+    }
+    catch
+    {
+        // Tracing must never fail the call it traces - see ToolCallTracer's class doc comment.
+    }
+}
+
+/// <summary>The same <c>context.Items</c> read <see cref="RecordTrace"/> does above — factored out
+/// only because <see cref="RecordTraceForRefusalAsync"/> needs the identical check before it ever
+/// attempts a roots peek (a project already resolved by the SAME call, before it went on to throw,
+/// must still win — see that method's own doc comment).</summary>
+static string? ResolvedProjectFromItems(RequestContext<CallToolRequestParams> context) =>
+    context.Items is { } items
+        && items.TryGetValue(ToolSupport.ResolvedProjectItemsKey, out var resolved)
+        && resolved is string alreadyResolved
+        ? alreadyResolved
+        : null;
+
+/// <summary>An explicit 'project' argument, resolved synchronously — null on a missing argument OR
+/// an unresolvable one (unknown handle), in which case <see cref="RecordTraceForRefusalAsync"/>
+/// tries the roots peek next rather than giving up immediately; a caller that DID pass a handle
+/// still deserves the chance for roots to name a project for tracing purposes, same as the
+/// no-handle case.</summary>
+static string? TryResolveExplicitProjectHandle(RequestContext<CallToolRequestParams> context, ProjectService projects)
+{
+    var handle = context.Params.Arguments is { } arguments
+        && arguments.TryGetValue("project", out var value)
+        && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    if (handle is null) return null;
+
+    try
+    {
+        return ToolSupport.ResolveProject(projects, handle);
+    }
+    catch (McpException)
+    {
+        return null;
+    }
+}
+
+/// <summary>
+/// A BEST-EFFORT, side-effect-free peek at the calling client's current MCP roots, used only for
+/// naming a trace's project on <see cref="RecordTraceForRefusalAsync"/>'s two refusal paths —
+/// deliberately NOT <see cref="RootsRouter.ResolveAsync"/>, which this file must not call here: it
+/// calls <see cref="ProjectService.Adopt"/> on every match it makes, even one against an
+/// ALREADY-known project (re-persisting project.json, importing .arcforge memory the first time,
+/// and raising <see cref="ProjectService.ProjectAdopted"/>, which <c>ObservationService</c> listens
+/// to — see <see cref="ProjectService.Adopt"/>'s own doc comment) — real writes a mere OBSERVABILITY
+/// decision (which traces.db to file a dropped call's trace under) must never trigger. This instead
+/// matches each reported root against ALREADY-REGISTERED projects only, with pure path arithmetic —
+/// a root that is not already one of <see cref="ProjectService.KnownProjects"/>'s own stored paths
+/// matches nothing here, on purpose; naming a project for a trace must never itself register one.
+/// Ambiguous (roots naming more than one distinct known project) also matches nothing, same as "no
+/// roots capability" or a timeout — every one of those collapses to the same "could not resolve"
+/// null a caller treats identically.
+///
+/// Reuses the exact DI-substitution seam
+/// <see cref="ToolSupport.ResolveProjectAsync(ProjectService,string?,RequestContext{CallToolRequestParams})"/>
+/// itself uses (<c>services.GetService&lt;IRootsProvider&gt;()</c> first, a real
+/// <see cref="McpRootsProvider"/> over this call's own live <see cref="McpServer"/> otherwise), so
+/// the same test seam (a fake roots provider registered in DI) that already proves the success path
+/// also proves this one — no live MCP client roots capability needed to test it.
+/// </summary>
+static async Task<string?> TryPeekKnownProjectFromRootsAsync(RequestContext<CallToolRequestParams> context,
+    ProjectService projects, CancellationToken cancellationToken)
+{
+    var known = projects.KnownProjects();
+    if (known.Count == 0) return null;
+    if (context.Services is not { } services || context.Server is not { } server) return null;
+
+    var rootsProvider = services.GetService<IRootsProvider>() ?? new McpRootsProvider(server);
+
+    // Bounded independently of the caller's own cancellationToken (which, at this point, belongs to
+    // a call that already finished — refused or thrown — so it must never let a slow/unresponsive
+    // client hang the response a refusal is about to return). Same default duration as RootsRouter's
+    // own RootsRequestTimeout, for the same "short enough not to matter, long enough for a real
+    // client" reasoning — this is a fresh, uncached request every time (see this method's own
+    // "why not RootsRouter" note above), so unlike RootsRouter there is no cache to keep this rare.
+    IReadOnlyList<string> roots;
+    using (var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+    {
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(3));
+        try
+        {
+            roots = await rootsProvider.GetRootsAsync(timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return null; // The 3s timeout fired, not the caller's own cancellation.
+        }
+    }
+
+    if (roots.Count == 0) return null;
+
+    var matchedGuids = new HashSet<string>(StringComparer.Ordinal);
+    foreach (var root in roots)
+    {
+        if (MatchAgainstKnownProjectsOnly(root, known) is { } guid) matchedGuids.Add(guid);
+    }
+
+    return matchedGuids.Count == 1 ? matchedGuids.Single() : null;
+}
+
+/// <summary>Equals-or-nested match of one reported root against every already-known project — the
+/// deepest (longest/most specific) match wins when several known projects nest inside one another,
+/// mirroring <see cref="RootsRouter"/>'s own private <c>MatchAgainstKnownProjects</c> (duplicated
+/// here, smaller in scope and never adopting — see <see cref="TryPeekKnownProjectFromRootsAsync"/>'s
+/// own doc comment for why this file cannot just call that one). Never reads a project's
+/// ProjectSettings.asset off disk, unlike RootsRouter's own auto-adopt path — an unknown root simply
+/// matches nothing here.</summary>
+static string? MatchAgainstKnownProjectsOnly(string reportedRoot, IReadOnlyList<Hades.Core.Projects.UnityProject> known)
+{
+    var canonicalRoot = CanonicalizeForPeek(reportedRoot);
+
+    string? deepestGuid = null;
+    var deepestLength = -1;
+
+    foreach (var project in known)
+    {
+        // ProjectService.KnownProjects's own Path is ALREADY fully canonical (ProjectStore.Adopt
+        // resolves it at adoption time - every path component, not just the leaf) - canonicalizing
+        // it again here is idempotent, and keeping the same call on both sides (rather than trusting
+        // it is already resolved) is what makes this correct even if that ever changes.
+        var knownPath = CanonicalizeForPeek(project.Path);
+
+        var contains = canonicalRoot.Equals(knownPath, StringComparison.Ordinal)
+            || canonicalRoot.StartsWith(knownPath + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+        if (!contains) continue;
+
+        if (knownPath.Length > deepestLength)
+        {
+            deepestGuid = project.ProductGuid;
+            deepestLength = knownPath.Length;
+        }
+    }
+
+    return deepestGuid;
+}
+
+/// <summary>
+/// The trace-naming peek's canonicalization — a thin delegate to
+/// <see cref="ProjectStore.Canonicalize"/>, the method that decides what
+/// <see cref="ProjectService.KnownProjects"/>'s own <c>UnityProject.Path</c> values actually look
+/// like once stored. Peek-time matching and adopt-time storage must resolve a path identically or
+/// a known project silently stops matching here — see ProjectStore.Canonicalize's own doc comment
+/// for that invariant and how two drifting copies already broke it once for RootsRouter; one shared
+/// implementation keeps it true by construction. The one local addition: a root string
+/// <see cref="Path.GetFullPath(string)"/> rejects outright (Adopt rightly lets that throw) must
+/// here degrade to "matches nothing" — a canonicalization failure must never break the
+/// trace-naming peek this exists for, only make it match less.
+/// </summary>
+static string CanonicalizeForPeek(string path)
+{
+    try
+    {
+        return ProjectStore.Canonicalize(path);
+    }
+    catch (ArgumentException)
+    {
+        return path;
+    }
+}
 
 /// <summary>
 /// F15: offers one completed tool call to <see cref="RegressionRecorder"/> - a no-op unless a

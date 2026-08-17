@@ -66,6 +66,7 @@ public sealed class SummaryResolveTests
         var snapshot = new ProjectSnapshot
         {
             Name = "Hades-Unity-Client",
+            ProductGuid = "guid-hades-unity-client",
             PathExists = true,
             Attached = true,
             Busy = false,
@@ -80,6 +81,7 @@ public sealed class SummaryResolveTests
 
         var row = Assert.Single(result.Rows);
         Assert.Equal("Hades-Unity-Client", row.Project);
+        Assert.Equal("guid-hades-unity-client", row.ProductGuid);
         Assert.Equal("Editor attached · indexed 2m ago", row.Status);
         Assert.Equal(ControlSeverity.Ok, row.Severity);
 
@@ -105,12 +107,12 @@ public sealed class SummaryResolveTests
         // single-project resolutions producing two DIFFERENT ids for the SAME plugin-side lease id.
         var alpha = new ProjectSnapshot
         {
-            Name = "Alpha", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now,
+            Name = "Alpha", ProductGuid = "guid-alpha", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now,
             Lease = new LeaseStatus { ProductGuid = "guid-alpha", LeaseId = "hades-script-editing", AcquiredAtUtc = Now.AddSeconds(-1), ExpiresAtUtc = Now.AddSeconds(29) },
         };
         var beta = new ProjectSnapshot
         {
-            Name = "Beta", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now,
+            Name = "Beta", ProductGuid = "guid-beta", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now,
             Lease = new LeaseStatus { ProductGuid = "guid-beta", LeaseId = "hades-script-editing", AcquiredAtUtc = Now.AddSeconds(-1), ExpiresAtUtc = Now.AddSeconds(29) },
         };
 
@@ -122,6 +124,38 @@ public sealed class SummaryResolveTests
         Assert.NotEqual(alphaResult.Lease.LeaseId, betaResult.Lease.LeaseId);
     }
 
+    // ---------------------------------------------------------------- productGuid: rows carry per-project identity, never just name
+
+    [Fact]
+    public void TwoProjectsSharingAName_RowsCarryDistinctProductGuids_NotJustTheSharedName()
+    {
+        // The live bug this closes: SwiftUI keyed project rows by `project` (the display name)
+        // alone, so two same-named projects (e.g. two checkouts of the same repo) collided into
+        // one row. Every row must carry its OWN productGuid - the same stable identity
+        // ProjectRow/EditorRow already key on - so a caller can tell two same-named projects apart
+        // even though `Project` cannot.
+        var first = new ProjectSnapshot
+        {
+            Name = "Hades-Unity-Client", ProductGuid = "guid-checkout-one", PathExists = true,
+            Attached = false, Busy = false, LastIndexedUtc = Now.AddMinutes(-1),
+        };
+        var second = new ProjectSnapshot
+        {
+            Name = "Hades-Unity-Client", ProductGuid = "guid-checkout-two", PathExists = true,
+            Attached = false, Busy = false, LastIndexedUtc = Now.AddMinutes(-1),
+        };
+
+        var result = SummaryEndpoint.Resolve([first, second], Now);
+
+        Assert.Equal(2, result.Rows.Count);
+        Assert.Equal("guid-checkout-one", result.Rows[0].ProductGuid);
+        Assert.Equal("guid-checkout-two", result.Rows[1].ProductGuid);
+        Assert.NotEqual(result.Rows[0].ProductGuid, result.Rows[1].ProductGuid);
+        // Both rows still share the same display name - the fix ADDS an identity field, it does
+        // not change what `Project` itself means.
+        Assert.Equal(result.Rows[0].Project, result.Rows[1].Project);
+    }
+
     // ---------------------------------------------------------------- every row wording, pinned literally
 
     [Fact]
@@ -129,7 +163,7 @@ public sealed class SummaryResolveTests
     {
         var snapshot = new ProjectSnapshot
         {
-            Name = "Hades-Unity-Client", PathExists = true, Attached = false, Busy = false,
+            Name = "Hades-Unity-Client", ProductGuid = "guid-hades-unity-client", PathExists = true, Attached = false, Busy = false,
             LastIndexedUtc = Now.AddSeconds(-45),
         };
 
@@ -148,7 +182,7 @@ public sealed class SummaryResolveTests
         // nor in iconState.
         var snapshot = new ProjectSnapshot
         {
-            Name = "Hades-Unity-Client", PathExists = true, Attached = true, Busy = true,
+            Name = "Hades-Unity-Client", ProductGuid = "guid-hades-unity-client", PathExists = true, Attached = true, Busy = true,
             LastIndexedUtc = Now.AddMinutes(-2),
         };
 
@@ -165,7 +199,7 @@ public sealed class SummaryResolveTests
     {
         var snapshot = new ProjectSnapshot
         {
-            Name = "Hades-Unity-Client", PathExists = true, Attached = false, Busy = false,
+            Name = "Hades-Unity-Client", ProductGuid = "guid-hades-unity-client", PathExists = true, Attached = false, Busy = false,
             LastIndexedUtc = null,
         };
 
@@ -181,7 +215,7 @@ public sealed class SummaryResolveTests
     {
         var snapshot = new ProjectSnapshot
         {
-            Name = "Hades-Unity-Client", PathExists = false, Attached = false, Busy = false,
+            Name = "Hades-Unity-Client", ProductGuid = "guid-hades-unity-client", PathExists = false, Attached = false, Busy = false,
             LastIndexedUtc = Now.AddMinutes(-5),
         };
 
@@ -206,12 +240,12 @@ public sealed class SummaryResolveTests
         // other row's status text - only a count.
         var healthy = new ProjectSnapshot
         {
-            Name = "Hades-Unity-Client", PathExists = true, Attached = true, Busy = false,
+            Name = "Hades-Unity-Client", ProductGuid = "guid-healthy", PathExists = true, Attached = true, Busy = false,
             LastIndexedUtc = Now.AddSeconds(-12),
         };
         var broken = new ProjectSnapshot
         {
-            Name = "project", PathExists = false, Attached = false, Busy = false, LastIndexedUtc = Now.AddMinutes(-5),
+            Name = "project", ProductGuid = "guid-project", PathExists = false, Attached = false, Busy = false, LastIndexedUtc = Now.AddMinutes(-5),
         };
 
         var result = SummaryEndpoint.Resolve([healthy, broken], Now);
@@ -225,9 +259,9 @@ public sealed class SummaryResolveTests
     [Fact]
     public void PathMissing_ThreeProjectsTwoBroken_HeadlineCountsBothAndPluralizesNeed()
     {
-        var healthy = new ProjectSnapshot { Name = "A", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now };
-        var brokenOne = new ProjectSnapshot { Name = "B", PathExists = false, Attached = false, Busy = false, LastIndexedUtc = Now };
-        var brokenTwo = new ProjectSnapshot { Name = "C", PathExists = false, Attached = false, Busy = false, LastIndexedUtc = Now };
+        var healthy = new ProjectSnapshot { Name = "A", ProductGuid = "guid-a", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now };
+        var brokenOne = new ProjectSnapshot { Name = "B", ProductGuid = "guid-b", PathExists = false, Attached = false, Busy = false, LastIndexedUtc = Now };
+        var brokenTwo = new ProjectSnapshot { Name = "C", ProductGuid = "guid-c", PathExists = false, Attached = false, Busy = false, LastIndexedUtc = Now };
 
         var result = SummaryEndpoint.Resolve([healthy, brokenOne, brokenTwo], Now);
 
@@ -257,6 +291,7 @@ public sealed class SummaryResolveTests
         var snapshot = new ProjectSnapshot
         {
             Name = "P",
+            ProductGuid = "guid-p",
             PathExists = !pathMissing,
             Attached = attached,
             Busy = false,
@@ -279,11 +314,11 @@ public sealed class SummaryResolveTests
         // held lease - the `lease` field is independent of which icon wins.
         var broken = new ProjectSnapshot
         {
-            Name = "Broken", PathExists = false, Attached = false, Busy = false, LastIndexedUtc = Now.AddMinutes(-5),
+            Name = "Broken", ProductGuid = "guid-broken", PathExists = false, Attached = false, Busy = false, LastIndexedUtc = Now.AddMinutes(-5),
         };
         var leased = new ProjectSnapshot
         {
-            Name = "Leased", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now.AddMinutes(-5),
+            Name = "Leased", ProductGuid = "guid-leased", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now.AddMinutes(-5),
             Lease = Lease(Now.AddSeconds(-3), Now.AddSeconds(27)),
         };
 
@@ -299,10 +334,10 @@ public sealed class SummaryResolveTests
     [Fact]
     public void LeaseHeldOnOneProject_OutranksIndexingOnAnother()
     {
-        var indexing = new ProjectSnapshot { Name = "Indexing", PathExists = true, Attached = false, Busy = false, LastIndexedUtc = null };
+        var indexing = new ProjectSnapshot { Name = "Indexing", ProductGuid = "guid-indexing", PathExists = true, Attached = false, Busy = false, LastIndexedUtc = null };
         var leased = new ProjectSnapshot
         {
-            Name = "Leased", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now.AddMinutes(-1),
+            Name = "Leased", ProductGuid = "guid-leased", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now.AddMinutes(-1),
             Lease = Lease(Now.AddSeconds(-2), Now.AddSeconds(28)),
         };
 
@@ -314,8 +349,8 @@ public sealed class SummaryResolveTests
     [Fact]
     public void IndexingOnOneProject_OutranksAttachedOnAnother()
     {
-        var indexing = new ProjectSnapshot { Name = "Indexing", PathExists = true, Attached = false, Busy = false, LastIndexedUtc = null };
-        var attached = new ProjectSnapshot { Name = "Attached", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now.AddMinutes(-1) };
+        var indexing = new ProjectSnapshot { Name = "Indexing", ProductGuid = "guid-indexing", PathExists = true, Attached = false, Busy = false, LastIndexedUtc = null };
+        var attached = new ProjectSnapshot { Name = "Attached", ProductGuid = "guid-attached", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now.AddMinutes(-1) };
 
         var result = SummaryEndpoint.Resolve([indexing, attached], Now);
 
@@ -325,8 +360,8 @@ public sealed class SummaryResolveTests
     [Fact]
     public void AttachedOnOneProject_OutranksIdleOnAnother()
     {
-        var idle = new ProjectSnapshot { Name = "Idle", PathExists = true, Attached = false, Busy = false, LastIndexedUtc = Now.AddMinutes(-1) };
-        var attached = new ProjectSnapshot { Name = "Attached", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now.AddMinutes(-1) };
+        var idle = new ProjectSnapshot { Name = "Idle", ProductGuid = "guid-idle", PathExists = true, Attached = false, Busy = false, LastIndexedUtc = Now.AddMinutes(-1) };
+        var attached = new ProjectSnapshot { Name = "Attached", ProductGuid = "guid-attached", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now.AddMinutes(-1) };
 
         var result = SummaryEndpoint.Resolve([idle, attached], Now);
 
@@ -338,12 +373,12 @@ public sealed class SummaryResolveTests
     {
         var soon = new ProjectSnapshot
         {
-            Name = "Soon", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now.AddMinutes(-1),
+            Name = "Soon", ProductGuid = "guid-soon", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now.AddMinutes(-1),
             Lease = Lease(Now.AddSeconds(-25), Now.AddSeconds(5)),
         };
         var later = new ProjectSnapshot
         {
-            Name = "Later", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now.AddMinutes(-1),
+            Name = "Later", ProductGuid = "guid-later", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now.AddMinutes(-1),
             Lease = Lease(Now.AddSeconds(-1), Now.AddSeconds(50)),
         };
 
@@ -449,6 +484,9 @@ public sealed class SummaryBuildAsyncTests : IDisposable
         var row = Assert.Single(result.Rows);
         Assert.Contains("No Editor attached", row.Status);
         Assert.Equal(ControlSeverity.Ok, row.Severity);
+        // BuildAsync threads UnityProject.ProductGuid straight through - proof this is not only
+        // Resolve()'s own pass-through (SummaryResolveTests, plain data) but the real orchestrator.
+        Assert.Equal(ProjectGuid, row.ProductGuid);
     }
 
     [Fact]
@@ -628,6 +666,9 @@ public sealed class SummaryEndpointHttpTests : IDisposable
 
         var row = Assert.Single(body.GetProperty("rows").EnumerateArray());
         Assert.Equal("ok", row.GetProperty("severity").GetString());
+        // The wire-level proof: productGuid rides along over real HTTP JSON, keyed the same way
+        // the lease's own leaseId already is (both resolve to this project's real productGuid).
+        Assert.Equal(guid, row.GetProperty("productGuid").GetString());
     }
 
     public void Dispose()
@@ -681,6 +722,9 @@ public sealed class SummaryProgramWiringTests : IClassFixture<WebApplicationFact
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         var row = Assert.Single(body.GetProperty("rows").EnumerateArray());
         Assert.Equal(Path.GetFileName(_projectRoot.TrimEnd(Path.DirectorySeparatorChar)), row.GetProperty("project").GetString());
+        // Same real Program.cs-wired ProjectService the row's own project name came from - the
+        // productGuid this row carries is this same project's real identity, not a placeholder.
+        Assert.Equal(ProjectGuid, row.GetProperty("productGuid").GetString());
     }
 
     public void Dispose()

@@ -66,6 +66,7 @@ public sealed class V12DetectorTests : IDisposable
     {
         var result = V12Detector.Detect(_projectRoot);
 
+        Assert.True(result.ProjectRootExists); // the root itself genuinely exists (just empty)
         Assert.False(result.ManifestEntry.Present);
         Assert.Null(result.ManifestEntry.Value);
         Assert.Null(result.ManifestEntry.ResolvedPath);
@@ -80,16 +81,45 @@ public sealed class V12DetectorTests : IDisposable
         Assert.False(result.HasUnityPlugin);
     }
 
+    // ---- M6: a missing project root must be distinguishable from "looked, found nothing" ----
+
     [Fact]
-    public void Detect_NonexistentProjectRoot_ReportsEverythingAbsentWithoutThrowing()
+    public void Detect_NonexistentProjectRoot_ReportsProjectRootExistsFalse_WithoutThrowing()
     {
+        // Before this fix, a nonexistent path reported the exact same "every item absent" shape as
+        // a genuine, freshly-scanned, v1.2-free project - a caller (a project whose folder moved,
+        // was deleted, or sits on an unmounted volume, despite still being a KNOWN, previously
+        // adopted project) could not tell "confirmed nothing here" apart from "could not even
+        // look". ProjectRootExists is that distinction, and every other field must still resolve to
+        // its ordinary absent value rather than throwing.
         var missing = Path.Combine(_projectRoot, "does-not-exist");
 
         var result = V12Detector.Detect(missing);
 
+        Assert.False(result.ProjectRootExists);
         Assert.False(result.IsV12Project);
+        Assert.False(result.ManifestEntry.Present);
         Assert.False(result.HasMemory);
+        Assert.Equal(0, result.MemoryDocumentCount);
+        Assert.False(result.HasTraces);
+        Assert.False(result.HasGraph);
+        Assert.False(result.HasGeneratedMcpConfig);
         Assert.Equal(ClaudeMdShape.Absent, result.ClaudeMd.Shape);
+        Assert.False(result.HasUnityPlugin);
+    }
+
+    [Fact]
+    public void Detect_ProjectRootIsAFileNotADirectory_ReportsProjectRootExistsFalse()
+    {
+        // A path that exists on disk but is not a directory at all (e.g. a stray file where a
+        // project root used to be) is exactly as "could not look" as a path with nothing there -
+        // Directory.Exists is correctly false for a plain file, and this must read the same way.
+        var filePath = Path.Combine(_projectRoot, "not-a-directory.txt");
+        File.WriteAllText(filePath, "oops");
+
+        var result = V12Detector.Detect(filePath);
+
+        Assert.False(result.ProjectRootExists);
     }
 
     // ---- every item present ----
@@ -111,6 +141,7 @@ public sealed class V12DetectorTests : IDisposable
 
         var result = V12Detector.Detect(_projectRoot);
 
+        Assert.True(result.ProjectRootExists);
         Assert.True(result.IsV12Project);
         Assert.True(result.ManifestEntry.Present);
         Assert.True(result.HasMemory);
@@ -435,6 +466,7 @@ public sealed class V12DetectorTests : IDisposable
 
         // Touch every property so a hypothetically lazy accessor can't hide a side effect that
         // a "call Detect and ignore the result" pass would miss.
+        _ = result.ProjectRootExists;
         _ = result.IsV12Project;
         _ = result.ManifestEntry;
         _ = result.HasMemory;

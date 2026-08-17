@@ -60,7 +60,7 @@ public sealed class CharonStatusTests : IClassFixture<WebApplicationFactory<Prog
     static JsonElement Structured(JsonElement envelope) =>
         envelope.GetProperty("result").GetProperty("structuredContent");
 
-    const string RealAppPluginVersion = "1.3.0"; // Plugin~/Assets/Hades/Runtime/HadesBoot.cs's own PluginVersion constant - see ProjectsTests.cs's own identically-named constant for the same reasoning.
+    const string RealAppPluginVersion = "1.4.0"; // Plugin~/Assets/Hades/Runtime/HadesBoot.cs's own PluginVersion constant - see ProjectsTests.cs's own identically-named constant for the same reasoning.
 
     static Hello MakeHello(long processId, string pluginVersion = RealAppPluginVersion) => new()
     {
@@ -131,6 +131,46 @@ public sealed class CharonStatusTests : IClassFixture<WebApplicationFactory<Prog
         Assert.False(structured.GetProperty("busy").GetBoolean());
         var detail = structured.GetProperty("detail").GetString()!;
         Assert.Contains("Editor", detail);
+    }
+
+    [Fact]
+    public async Task NoEditorAttached_ButPluginPresentOnDisk_SurfacesTheDiskVersionAsADistinctState()
+    {
+        // Medium finding: hades_charon_status could not distinguish "plugin installed but Unity
+        // has not (re)connected yet" from "nothing installed at all" — both collapsed to the same
+        // Attached:false answer with every plugin field null, because PluginVersion is
+        // hello-derived and there is no hello without a connection. Simulate a plugin that was
+        // written to disk (e.g. by installPlugin) but whose Editor has not attached in THIS
+        // process — a real, on-disk HadesBoot.cs with its own PluginVersion constant, exactly what
+        // PluginInstaller.Install itself would have produced.
+        var hadesRuntimeDir = Path.Combine(_projectRoot, "Assets", "Hades", "Runtime");
+        Directory.CreateDirectory(hadesRuntimeDir);
+        File.WriteAllText(Path.Combine(hadesRuntimeDir, "HadesBoot.cs"),
+            "public static class HadesBoot { public const string PluginVersion = \"1.4.0\"; }");
+
+        var structured = Structured(await McpTestClient.CallTool(_factory, "hades_charon_status"));
+
+        Assert.False(structured.GetProperty("attached").GetBoolean());
+        Assert.Equal("1.4.0", structured.GetProperty("pluginVersionOnDisk").GetString());
+
+        var detail = structured.GetProperty("detail").GetString()!;
+        Assert.Contains("1.4.0", detail);
+        Assert.Contains("disk", detail, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task NoEditorAttached_AndNoPluginOnDisk_ReportsNoPluginVersionOnDiskAtAll()
+    {
+        // The other half of the same distinction: truly nothing installed must NOT claim a disk
+        // version, and the original "not attached" wording (no plugin-specific remedy implied)
+        // stays exactly as it was — this is the control for the test above.
+        var structured = Structured(await McpTestClient.CallTool(_factory, "hades_charon_status"));
+
+        Assert.False(structured.GetProperty("attached").GetBoolean());
+        Assert.False(structured.TryGetProperty("pluginVersionOnDisk", out _));
+
+        var detail = structured.GetProperty("detail").GetString()!;
+        Assert.DoesNotContain("present on disk", detail);
     }
 
     [Fact]

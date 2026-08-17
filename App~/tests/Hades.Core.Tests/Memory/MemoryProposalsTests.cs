@@ -1,3 +1,4 @@
+using System.Threading;
 using Hades.Core.Memory;
 using Hades.Core.Storage;
 
@@ -151,6 +152,122 @@ public sealed class MemoryProposalsTests : IDisposable
         Assert.Equal(2, listed.Count); // never lost
         Assert.Equal([blankStatusFile, inferred.FileName], listed.Select(p => p.FileName));
         Assert.Equal("", listed[0].Status);
+    }
+
+    // ---------------------------------------------------------------- P1: concurrent allocation
+
+    [Fact]
+    public void Write_ConcurrentProposesForTheSameTargetInTheSameSecond_EachLandsAsADistinctFileWithItsOwnContent()
+    {
+        // The live-reproduced defect: a filename-allocation TOCTOU (File.Exists check-then-return,
+        // landed with File.Move(overwrite:true)) let concurrent callers targeting the same second
+        // be handed the SAME fileName, silently destroying all but the last writer's content while
+        // telling every caller success. A barrier forces genuine overlap rather than relying on
+        // thread-scheduling luck to hit the race.
+        const int concurrency = 16;
+        var proposals = NewProposals();
+        using var barrier = new Barrier(concurrency);
+        var results = new MemoryProposal[concurrency];
+
+        Parallel.For(0, concurrency, i =>
+        {
+            barrier.SignalAndWait();
+            results[i] = proposals.Write(ProductGuid, "patterns.md", $"content-{i}", "r", CreatedAt);
+        });
+
+        // Every caller was handed a DISTINCT name - never a shared one where the last writer's
+        // move silently won and the rest were told success for content that was never landed.
+        Assert.Equal(concurrency, results.Select(r => r.FileName).Distinct().Count());
+
+        // N distinct files actually exist on disk...
+        var proposalsDir = Path.Combine(new AppPaths(_appRoot).MemoryDir(ProductGuid), "proposals");
+        Assert.Equal(concurrency, Directory.EnumerateFiles(proposalsDir, "*.md").Count());
+
+        // ...each holding EXACTLY the content its own caller wrote - no proposal silently
+        // destroyed by another's overwrite.
+        for (var i = 0; i < concurrency; i++)
+        {
+            var read = proposals.Read(ProductGuid, results[i].FileName);
+            Assert.NotNull(read);
+            Assert.Equal($"content-{i}", read!.Content);
+        }
+    }
+
+    // ---------------------------------------------------------------- P2: target_file extension normalization
+
+    [Fact]
+    public void Write_ExtensionLessTargetFile_RecordsTheNormalizedDotMdTargetFile()
+    {
+        var proposals = NewProposals();
+
+        var written = proposals.Write(ProductGuid, "conventions", "body", "why", CreatedAt);
+
+        var read = proposals.Read(ProductGuid, written.FileName);
+        Assert.Equal("conventions.md", read!.TargetFile);
+    }
+
+    [Fact]
+    public void Write_TargetFileAlreadyEndingInUppercaseMD_IsNotDoubleAppended()
+    {
+        var proposals = NewProposals();
+
+        var written = proposals.Write(ProductGuid, "conventions.MD", "body", "why", CreatedAt);
+
+        var read = proposals.Read(ProductGuid, written.FileName);
+        Assert.Equal("conventions.MD", read!.TargetFile);
+    }
+
+    [Fact]
+    public void List_ProposalFileWithUppercaseMDExtension_IsStillListed()
+    {
+        // Simulates a proposal imported byte-for-byte (MemoryStore.ImportFromArcforge) with
+        // whatever case its source had - Write() itself always generates a lowercase ".md", so
+        // this shape can only arise from disk, not from this class's own writer.
+        var proposalsDir = Path.Combine(new AppPaths(_appRoot).MemoryDir(ProductGuid), "proposals");
+        Directory.CreateDirectory(proposalsDir);
+        const string upperExtensionFile = "20260801-160000-caps.MD";
+        File.WriteAllText(Path.Combine(proposalsDir, upperExtensionFile),
+            "---\ntarget_file: patterns.md\nstatus: pending\n---\nBody.\n");
+
+        var listed = NewProposals().List(ProductGuid);
+
+        var hit = Assert.Single(listed);
+        Assert.Equal(upperExtensionFile, hit.FileName);
+    }
+
+    // ---------------------------------------------------------------- P4: concurrent SetStatus
+
+    [Fact]
+    public void SetStatus_ConcurrentCallsOnTheSameProposal_NeverCorruptsItAndAlwaysLeavesAValidCompleteWrite()
+    {
+        const int concurrency = 16;
+        var proposals = NewProposals();
+        var written = proposals.Write(ProductGuid, "patterns.md", "body", "original rationale", CreatedAt);
+        using var barrier = new Barrier(concurrency);
+        var outcomes = new bool[concurrency];
+
+        Parallel.For(0, concurrency, i =>
+        {
+            barrier.SignalAndWait();
+            outcomes[i] = proposals.SetStatus(ProductGuid, written.FileName, i % 2 == 0 ? "accepted" : "deferred");
+        });
+
+        // Every concurrent call found the file and updated it - none silently no-op'd.
+        Assert.All(outcomes, Assert.True);
+
+        var read = proposals.Read(ProductGuid, written.FileName);
+        Assert.NotNull(read);
+        // Never corrupted: frontmatter still parses, and every field OTHER than status - the only
+        // one any caller here ever changes - survived every concurrent write byte-for-byte.
+        Assert.Null(read!.FrontmatterError);
+        Assert.Equal("patterns.md", read.TargetFile);
+        Assert.Equal("original rationale", read.Rationale);
+        Assert.Equal(CreatedAt, read.CreatedAt);
+        Assert.Equal("body", read.Content);
+        // The guard's own semantics: the read-modify-write is serialized, so the final status is
+        // deterministically whichever call entered the lock last - always ONE fully-formed
+        // attempted value, never a torn or invented third value.
+        Assert.Contains(read.Status, new[] { "accepted", "deferred" });
     }
 
     // ---------------------------------------------------------------- Read

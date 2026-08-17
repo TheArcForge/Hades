@@ -89,8 +89,9 @@ public static class BinaryAssetIndexer
         foreach (var root in ProjectWalker.ResolveScanRoots(projectRoot, warnings))
         {
             var visited = new HashSet<string>(StringComparer.Ordinal);
+            var failedDirectories = new List<string>();
 
-            foreach (var file in ProjectWalker.EnumerateSourceFiles(root.AbsolutePath, "*"))
+            foreach (var file in ProjectWalker.EnumerateSourceFiles(root.AbsolutePath, "*", failedDirectories))
             {
                 if (ImportedAssetKind.KindForPath(file) is not { } kind) continue;
 
@@ -112,12 +113,25 @@ public static class BinaryAssetIndexer
                 }
             }
 
+            // I10: a directory this walk could not even read is not evidence anything under it
+            // was deleted — reserved from the sweep below exactly like an unresolvable package's
+            // prefix already is (see ScriptIndexer/AssetIndexer's identical handling), and named
+            // in a warning rather than silently wiping whatever was previously recorded for it.
+            var reserved = unreachablePackagePrefixes;
+            if (failedDirectories.Count > 0)
+            {
+                var unreadablePrefixes = failedDirectories.Select(dir => ProjectWalker.ToRecordedPath(root, dir)).ToList();
+                reserved = [.. unreachablePackagePrefixes, .. unreadablePrefixes];
+                foreach (var prefix in unreadablePrefixes)
+                    warnings.Add($"{prefix}: directory could not be read this rebuild; previously recorded state preserved.");
+            }
+
             // Scoped to exactly the extensions this indexer owns, same as ScriptIndexer and
             // AssetIndexer each scope their own sweep — three indexers now share one graph and
             // one path-prefix space, and without this a full reindex by any one of them would
             // delete the other two's nodes entirely (see GraphDatabase.SweepStaleNodes's own
             // ownedExtensions doc comment).
-            database.SweepStaleNodes(root.PathPrefix, visited, unreachablePackagePrefixes, ImportedAssetKind.Extensions);
+            database.SweepStaleNodes(root.PathPrefix, visited, reserved, ImportedAssetKind.Extensions);
         }
 
         return new IndexResult

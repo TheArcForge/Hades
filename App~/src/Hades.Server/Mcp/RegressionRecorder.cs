@@ -96,11 +96,21 @@ public sealed class RegressionRecorder
     /// later comparing: <see cref="CallToolResult.StructuredContent"/> when the tool set it (every
     /// Hades tool registered with UseStructuredContent=true does - see Program.cs's WithTools chain),
     /// otherwise a small object built from <see cref="CallToolResult.IsError"/> and the joined text
-    /// content, so a tool that answers only in plain text - or fails with only an error message -
-    /// still normalizes to something comparable rather than silently recording as null. Shared by
-    /// capture (<see cref="Capture"/>, above) and replay (EditorProjectTools.HadesRegression's
+    /// content, so a tool that answers only in plain text still normalizes to something comparable
+    /// rather than silently recording as null.
+    ///
+    /// Shared by capture (<see cref="Capture"/>, above) and replay (EditorProjectTools.HadesRegression's
     /// tool-shaped replay path) so the two can never drift into comparing values built two different
-    /// ways.
+    /// ways - but the two call it at different times, for different reasons, and only replay ever
+    /// hands it an IsError result in practice. Capture only ever runs for a call Program.cs's own
+    /// CallToolFilters chain finished dispatching normally (see that method's own doc comment); a
+    /// GUARD REFUSAL - the hoisted, validate-before-resolving kind (SettingsTools.ProjectSettings's
+    /// own comment on why those checks run first) - never reaches it at all: it either throws past
+    /// Capture's own call site entirely, or (F13a's unknown-parameter rejection) returns before that
+    /// call site ever runs. So the IsError branch below is not, today, capturing refusals live - it
+    /// exists so a REPLAYED call's fresh result (EditorProjectTools.ReplayToolCallAsync's own
+    /// `RegressionRecorder.Normalize(actual)`), which certainly can be IsError, still normalizes
+    /// into the same shape the recorded 'expected' value used, so the two remain comparable.
     /// </summary>
     public static JsonElement Normalize(CallToolResult result)
     {

@@ -76,7 +76,7 @@ struct MenuBarContentTests {
             iconState: .indexing,
             headline: "Indexing Hades-Unity-Client",
             rows: [
-                SummaryRow(project: "Hades-Unity-Client", status: "Indexing 42 of 100 files", severity: .ok)
+                SummaryRow(project: "Hades-Unity-Client", productGuid: "15c012f27331e49229cef25e74537816", status: "Indexing 42 of 100 files", severity: .ok)
             ],
             lease: nil
         )
@@ -93,7 +93,7 @@ struct MenuBarContentTests {
             iconState: .attached,
             headline: "Editor attached to Hades-Unity-Client",
             rows: [
-                SummaryRow(project: "Hades-Unity-Client", status: "Editor attached \u{00b7} indexed 4m ago", severity: .ok)
+                SummaryRow(project: "Hades-Unity-Client", productGuid: "15c012f27331e49229cef25e74537816", status: "Editor attached \u{00b7} indexed 4m ago", severity: .ok)
             ],
             lease: nil
         )
@@ -107,7 +107,7 @@ struct MenuBarContentTests {
             iconState: .attached,
             headline: "Editor attached to Hades-Unity-Client",
             rows: [
-                SummaryRow(project: "Hades-Unity-Client", status: "Editor attached (busy)", severity: .ok)
+                SummaryRow(project: "Hades-Unity-Client", productGuid: "15c012f27331e49229cef25e74537816", status: "Editor attached (busy)", severity: .ok)
             ],
             lease: nil
         )
@@ -121,7 +121,7 @@ struct MenuBarContentTests {
             iconState: .leaseHeld,
             headline: "Holding script reload for Hades-Unity-Client \u{2014} 42s",
             rows: [
-                SummaryRow(project: "Hades-Unity-Client", status: "Editor attached \u{00b7} indexed 5m ago", severity: .ok)
+                SummaryRow(project: "Hades-Unity-Client", productGuid: "15c012f27331e49229cef25e74537816", status: "Editor attached \u{00b7} indexed 5m ago", severity: .ok)
             ],
             lease: SummaryLease(
                 project: "Hades-Unity-Client",
@@ -170,7 +170,7 @@ struct MenuBarContentTests {
             iconState: .error,
             headline: "Hades-Unity-Client needs attention",
             rows: [
-                SummaryRow(project: "Hades-Unity-Client", status: "Project path not found", severity: .error)
+                SummaryRow(project: "Hades-Unity-Client", productGuid: "15c012f27331e49229cef25e74537816", status: "Project path not found", severity: .error)
             ],
             lease: nil
         )

@@ -101,6 +101,7 @@ namespace Hades.Tools
         {
             var goPath = JsonParams.RequireString(@params, "gameObjectPath", "prefab.create");
             var assetPath = JsonParams.RequireString(@params, "assetPath", "prefab.create");
+            assetPath = AssetPathGuard.RequireNewAssetPath(assetPath, "prefab.create", "Prefab", "prefab_apply's editProperty operation");
 
             var go = GameObjectPaths.FindByPath(goPath) ?? throw GameObjectPaths.NotFoundError(goPath);
 
@@ -497,6 +498,17 @@ namespace Hades.Tools
         {
             var basePrefabPath = JsonParams.RequireString(@params, "basePrefabPath", "prefab.create_variant");
             var variantPath = JsonParams.RequireString(@params, "variantPath", "prefab.create_variant");
+
+            // F21: accepting base == variant destroyed the target during the tester's own repro (the
+            // variant save silently replaced the base prefab it was meant to be based on) - checked
+            // ahead of the guard's own existence check below so this gets its own precise message
+            // instead of a generic "already exists" one.
+            if (string.Equals(basePrefabPath, variantPath, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    "prefab.create_variant: basePrefabPath and variantPath must differ (both are '" + basePrefabPath + "').");
+            }
+            variantPath = AssetPathGuard.RequireNewAssetPath(variantPath, "prefab.create_variant", "Prefab", "prefab_apply's editProperty operation");
 
             var basePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(basePrefabPath) ?? throw PrefabNotFoundError(basePrefabPath);
 

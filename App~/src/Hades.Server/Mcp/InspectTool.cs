@@ -170,6 +170,17 @@ public sealed record InspectAssetResult
     // depth == "value": the raw field value, plus resolved reference metadata when it is one
     [JsonPropertyName("value")] public object? Value { get; init; }
     [JsonPropertyName("reference")] public InspectReferenceResult? Reference { get; init; }
+
+    /// <summary>depth == "value" or "properties" only: true when a raw field value below (this
+    /// result's own <see cref="Value"/>, or an <see cref="InspectEventListenerResult.Arguments"/>
+    /// among <see cref="Events"/>) was too large to return in full and was cut - see
+    /// <see cref="InspectTool.BoundValue"/>. E3: unlike the hierarchy result, a single component
+    /// field has no caller-supplied 'limit' to honour, so this is reported rather than left
+    /// silently unbounded (a ~3MB field previously produced a ~6MB response). Omitted for
+    /// "structure"/"components", which carry no field-value payload of their own to bound - the
+    /// hierarchy's OWN truncation is already reported separately, under <see cref="Hierarchy"/>.
+    /// </summary>
+    [JsonPropertyName("truncated")] public bool? Truncated { get; init; }
 }
 
 // ---------------------------------------------------------------- find_unset_references result shapes
@@ -274,6 +285,18 @@ public sealed class InspectTool(ProjectService projects)
 {
     const int DefaultHierarchyLimit = 100;
     const int MaxHierarchyLimit = 500;
+
+    /// <summary>
+    /// E3: the cap <see cref="BoundValue"/> applies to a single depth="value"/"properties" raw
+    /// field - characters for a string, elements for a list, entries for a dictionary - mirroring
+    /// the node-count budget <see cref="TruncateNodes"/> already gives the hierarchy result. A
+    /// single component field has no caller-supplied 'limit' the way a whole-file hierarchy does,
+    /// so without a cap of its own a pathologically large one (a baked mesh's float array, an
+    /// embedded text blob) returns wholesale - measured at a ~3MB field producing a ~6MB response.
+    /// Deliberately generous: a normal component field (a handful of scalars, a Vector3, a short
+    /// list) never comes close.
+    /// </summary>
+    const int MaxValueUnits = 2000;
 
     [McpServerTool(Name = "inspect_asset", Title = "Inspect Asset", ReadOnly = true, UseStructuredContent = true)]
     [Description("Reads one named asset from disk, narrowing progressively as more arguments are "
@@ -518,6 +541,50 @@ public sealed class InspectTool(ProjectService projects)
         return result;
     }
 
+    /// <summary>
+    /// E3: caps a depth="value"/"properties" raw field to <see cref="MaxValueUnits"/> "units" -
+    /// characters for a string, elements for a list, entries for a dictionary - the same
+    /// budget-limited-copy idea <see cref="TruncateNodes"/> already applies to a whole-file
+    /// hierarchy, mirrored here for the other unbounded payload. Recurses into a list or
+    /// dictionary's own elements, so a small container wrapping one huge string (exactly
+    /// <see cref="InspectEventListenerResult.Arguments"/>'s own shape - a handful of keys, one of
+    /// which can be an arbitrarily long m_StringArgument) is still bounded, not just the outer
+    /// shape. Safe to recurse unguarded: every value this walks already passed through
+    /// <see cref="ReadThrough"/>'s own <see cref="MaxInspectDepth"/> nesting bound (E1) on the way
+    /// in, so this can never recurse deeper than that. <paramref name="truncated"/> is set (never
+    /// cleared back to false) the first time anything anywhere in the tree is cut.
+    /// </summary>
+    static object? BoundValue(object? value, ref bool truncated)
+    {
+        switch (value)
+        {
+            case string text when text.Length > MaxValueUnits:
+                truncated = true;
+                return text[..MaxValueUnits];
+
+            case List<object?> list:
+                var boundedList = new List<object?>();
+                foreach (var item in list)
+                {
+                    if (boundedList.Count >= MaxValueUnits) { truncated = true; break; }
+                    boundedList.Add(BoundValue(item, ref truncated));
+                }
+                return boundedList;
+
+            case IReadOnlyDictionary<string, object?> dict:
+                var boundedDict = new Dictionary<string, object?>(StringComparer.Ordinal);
+                foreach (var (key, entry) in dict)
+                {
+                    if (boundedDict.Count >= MaxValueUnits) { truncated = true; break; }
+                    boundedDict[key] = BoundValue(entry, ref truncated);
+                }
+                return boundedDict;
+
+            default:
+                return value;
+        }
+    }
+
     static InspectMaterialResult ToMaterialResult(MaterialProperties material) => new()
     {
         Path = material.Path,
@@ -588,22 +655,28 @@ public sealed class InspectTool(ProjectService projects)
             ?? throw new McpException($"Project {productGuid} is known but its record could not be read. "
                                      + "Call hades_status for details.");
 
+        // E3: each listener's own m_Arguments can carry an arbitrarily large slot (a huge
+        // m_StringArgument) - bounded exactly like ValueResult's own Value, below.
+        var truncated = false;
+        var events = listeners.Select(l => new InspectEventListenerResult
+        {
+            EventField = l.EventField,
+            Index = l.Index,
+            Target = ToReferenceResult(l.Target),
+            TargetAssemblyTypeName = l.TargetAssemblyTypeName,
+            MethodName = l.MethodName,
+            Mode = l.Mode,
+            CallState = l.CallState,
+            Arguments = BoundValue(l.Arguments, ref truncated),
+        }).ToList();
+
         return new InspectAssetResult
         {
             Path = path,
             Depth = "properties",
             Properties = fields.Keys.ToList(),
-            Events = listeners.Select(l => new InspectEventListenerResult
-            {
-                EventField = l.EventField,
-                Index = l.Index,
-                Target = ToReferenceResult(l.Target),
-                TargetAssemblyTypeName = l.TargetAssemblyTypeName,
-                MethodName = l.MethodName,
-                Mode = l.Mode,
-                CallState = l.CallState,
-                Arguments = l.Arguments,
-            }).ToList(),
+            Events = events,
+            Truncated = truncated,
         };
     }
 
@@ -636,7 +709,19 @@ public sealed class InspectTool(ProjectService projects)
             }
         }
 
-        return new InspectAssetResult { Path = path, Depth = "value", Value = value, Reference = reference };
+        // E3: reference detection above always runs against the RAW value (a {fileID, guid, type}
+        // dict is always tiny, never worth bounding), only the returned Value itself is capped.
+        var truncated = false;
+        var boundedValue = BoundValue(value, ref truncated);
+
+        return new InspectAssetResult
+        {
+            Path = path,
+            Depth = "value",
+            Value = boundedValue,
+            Reference = reference,
+            Truncated = truncated,
+        };
     }
 
     static InspectReferenceResult ToReferenceResult(ResolvedReference reference) => new()
@@ -664,6 +749,14 @@ public sealed class InspectTool(ProjectService projects)
     /// ReadThrough/ReferenceReading) call documents throwing, translated to a normal tool error - the
     /// same shape InspectionTools/TypedAssetTools/ReferenceTools/SettingsTools each already use, one
     /// copy per file by established convention rather than shared through ToolSupport.
+    ///
+    /// E2: <see cref="UnityYamlParseException"/> (thrown by <see cref="UnityYamlReader.Read"/> on a
+    /// header it cannot parse at all, e.g. a class id overflowing Int32 - I1's own fixture) used to
+    /// be missing from this list, so an UNCAUGHT poison-header exception left the MCP SDK's own
+    /// wrapper (every tool error reads "An error occurred invoking '{tool}': ...") with nothing to
+    /// append after the colon, rather than naming the file and the reason the way every other
+    /// read-through failure already does - exactly what AssetIndexer's own equivalent catch (see
+    /// AssetIndexer.cs) already caught for the indexer's read path.
     /// </summary>
     static T Guarded<T>(Func<T> body)
     {
@@ -672,7 +765,7 @@ public sealed class InspectTool(ProjectService projects)
             return body();
         }
         catch (Exception ex) when (ex is ArgumentException or FileNotFoundException
-            or InvalidDataException or NotSupportedException or IOException)
+            or InvalidDataException or NotSupportedException or IOException or UnityYamlParseException)
         {
             throw new McpException(ex.Message);
         }

@@ -222,6 +222,144 @@ public class MemoryStoreTests : IDisposable
         Assert.Throws<ArgumentException>(() => store.Write(ProductGuid, "../other-guid/memory/x.md", "content"));
     }
 
+    // ---------------------------------------------------------------- P2: extension normalization
+    // (real v1.2 .arcforge imports carry target_file values with no ".md" - see
+    // MemoryProposalsTests's own coverage of the propose side. Every document this store reads or
+    // writes is a markdown file by definition, so an extension-less name and its ".md" counterpart
+    // must name the SAME document, never two different ones - otherwise a write lands in a file no
+    // *.md listing surface (GetMemorySummary, ValidateMemory, MemoryIndex) ever shows again.)
+
+    [Fact]
+    public void Write_ExtensionLessName_LandsInADotMdFileOnDisk()
+    {
+        var store = NewStore();
+
+        store.Write(ProductGuid, "conventions", "# Conventions\n");
+
+        var memoryDir = new AppPaths(_appRoot).MemoryDir(ProductGuid);
+        Assert.True(File.Exists(Path.Combine(memoryDir, "conventions.md")));
+        Assert.False(File.Exists(Path.Combine(memoryDir, "conventions")));
+    }
+
+    [Fact]
+    public void Read_ExtensionLessName_FindsTheSameDotMdFileAWriteWithTheExtensionWouldHaveFound()
+    {
+        var store = NewStore();
+        store.Write(ProductGuid, "conventions.md", "# Conventions\n");
+
+        var readWithoutExtension = store.Read(ProductGuid, "conventions");
+
+        Assert.NotNull(readWithoutExtension);
+        Assert.Equal("# Conventions\n", readWithoutExtension!.Body);
+    }
+
+    [Fact]
+    public void WriteThenRead_ExtensionLessName_RoundTripsThroughTheNormalizedDotMdFile()
+    {
+        // The scenario AcceptProposal depends on: a first accept creates the document (Write), a
+        // later accept looks up "existing" content to append to (Read) - both must resolve to the
+        // SAME file even when the caller never types ".md", or the second accept would think no
+        // document exists yet and silently replace instead of append.
+        var store = NewStore();
+
+        store.Write(ProductGuid, "conventions", "first");
+        var afterFirst = store.Read(ProductGuid, "conventions");
+        Assert.Equal("first", afterFirst?.Body);
+
+        store.Write(ProductGuid, "conventions", afterFirst!.RawText + "\nsecond");
+        var afterSecond = store.Read(ProductGuid, "conventions.md");
+
+        Assert.Equal("first\nsecond", afterSecond?.Body);
+    }
+
+    [Fact]
+    public void Write_NameAlreadyEndingInUppercaseMD_IsNotDoubleAppended()
+    {
+        var store = NewStore();
+
+        store.Write(ProductGuid, "conventions.MD", "content");
+
+        var memoryDir = new AppPaths(_appRoot).MemoryDir(ProductGuid);
+        Assert.True(File.Exists(Path.Combine(memoryDir, "conventions.MD")));
+        Assert.False(File.Exists(Path.Combine(memoryDir, "conventions.MD.md")));
+    }
+
+    [Theory]
+    [InlineData("..")]
+    [InlineData("../escape")]
+    [InlineData("/etc/passwd")]
+    [InlineData("sub/dir/file")]
+    public void Write_ExtensionLessUnsafeName_StillRejectedBeforeNormalizationCouldMaskIt(string name)
+    {
+        // Regression guard for the fix itself: normalizing MUST happen after validation, never
+        // before - appending ".md" to ".." before checking it would neuter the traversal check
+        // (".." would become "...md", a harmless-looking single path segment).
+        var store = NewStore();
+
+        Assert.Throws<ArgumentException>(() => store.Write(ProductGuid, name, "content"));
+    }
+
+    // ---------------------------------------------------------------- P2: cross-platform *.md enumeration
+    // (Directory.EnumerateFiles(dir, "*.md") is case-sensitive on Linux - a document or import
+    // source named e.g. "CAPS.MD" would silently vanish from every listing surface there alone.)
+
+    [Fact]
+    public void Import_UppercaseMdExtensionSourceFile_IsStillRecognisedAndImported()
+    {
+        var projectRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var arcforgeMemoryDir = Path.Combine(projectRoot, ".arcforge", "memory");
+        Directory.CreateDirectory(arcforgeMemoryDir);
+        File.WriteAllText(Path.Combine(arcforgeMemoryDir, "CAPS.MD"), "# Caps\n");
+
+        try
+        {
+            var store = NewStore();
+            var result = store.ImportFromArcforge(ProductGuid, projectRoot);
+
+            Assert.Contains("CAPS.MD", result.Imported);
+            Assert.Empty(result.Skipped);
+        }
+        finally
+        {
+            if (Directory.Exists(projectRoot)) Directory.Delete(projectRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Import_OneUnreadableSourceFile_IsReportedSkippedAndEveryOtherFileStillImports()
+    {
+        // Unix permissions are the mechanism under test; there is no Windows equivalent of an
+        // unreadable-but-present mode-000 file to exercise this path with.
+        if (OperatingSystem.IsWindows()) return;
+
+        var projectRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var arcforgeMemoryDir = Path.Combine(projectRoot, ".arcforge", "memory");
+        Directory.CreateDirectory(arcforgeMemoryDir);
+        File.WriteAllText(Path.Combine(arcforgeMemoryDir, "aaa-first.md"), "# First\n");
+        var unreadable = Path.Combine(arcforgeMemoryDir, "bbb-unreadable.md");
+        File.WriteAllText(unreadable, "# Locked\n");
+        File.WriteAllText(Path.Combine(arcforgeMemoryDir, "ccc-last.md"), "# Last\n");
+        File.SetUnixFileMode(unreadable, UnixFileMode.None);
+
+        try
+        {
+            var store = NewStore();
+            var result = store.ImportFromArcforge(ProductGuid, projectRoot);
+
+            Assert.Contains("aaa-first.md", result.Imported);
+            Assert.Contains("ccc-last.md", result.Imported);
+            Assert.DoesNotContain("bbb-unreadable.md", result.Imported);
+            var skip = Assert.Single(result.Skipped);
+            Assert.Equal("bbb-unreadable.md", skip.Source);
+            Assert.False(string.IsNullOrWhiteSpace(skip.Reason));
+        }
+        finally
+        {
+            File.SetUnixFileMode(unreadable, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            if (Directory.Exists(projectRoot)) Directory.Delete(projectRoot, recursive: true);
+        }
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_appRoot)) Directory.Delete(_appRoot, recursive: true);

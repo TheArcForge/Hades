@@ -55,22 +55,33 @@ public static class PluginVersionComparison
         return plugin == app ? PluginVersionSkew.Same : PluginVersionSkew.Minor;
     }
 
-    /// <summary>Parses "major.minor" or "major.minor.patch" - a missing patch defaults to 0. Ints
-    /// must be non-negative; anything else (a prerelease suffix, a stray fourth component, letters,
-    /// blank) fails to parse rather than guessing.</summary>
+    /// <summary>Parses the numeric MAJOR.MINOR(.patch) core of <paramref name="version"/> - a
+    /// missing patch defaults to 0. First strips a trailing semver prerelease/build suffix ("-" or
+    /// "+", e.g. "2.0.0-beta" or "1.2.0+build5") and ignores any component past the third (e.g.
+    /// "1.2.3.4" reads as 1.2.3) - a plugin ahead of the app's own release cadence (a beta, or a
+    /// build carrying a fourth component) still has a comparable numeric core, and suppressing the
+    /// skew warning for it entirely (the previous behaviour: anything that didn't match exactly
+    /// "major.minor"/"major.minor.patch" fell to <see cref="PluginVersionSkew.Unknown"/>) hid a
+    /// real major-version gap - see PluginVersionSkewTests' own "should warn" case. Ints must still
+    /// be non-negative; MAJOR and MINOR missing or non-numeric (e.g. "1.x.0", "not-a-version", just
+    /// "1" with no minor at all) still fails to parse rather than guessing.</summary>
     static bool TryParse(string? version, out (int Major, int Minor, int Patch) parsed)
     {
         parsed = default;
         if (string.IsNullOrWhiteSpace(version)) return false;
 
-        var parts = version.Split('.');
-        if (parts.Length is < 2 or > 3) return false;
+        var suffixStart = version.IndexOfAny(['-', '+']);
+        var core = suffixStart >= 0 ? version[..suffixStart] : version;
+
+        var parts = core.Split('.');
+        if (parts.Length < 2) return false;
 
         if (!int.TryParse(parts[0], out var major) || major < 0) return false;
         if (!int.TryParse(parts[1], out var minor) || minor < 0) return false;
 
         var patch = 0;
-        if (parts.Length == 3 && (!int.TryParse(parts[2], out patch) || patch < 0)) return false;
+        if (parts.Length >= 3 && (!int.TryParse(parts[2], out patch) || patch < 0)) return false;
+        // Any component beyond the third (parts[3], ...) is ignored, not validated - e.g. "1.2.3.4".
 
         parsed = (major, minor, patch);
         return true;

@@ -1,8 +1,9 @@
 namespace Hades.Core.Graph;
 
 /// <summary>
-/// One `references` edge encountered while <see cref="GraphDatabase.TraceDependencies"/> walks
-/// outward whose target GUID owns no node anywhere in the graph — F6-honesty: not a broken walk,
+/// One `references` or `instance_of` edge encountered while
+/// <see cref="GraphDatabase.TraceDependencies"/> walks outward whose target GUID owns no node
+/// anywhere in the graph — F6-honesty: not a broken walk,
 /// since the edge itself is exactly as real as any other (it is a row in the `edges` table, keyed
 /// by GUID, same as every resolvable dependency). Two DIFFERENT reasons produce this today, and
 /// this record does not distinguish which: the target's asset kind genuinely is not one Hades

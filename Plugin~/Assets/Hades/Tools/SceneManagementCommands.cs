@@ -47,6 +47,11 @@ namespace Hades.Tools
                 return JsonValue.NewObject().SetProperty("saved", JsonValue.String(scene.path));
             }
 
+            // Save-AS, not create: unlike scene.create/scene.duplicate this MAY legitimately land on
+            // an existing .unity file (including the currently open scene's own path) - so only
+            // structural well-formedness is required here, not RequireNewAssetPath's existence
+            // refusal. See AssetPathGuard.RequireWellFormedProjectPath's own doc comment.
+            path = AssetPathGuard.RequireWellFormedProjectPath(path, "scene.save");
             AssetFolders.EnsureExists(AssetFolders.DirectoryName(path));
             EditorSceneManager.SaveScene(scene, path);
             return JsonValue.NewObject().SetProperty("saved", JsonValue.String(path));
@@ -57,6 +62,7 @@ namespace Hades.Tools
         internal static JsonValue CreateScene(ReloadGate gate, JsonValue @params)
         {
             var path = JsonParams.RequireString(@params, "path", "scene.create");
+            path = AssetPathGuard.RequireNewAssetPath(path, "scene.create", "Scene", "scene_manage's 'open' operation");
             var template = JsonParams.OptionalString(@params, "template");
 
             AssetFolders.EnsureExists(AssetFolders.DirectoryName(path));
@@ -93,6 +99,7 @@ namespace Hades.Tools
         {
             var sourcePath = JsonParams.RequireString(@params, "sourcePath", "scene.duplicate");
             var destPath = JsonParams.RequireString(@params, "destPath", "scene.duplicate");
+            destPath = AssetPathGuard.RequireNewAssetPath(destPath, "scene.duplicate", "Scene", "scene_manage's 'open' operation");
 
             if (AssetDatabase.LoadAssetAtPath<SceneAsset>(sourcePath) == null)
                 throw new ArgumentException("Source scene not found at path: '" + sourcePath + "'.");

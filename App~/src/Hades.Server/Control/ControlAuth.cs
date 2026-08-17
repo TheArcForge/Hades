@@ -49,24 +49,45 @@ public static class ControlAuth
         CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(presented));
 
     /// <summary>
-    /// Writes the discovery file, then fixes its mode to 0600 unconditionally - see
-    /// EditorListener.WriteConnectionFile's own doc comment for why "unconditionally" matters (a
-    /// pre-existing file keeps its old mode; UnixCreateMode only applies to a newly created inode,
-    /// so a stale file from a previous run would otherwise keep whatever mode it already had).
+    /// Writes the discovery file, creating it at mode 0600 in the SAME syscall that creates the
+    /// inode (<see cref="FileStreamOptions.UnixCreateMode"/>) - so the token is never briefly
+    /// sitting in a file at the wider, umask-determined default mode a plain
+    /// <see cref="File.WriteAllText(string,string)"/>-then-chmod would leave it at for the instant
+    /// between the two. <see cref="FileStreamOptions.UnixCreateMode"/> only takes effect when this
+    /// call actually creates a NEW inode, so <see cref="File.SetUnixFileMode"/> still runs
+    /// unconditionally afterward as a defensive fallback for the one case it cannot cover: a
+    /// pre-existing file at this path (a stale discovery file from a previous run, or one some
+    /// other tool wrote) that <see cref="FileMode.Create"/> reuses/truncates instead of replacing,
+    /// keeping whatever mode it already had unless something narrows it explicitly.
     /// </summary>
     public static void WriteConnectionFile(string path, int port, string token)
     {
         var directory = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
 
-        File.WriteAllText(path, JsonSerializer.Serialize(new ControlConnectionInfo { Port = port, Token = token }));
+        var json = JsonSerializer.Serialize(new ControlConnectionInfo { Port = port, Token = token });
 
-        // Hades targets macOS; File.SetUnixFileMode is unsupported on Windows.
-        // OperatingSystem.IsWindows() is the analyzer-recognised platform-guard pattern.
-        if (!OperatingSystem.IsWindows())
+        // Hades targets macOS; File.SetUnixFileMode/FileStreamOptions.UnixCreateMode are
+        // unsupported on Windows. OperatingSystem.IsWindows() is the analyzer-recognised
+        // platform-guard pattern.
+        if (OperatingSystem.IsWindows())
         {
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            File.WriteAllText(path, json);
+            return;
         }
+
+        using (var stream = File.Open(path, new FileStreamOptions
+        {
+            Mode = FileMode.Create,
+            Access = FileAccess.Write,
+            UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
+        }))
+        {
+            var bytes = Encoding.UTF8.GetBytes(json);
+            stream.Write(bytes, 0, bytes.Length);
+        }
+
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
     /// <summary>

@@ -13,6 +13,13 @@ public sealed record SweepResult
     public required int FilesExamined { get; init; }
     public required TimeSpan Duration { get; init; }
 
+    /// <summary>I5: per-file diagnostics from this sweep and the indexing it drove — an
+    /// unreadable directory (I10), or a file <see cref="Indexing.ScriptIndexer"/> / <see
+    /// cref="Indexing.AssetIndexer"/> could not read or parse. Empty, never null, when nothing
+    /// went wrong. <see cref="ProjectService.SyncChanges"/> populates the indexing half; this
+    /// record only ever sets the sweep half itself.</summary>
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+
     public bool AnythingChanged => Added.Count > 0 || Changed.Count > 0 || Deleted.Count > 0;
 
     /// <summary>Files needing a (re)index — added and changed together, which is what callers want.</summary>
@@ -44,12 +51,15 @@ public static class ProjectSweeper
         var recorded = database.AllFileState();
         var onDisk = new Dictionary<string, FileState>(StringComparer.Ordinal);
         var warnings = new List<string>();
+        var unreadablePrefixes = new List<string>();
 
         // Walk exactly as the indexers do — same roots, same pruning, same local "file:" package
         // resolution. Any divergence here would read as spurious additions or deletions.
         foreach (var root in ProjectWalker.ResolveScanRoots(projectRoot, warnings))
         {
-            foreach (var file in ProjectWalker.EnumerateSourceFiles(root.AbsolutePath, "*"))
+            var failedDirectories = new List<string>();
+
+            foreach (var file in ProjectWalker.EnumerateSourceFiles(root.AbsolutePath, "*", failedDirectories))
             {
                 if (!IndexableExtensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
                     continue;
@@ -73,6 +83,17 @@ public static class ProjectSweeper
                     if (recorded.TryGetValue(relativePath, out var previous)) onDisk[relativePath] = previous;
                 }
             }
+
+            // I10: a directory this walk could not even list is not evidence anything under it
+            // was deleted - it may be a permissions hiccup, a not-yet-synced network/cloud mount,
+            // or a transient lock. Reported once per sweep (not per file) and excluded from the
+            // Deleted computation below, so its previously recorded state survives untouched.
+            foreach (var directory in failedDirectories)
+            {
+                var prefix = ProjectWalker.ToRecordedPath(root, directory);
+                unreadablePrefixes.Add(prefix);
+                warnings.Add($"{prefix}: directory could not be read this sweep; previously recorded state preserved.");
+            }
         }
 
         var added = new List<string>();
@@ -84,7 +105,10 @@ public static class ProjectSweeper
             if (previous.MTimeUtcMs != current.MTimeUtcMs || previous.Size != current.Size) changed.Add(path);
         }
 
-        var deleted = recorded.Keys.Where(p => !onDisk.ContainsKey(p)).ToList();
+        var deleted = recorded.Keys
+            .Where(p => !onDisk.ContainsKey(p))
+            .Where(p => !IsUnderAnyPrefix(p, unreadablePrefixes))
+            .ToList();
 
         return new SweepResult
         {
@@ -93,8 +117,13 @@ public static class ProjectSweeper
             Deleted = deleted,
             FilesExamined = onDisk.Count,
             Duration = stopwatch.Elapsed,
+            Warnings = warnings,
         };
     }
+
+    static bool IsUnderAnyPrefix(string path, IReadOnlyList<string> prefixes) =>
+        prefixes.Any(prefix => path.Equals(prefix, StringComparison.Ordinal)
+            || path.StartsWith(prefix + "/", StringComparison.Ordinal));
 
     /// <summary>The on-disk state of specific files, for recording after they are indexed.</summary>
     public static IReadOnlyList<FileState> StateFor(string projectRoot, IEnumerable<string> relativePaths)

@@ -25,6 +25,9 @@ struct DTODecodingTests {
         #expect(result.lease == nil)
         #expect(result.rows.count == 1)
         #expect(result.rows[0].project == "Hades-Unity-Client")
+        // Stable per-project identity, present even with no lease in play - a view must key rows
+        // on this, never on `project` (see SummaryRow's own doc comment).
+        #expect(result.rows[0].productGuid == "15c012f27331e49229cef25e74537816")
         #expect(result.rows[0].status.contains("indexed"))
         #expect(result.rows[0].severity == .ok)
     }
@@ -40,6 +43,10 @@ struct DTODecodingTests {
         #expect(lease.heldForSeconds == 42)
         #expect(lease.expiresInSeconds == 18)
         #expect(lease.releasable == true)
+        // The row's own productGuid matches the lease's leaseId here - both resolve to the SAME
+        // holding project's real identity (see Hades.Server.Control.SummaryLease.LeaseId's own doc
+        // comment on the .NET side for why leaseId is a productGuid in the first place).
+        #expect(result.rows[0].productGuid == lease.leaseId)
     }
 
     @Test("an unrecognised iconState or severity decodes to .unknown rather than throwing")
@@ -52,6 +59,9 @@ struct DTODecodingTests {
 
         #expect(result.iconState == .unknown)
         #expect(result.rows[0].severity == .unknown)
+        // productGuid is an ordinary String, not a ControlEnum - unaffected by the enum-fallback
+        // path this fixture exercises, and still required to decode.
+        #expect(result.rows[0].productGuid == "15c012f27331e49229cef25e74537816")
     }
 
     @Test("ProjectsResult: absent unityVersion, an empty warnings array, and a populated one")
@@ -139,7 +149,7 @@ struct DTODecodingTests {
 
     // MARK: - Plan 13 Task 1: Projects actions
 
-    @Test("ProjectRow decodes POST /control/projects/add's response - the same row shape GET /control/projects uses")
+    @Test("ProjectRow decodes POST /control/projects/add's response - the same row shape GET /control/projects uses, including a populated pluginVersionMismatch warning")
     func projectsAdd() throws {
         let result = try Fixtures.decode(ProjectRow.self, "projects_add")
 
@@ -149,7 +159,14 @@ struct DTODecodingTests {
         #expect(result.indexState == .indexed)
         #expect(result.nodeCount == 494)
         #expect(result.edgeCount == 332)
-        #expect(result.warnings.isEmpty)
+        // Hades.Server.Control.ProjectsEndpoint's own pluginVersionMismatch warning (major-skew
+        // wording - installed v1.2.0 vs this app's v2.0.0-dev) - exercises the decode path for a
+        // warning code every OTHER projects fixture leaves this array empty for.
+        #expect(result.warnings.count == 1)
+        #expect(result.warnings[0].code == "pluginVersionMismatch")
+        #expect(result.warnings[0].severity == .warning)
+        #expect(result.warnings[0].message == "The installed Hades plugin (v1.2.0) is a different major version from this app (v2.0.0-dev) — compatibility is not assured, and most Editor-dependent tools should be expected to fail until it is updated.")
+        #expect(result.warnings[0].remedy == "Use Install/Update Plugin for this project, then restart Unity if it is already running.")
     }
 
     @Test("ActionResult decodes real remove/revealInFinder/openInUnity responses, success and failure alike")
@@ -232,13 +249,21 @@ struct DTODecodingTests {
 
     // MARK: - Plan 13 Task 1: Settings
 
-    @Test("SettingsResult decodes a real mcpPort conflict, message includes the actionable remedy verbatim; launchAtLogin/resourceGuards are gone, not just empty")
+    @Test("SettingsResult decodes a real mcpPort conflict: port is where THIS instance actually runs (never the documented 7823 - inUse can only be true when they differ), message names both ports with no hedge, includes the actionable remedy verbatim; launchAtLogin/resourceGuards are gone, not just empty")
     func settingsMcpPortInUse() throws {
         let result = try Fixtures.decode(SettingsResult.self, "settings_mcp_port_in_use")
 
-        #expect(result.mcpPort.port == 7823)
+        // Plan 13 Task 8's own fix (see Hades.Server.Tests.Control.SettingsResolveTests.
+        // McpPortInUse_MessageNamesTheActualPortAndTheDocumentedPortConflict...NoHedge...): `inUse`
+        // is only ever true when `port` (where this instance actually runs) differs from the
+        // documented 7823 - a fixture pinning `port: 7823` alongside `inUse: true` would describe a
+        // state the server can never actually produce.
+        #expect(result.mcpPort.port == 9999)
         #expect(result.mcpPort.inUse == true)
-        #expect(result.mcpPort.message.contains("already in use"))
+        #expect(result.mcpPort.message == "Hades is running on port 9999 — the documented MCP port 7823 is already in use by another process. Find and stop whatever is using port 7823 (`lsof -nP -iTCP:7823 -sTCP:LISTEN`), or set ASPNETCORE_URLS to run Hades at a different address.")
+        // No longer hedges "either this Hades instance itself, or another process" - once inUse
+        // can be true at all, it is proven to be someone else (see the fix's own doc comment).
+        #expect(!result.mcpPort.message.contains("either this Hades instance itself"))
         // Plan 13 Task 7: the core's own McpBinding.RemedyForPortInUse, not a paraphrase - the
         // `lsof` command is the proof this is the SAME actionable text a hard startup failure gives.
         #expect(result.mcpPort.message.contains("lsof -nP -iTCP:7823 -sTCP:LISTEN"))

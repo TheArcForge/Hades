@@ -170,6 +170,28 @@ public class TraceRetentionTests : IDisposable
     }
 
     [Fact]
+    public void RecentTraces_ExposesRowIdAsAMonotonicInsertionOrderTiebreaker()
+    {
+        // T3: start_time has only millisecond resolution, and a real burst can record two calls
+        // inside one tick - three same-millisecond calls here, so start_time alone cannot order
+        // them. RowId (SQLite's own rowid) is the deterministic tiebreaker: it only ever grows, so
+        // it recovers true insertion order when timestamps tie. Newest-first overall means ties
+        // resolve last-inserted-first here (gamma, then beta, then alpha) - see
+        // TracesGroupIntoSequencesTests.SameMillisecondTies... for why GroupIntoSequences' own
+        // ascending re-sort then needs RowId too, to turn this back into chronological order.
+        using var store = Open();
+        store.RecordToolCall(Outcome(toolName: "alpha", startUtcMs: 9000, endUtcMs: 9010));
+        store.RecordToolCall(Outcome(toolName: "beta", startUtcMs: 9000, endUtcMs: 9020));
+        store.RecordToolCall(Outcome(toolName: "gamma", startUtcMs: 9000, endUtcMs: 9030));
+
+        var traces = store.RecentTraces();
+
+        Assert.Equal(["gamma", "beta", "alpha"], traces.Select(t => t.ToolName));
+        Assert.True(traces[0].RowId > traces[1].RowId, "gamma's RowId should be greater than beta's");
+        Assert.True(traces[1].RowId > traces[2].RowId, "beta's RowId should be greater than alpha's");
+    }
+
+    [Fact]
     public void RecentTraces_RespectsLimit()
     {
         using var store = Open();

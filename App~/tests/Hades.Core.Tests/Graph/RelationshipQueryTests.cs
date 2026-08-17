@@ -39,6 +39,17 @@ public class RelationshipQueryTests : IDisposable
         PropertyPath = propertyPath,
     };
 
+    static GraphEdge InstanceOf(string fromPath, long fromFileId, string? toGuid, long toFileId = 0,
+        string propertyPath = "m_SourcePrefab") => new()
+    {
+        FromPath = fromPath,
+        FromFileId = fromFileId,
+        ToGuid = toGuid,
+        ToFileId = toFileId,
+        Kind = "instance_of",
+        PropertyPath = propertyPath,
+    };
+
     // ---------------------------------------------------------------- PathForGuid
 
     [Fact]
@@ -161,18 +172,104 @@ public class RelationshipQueryTests : IDisposable
     }
 
     [Fact]
-    public void TraceDependencies_IgnoresEdgesThatAreNotKindReferences()
+    public void TraceDependencies_WalksAnInstanceOfEdgeAsADirectDependency()
     {
-        // instance_of and corresponds_to are not "depends on" in the sense this tool answers —
-        // only `references` edges count outward, per the reference implementation's doc comment.
-        // Must not leak into the dangling report either — an unresolvable instance_of target is
-        // not "a dependency this graph can't index", it was never a dependency at all.
+        // F19: a PrefabInstance's m_SourcePrefab (instance_of) names the prefab it nests — a
+        // genuine "what does this depend on" relationship, even though AssetIndexer writes it for
+        // a different reason (Unity's own nested-prefab bookkeeping) than an ordinary field
+        // reference. find_references_to already reported this in reverse — ReferencesTo/
+        // ReferencingFiles never filter by kind — while the forward walk silently dropped it.
+        using var db = Open();
+        db.UpsertNodes([Node("B", "GameObject", "Assets/B.prefab", guid: "bbbb")]);
+        db.UpsertEdges([InstanceOf("Assets/A.prefab", 1, "bbbb")]);
+
+        var hit = Assert.Single(db.TraceDependencies("Assets/A.prefab", maxDepth: 3).Hits);
+        Assert.Equal("Assets/B.prefab", hit.Path);
+        Assert.Equal(1, hit.Depth);
+    }
+
+    [Fact]
+    public void TraceDependencies_WalksANestedPrefabChainAcrossMultipleLevels()
+    {
+        // A nests B, B nests C. Each file's own PrefabInstance only ever names the prefab
+        // immediately nested inside it (Unity never records a transitive guid), so reaching C
+        // from A depends on the walk continuing past the first hop — the same iterative frontier
+        // TraceDependencies already uses for `references` edges.
+        using var db = Open();
+        db.UpsertNodes([
+            Node("B", "GameObject", "Assets/B.prefab", guid: "bbbb"),
+            Node("C", "GameObject", "Assets/C.prefab", guid: "cccc"),
+        ]);
+        db.UpsertEdges([
+            InstanceOf("Assets/A.prefab", 1, "bbbb"),
+            InstanceOf("Assets/B.prefab", 1, "cccc"),
+        ]);
+
+        var hits = db.TraceDependencies("Assets/A.prefab", maxDepth: 5).Hits;
+
+        Assert.Equal(2, hits.Count);
+        Assert.Contains(hits, h => h.Path == "Assets/B.prefab" && h.Depth == 1);
+        Assert.Contains(hits, h => h.Path == "Assets/C.prefab" && h.Depth == 2);
+    }
+
+    [Fact]
+    public void TraceDependencies_InstanceOfCycleTerminatesInsteadOfHanging()
+    {
+        // Two prefabs nesting each other is not a shape Unity itself would save, but the walk
+        // must not assume nesting is acyclic — the same visited-set termination proven above for
+        // `references` edges must hold regardless of which edge kind is being walked.
+        using var db = Open();
+        db.UpsertNodes([
+            Node("A", "GameObject", "Assets/A.prefab", guid: "aaaa"),
+            Node("B", "GameObject", "Assets/B.prefab", guid: "bbbb"),
+        ]);
+        db.UpsertEdges([
+            InstanceOf("Assets/A.prefab", 1, "bbbb"),
+            InstanceOf("Assets/B.prefab", 1, "aaaa"),
+        ]);
+
+        var hits = db.TraceDependencies("Assets/A.prefab", maxDepth: 10).Hits;
+
+        var hit = Assert.Single(hits);
+        Assert.Equal("Assets/B.prefab", hit.Path);
+        Assert.Equal(1, hit.Depth);
+    }
+
+    [Fact]
+    public void TraceDependencies_DanglingInstanceOfEdgeIsReportedNotDropped()
+    {
+        // F19's own complaint: the response's dangling array was empty too, so the edge was not
+        // reported as unresolved — it simply was not walked. A source prefab that resolves to no
+        // node (e.g. it lives outside every scanned root) must surface exactly like an
+        // unresolvable `references` target does — see the F6-honesty dangling tests below.
+        using var db = Open();
+        db.UpsertEdges([InstanceOf("Assets/A.prefab", 1, "srcguid00000000000000000000000")]);
+
+        var trace = db.TraceDependencies("Assets/A.prefab", maxDepth: 3);
+
+        Assert.Empty(trace.Hits);
+        var dangling = Assert.Single(trace.Dangling);
+        Assert.Equal("Assets/A.prefab", dangling.FromPath);
+        Assert.Equal(1, dangling.Depth);
+        Assert.Equal("srcguid00000000000000000000000", dangling.ToGuid);
+        Assert.Equal("m_SourcePrefab", dangling.PropertyPath);
+    }
+
+    [Fact]
+    public void TraceDependencies_IgnoresCorrespondsToEdges()
+    {
+        // corresponds_to links a stripped placeholder object to the real object it stands in for
+        // inside a nested prefab — bookkeeping to resolve individual objects, not a file-level
+        // "depends on" relationship, and redundant with the instance_of edge the same
+        // PrefabInstance always carries for the same target file. Must not leak into the
+        // dangling report either — an unresolvable corresponds_to target is not "a dependency
+        // this graph can't index", it was never a dependency at all.
         using var db = Open();
         db.UpsertEdges([
             new GraphEdge
             {
                 FromPath = "Assets/A.prefab", FromFileId = 1, ToGuid = "bbbb", ToFileId = 0,
-                Kind = "instance_of", PropertyPath = "m_SourcePrefab",
+                Kind = "corresponds_to", PropertyPath = "m_CorrespondingSourceObject",
             },
         ]);
 

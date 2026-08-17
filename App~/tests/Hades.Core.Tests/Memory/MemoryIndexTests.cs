@@ -206,6 +206,23 @@ public class MemoryIndexTests : IDisposable
     }
 
     [Fact]
+    public void SyncFromDirectory_UppercaseMDExtension_IsStillIndexed()
+    {
+        // Directory.EnumerateFiles(dir, "*.md")'s search-pattern casing follows the underlying
+        // filesystem, case-SENSITIVE on Linux - a document like "CAPS.MD" would silently never be
+        // indexed there alone, so Search would never find it either.
+        var memoryDir = Path.Combine(_dir, "memory");
+        Directory.CreateDirectory(memoryDir);
+        File.WriteAllText(Path.Combine(memoryDir, "CAPS.MD"), "Mentions a durian.");
+
+        using var index = Open();
+        index.SyncFromDirectory(memoryDir);
+
+        var hit = Assert.Single(index.Search("durian"));
+        Assert.Equal("CAPS.MD", hit.Name);
+    }
+
+    [Fact]
     public void SyncFromDirectory_OnANonExistentDirectoryLeavesTheIndexEmptyWithoutErroring()
     {
         using var index = Open();

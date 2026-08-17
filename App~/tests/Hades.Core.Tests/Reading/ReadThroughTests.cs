@@ -150,6 +150,71 @@ public class ReadThroughTests : IDisposable
             nodes.SelectMany(n => new[] { n }.Concat(Flatten(n.Children)));
     }
 
+    // ---------------------------------------------------------------- E1: depth-bounded recursion
+    //
+    // Unlike the cycle guard above, a StackOverflowException from an unbounded (but acyclic) walk
+    // is uncatchable - it crashes the whole process rather than surfacing as a normal exception -
+    // so there is no way to write a test that catches the "before" behaviour directly. Instead,
+    // these bracket ReadThrough.MaxInspectDepth from both sides: a structure sitting exactly at the
+    // bound must still succeed, and one step past it must fail cleanly with an InvalidDataException
+    // naming the limit, never hang or crash the test process.
+
+    static string MFatherChain(int depth) => string.Concat(Enumerable.Range(1, depth)
+        .Select(fileId => $"--- !u!4 &{fileId}\nTransform:\n  m_Father: {{fileID: {fileId - 1}}}\n"));
+
+    static string NestedList(int bracketDepth) => new string('[', bracketDepth) + "1" + new string(']', bracketDepth);
+
+    [Fact]
+    public void MFatherChainExactlyAtTheDepthBound_ParsesSuccessfully()
+    {
+        Write("Assets/DeepChainAtBound.prefab", Header + MFatherChain(ReadThrough.MaxInspectDepth));
+
+        var hierarchy = ReadThrough.GetHierarchy(_projectRoot, "Assets/DeepChainAtBound.prefab");
+
+        var depth = 0;
+        var node = Assert.Single(hierarchy.Roots);
+        while (true)
+        {
+            depth++;
+            if (node.Children.Count == 0) break;
+            node = Assert.Single(node.Children);
+        }
+        Assert.Equal(ReadThrough.MaxInspectDepth, depth);
+    }
+
+    [Fact]
+    public void MFatherChainOneLevelPastTheDepthBound_ThrowsNamingTheDepthLimit()
+    {
+        Write("Assets/DeepChainPastBound.prefab", Header + MFatherChain(ReadThrough.MaxInspectDepth + 1));
+
+        var ex = Assert.Throws<InvalidDataException>(
+            () => ReadThrough.GetHierarchy(_projectRoot, "Assets/DeepChainPastBound.prefab"));
+        Assert.Contains(ReadThrough.MaxInspectDepth.ToString(), ex.Message);
+        Assert.Contains("DeepChainPastBound.prefab", ex.Message);
+    }
+
+    [Fact]
+    public void ComponentFieldNestedWellUnderTheDepthBound_ParsesSuccessfully()
+    {
+        Write("Assets/DeepFieldUnderBound.prefab", Header
+            + $"--- !u!114 &1\nMonoBehaviour:\n  deepField: {NestedList(100)}\n");
+
+        var fields = ReadThrough.GetComponentProperties(_projectRoot, "Assets/DeepFieldUnderBound.prefab", 1);
+
+        Assert.True(fields.ContainsKey("deepField"));
+    }
+
+    [Fact]
+    public void ComponentFieldNestedWellPastTheDepthBound_ThrowsNamingTheDepthLimit()
+    {
+        Write("Assets/DeepFieldPastBound.prefab", Header
+            + $"--- !u!114 &1\nMonoBehaviour:\n  deepField: {NestedList(1000)}\n");
+
+        var ex = Assert.Throws<InvalidDataException>(
+            () => ReadThrough.GetComponentProperties(_projectRoot, "Assets/DeepFieldPastBound.prefab", 1));
+        Assert.Contains(ReadThrough.MaxInspectDepth.ToString(), ex.Message);
+    }
+
     // ---------------------------------------------------------------- prefab variants / nested instances
 
     [Fact]

@@ -293,22 +293,40 @@ public sealed class EditorListener : IDisposable
         var directory = Path.GetDirectoryName(_tokenFilePath);
         if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
 
-        // Write, then fix the mode unconditionally: FileStreamOptions.UnixCreateMode only applies
-        // when a NEW inode is created, so it would silently leave a pre-existing file (a stale
-        // token from a previous run, or one some other tool wrote) at whatever mode it already
-        // had. Explicitly setting it after the write guarantees the end state is 0600 regardless
-        // of what, if anything, was there before - which is what the test asserts.
         var info = new EditorConnectionInfo { Port = port, Token = token };
-        File.WriteAllText(_tokenFilePath, MiniJson.Write(info.ToJson()));
+        var json = MiniJson.Write(info.ToJson());
 
-        // Hades targets macOS (see the Mac Shell spec); File.SetUnixFileMode is unsupported on
-        // Windows. OperatingSystem.IsWindows() is the analyzer-recognised platform-guard pattern,
-        // so this stays warning-free without a project-wide platform declaration that would also
-        // constrain every other public member of this assembly.
-        if (!OperatingSystem.IsWindows())
+        // Hades targets macOS (see the Mac Shell spec); File.SetUnixFileMode /
+        // FileStreamOptions.UnixCreateMode are unsupported on Windows. OperatingSystem.IsWindows()
+        // is the analyzer-recognised platform-guard pattern, so this stays warning-free without a
+        // project-wide platform declaration that would also constrain every other public member of
+        // this assembly.
+        if (OperatingSystem.IsWindows())
         {
-            File.SetUnixFileMode(_tokenFilePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            File.WriteAllText(_tokenFilePath, json);
+            return;
         }
+
+        // Create the inode at 0600 in the SAME syscall that creates it (FileStreamOptions.
+        // UnixCreateMode), so the token is never briefly sitting in a file at the wider,
+        // umask-determined default mode a plain WriteAllText-then-chmod would leave it at for the
+        // instant in between. UnixCreateMode only takes effect when this call actually creates a
+        // NEW inode, so the SetUnixFileMode below still runs unconditionally afterward, as a
+        // defensive fallback for a pre-existing file at this path (a stale token from a previous
+        // run, or one some other tool wrote) that FileMode.Create reuses/truncates instead of
+        // replacing - which is what the "reused inode" test asserts.
+        using (var stream = File.Open(_tokenFilePath, new FileStreamOptions
+        {
+            Mode = FileMode.Create,
+            Access = FileAccess.Write,
+            UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
+        }))
+        {
+            var bytes = Encoding.UTF8.GetBytes(json);
+            stream.Write(bytes, 0, bytes.Length);
+        }
+
+        File.SetUnixFileMode(_tokenFilePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
     /// <summary>Constant-time comparison so a mismatched token cannot be brute-forced faster by

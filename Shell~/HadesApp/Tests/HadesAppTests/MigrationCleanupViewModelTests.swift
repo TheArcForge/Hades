@@ -317,4 +317,25 @@ struct MigrationCleanupViewModelTests {
         #expect(viewModel.mcpConfigState["abc"] == preview) // untouched
         #expect(viewModel.lastActionMessage == nil) // nothing server-authored to show
     }
+
+    // MARK: - lastActionMessage: the live property MigrationCleanupViews.swift renders verbatim
+
+    @Test("lastActionMessage flows from one confirmed failure to the next - the same live, @Observable property MigrationCleanupViews.swift's rows render, not a value read once and forgotten")
+    func lastActionMessageFlowsAcrossSuccessiveFailures() async {
+        let fetcher = FakeMigrationFetcher(
+            projectsOutcome: .success(ProjectsResult(projects: [])),
+            cleanManifestOutcome: .failure(.server(status: 404, message: "Unknown project 'abc'.")),
+            cleanMcpConfigOutcome: .failure(.server(status: 404, message: "Unknown project 'xyz'."))
+        )
+        let viewModel = Self.makeViewModel(fetcher: fetcher)
+        #expect(viewModel.lastActionMessage == nil) // nothing yet
+
+        await viewModel.cleanManifest(productGuid: "abc", confirmed: true)
+        #expect(viewModel.lastActionMessage == "Unknown project 'abc'.")
+
+        // A second, independent failure overwrites the first rather than accumulating or sticking -
+        // a view bound to this property redraws with the new text every time it changes.
+        await viewModel.cleanMcpConfig(productGuid: "xyz", confirmed: true)
+        #expect(viewModel.lastActionMessage == "Unknown project 'xyz'.")
+    }
 }

@@ -64,6 +64,34 @@ public class PrefabInstanceIndexingTests : IDisposable
     }
 
     [Fact]
+    public void TraceDependenciesWalksForwardThroughAnIndexedNestedPrefab()
+    {
+        // F19: trace_dependencies on the OUTER prefab returned nothing at any depth even though
+        // find_references_to on the inner one correctly answered in reverse (the test above).
+        // Proves the forward-walk fix holds through the real indexing pipeline - a genuine
+        // PrefabInstance block, a real .meta-carried guid - not just hand-built GraphEdge rows.
+        WriteAsset("Assets/Piece.prefab", "--- !u!1 &100000\nGameObject:\n  m_Name: Piece\n",
+            guid: "44444444444444444444444444444444");
+        WriteAsset("Assets/Container.prefab", """
+            --- !u!1001 &100
+            PrefabInstance:
+              serializedVersion: 2
+              m_Modification:
+                m_TransformParent: {fileID: 200}
+                m_Modifications: []
+                m_RemovedComponents: []
+              m_SourcePrefab: {fileID: 100000, guid: 44444444444444444444444444444444, type: 3}
+            """, guid: "55555555555555555555555555555555");
+        using var db = OpenGraph();
+
+        AssetIndexer.IndexProject(_projectRoot, db);
+
+        var hit = Assert.Single(db.TraceDependencies("Assets/Container.prefab", maxDepth: 3).Hits);
+        Assert.Equal("Assets/Piece.prefab", hit.Path);
+        Assert.Equal(1, hit.Depth);
+    }
+
+    [Fact]
     public void AReferenceOverrideBecomesAReferenceEdgeNamingTheProperty()
     {
         WriteSceneWithInstance();

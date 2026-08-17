@@ -52,8 +52,10 @@ public static class AssetIndexer
             {
                 objectsFound += IndexAsset(absolute, relativePath, database);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or UnityYamlParseException)
             {
+                // I1: an unparseable file (same as an unreadable one) must not abort the batch —
+                // it is named here and the loop moves on to the next file.
                 warnings.Add($"{relativePath}: {ex.Message}");
             }
         }
@@ -84,8 +86,9 @@ public static class AssetIndexer
         foreach (var root in ProjectWalker.ResolveScanRoots(projectRoot, warnings))
         {
             var visited = new HashSet<string>(StringComparer.Ordinal);
+            var failedDirectories = new List<string>();
 
-            foreach (var file in ProjectWalker.EnumerateSourceFiles(root.AbsolutePath, "*"))
+            foreach (var file in ProjectWalker.EnumerateSourceFiles(root.AbsolutePath, "*", failedDirectories))
             {
                 if (!Extensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
                     continue;
@@ -101,15 +104,31 @@ public static class AssetIndexer
                 {
                     objectsFound += IndexAsset(file, relativePath, database);
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or UnityYamlParseException)
                 {
+                    // I1: same as IndexFiles above — one unparseable file is named here, never
+                    // allowed to abort the rest of a full project walk.
                     warnings.Add($"{relativePath}: {ex.Message}");
                 }
             }
 
+            // I10: a directory this walk could not even read is not evidence anything under it
+            // was deleted — reserved from the sweep below exactly like an unresolvable package's
+            // prefix already is (same parameter, same reasoning, see ScriptIndexer's identical
+            // handling), and named in a warning rather than silently wiping whatever was
+            // previously recorded for it.
+            var reserved = unreachablePackagePrefixes;
+            if (failedDirectories.Count > 0)
+            {
+                var unreadablePrefixes = failedDirectories.Select(dir => ProjectWalker.ToRecordedPath(root, dir)).ToList();
+                reserved = [.. unreachablePackagePrefixes, .. unreadablePrefixes];
+                foreach (var prefix in unreadablePrefixes)
+                    warnings.Add($"{prefix}: directory could not be read this rebuild; previously recorded state preserved.");
+            }
+
             // Same contract as ScriptIndexer: a file deleted since the last index was never
             // visited, so delete-then-insert alone would leave its nodes and edges behind.
-            database.SweepStaleNodes(root.PathPrefix, visited, unreachablePackagePrefixes, Extensions);
+            database.SweepStaleNodes(root.PathPrefix, visited, reserved, Extensions);
         }
 
         // A full, independent walk of the same project — BinaryAssetIndexer resolves its own
@@ -131,11 +150,38 @@ public static class AssetIndexer
         var content = File.ReadAllText(absolutePath);
 
         // Force Text does not mean every asset is text — Unity writes LightingData.asset and
-        // friends as binary regardless. Skipping quietly is correct; these carry no graph value.
-        if (!UnityYamlPreprocessor.LooksLikeUnityYaml(content)) return 0;
+        // friends as binary regardless. I3: this path must not just skip quietly when the file
+        // WAS previously a parseable asset — its old nodes have to go too, or a file rewritten
+        // into something Hades can no longer understand keeps answering confidently from stale
+        // content forever. DeleteNodesForPath is a no-op for a path with nothing recorded, so
+        // this costs nothing extra for the ordinary "never was Unity YAML" case.
+        if (!UnityYamlPreprocessor.LooksLikeUnityYaml(content))
+        {
+            database.DeleteNodesForPath(relativePath);
+            return 0;
+        }
 
-        var objects = UnityYamlReader.Read(content, relativePath);
-        if (objects.Count == 0) return 0;
+        IReadOnlyList<UnityObject> objects;
+        try
+        {
+            objects = UnityYamlReader.Read(content, relativePath);
+        }
+        catch (UnityYamlParseException)
+        {
+            // I1: the caller (IndexFiles/IndexProject) turns this into a per-file warning and
+            // moves on to the next file. I3: same "gone, not stale" treatment as above — a file
+            // Hades cannot parse must not keep answering from whatever it parsed last time.
+            database.DeleteNodesForPath(relativePath);
+            throw;
+        }
+
+        if (objects.Count == 0)
+        {
+            // Genuinely nothing recognizable in an otherwise YAML-shaped file — same I3 reasoning
+            // as both branches above.
+            database.DeleteNodesForPath(relativePath);
+            return 0;
+        }
 
         var assetGuid = MetaFileReader.TryReadGuid(absolutePath);
 

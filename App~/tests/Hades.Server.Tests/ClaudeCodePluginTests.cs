@@ -288,4 +288,62 @@ public class ClaudeCodePluginTests
         var metaFiles = Directory.GetFiles(PluginRoot, "*.meta", SearchOption.AllDirectories);
         Assert.True(metaFiles.Length == 0, "Unity .meta files leaked into the plugin: " + string.Join(", ", metaFiles));
     }
+
+    // ------------------------------------------------------------------- retired-tool-name scan
+
+    /// <summary>
+    /// The 103-&gt;32 tool consolidation (see <see
+    /// cref="RepoRoot_IsNotItselfAnInstallablePlugin_SoPointingClaudeCodeHereCannotSilentlyLoadTheRetiredV12Surface"/>'s
+    /// own "retired ~90-tool surface" note above) left individual retired v1.2 tool names as an
+    /// UNPINNED CLASS of regression: each time a skill or command markdown file was found still
+    /// naming one, it was fixed as a one-off edit to that one file, never guarded as a class - so a
+    /// future skill/command update could reintroduce a stale name unnoticed. This scans every
+    /// shipped skill/command markdown file for a curated, conservative sample of retired v1.2 tool
+    /// names.
+    ///
+    /// Each name below is verified retired: present in the v1.2 tree still checked in at the repo
+    /// root's own <c>Editor/MCP/Tools/*.cs</c> (kept there for <c>V12Detector</c>/migration, not
+    /// shipped), absent from every current <c>[McpServerTool(Name = ...)]</c> registration under
+    /// <c>App~/src/Hades.Server/Mcp/*.cs</c> - and, deliberately, never a SUBSTRING of any of
+    /// those 32 current names either, so a legitimate mention of a current tool (e.g.
+    /// "scene_apply") can never trip this as a false positive.
+    /// </summary>
+    [Fact]
+    public void ShippedSkillsAndCommands_NeverMentionARetiredV12ToolName()
+    {
+        string[] retiredToolNames =
+        [
+            "BeginScriptEditing", "EndScriptEditing", "analyze_render_pipeline", "animation_assign_clip",
+            "animation_assign_controller", "animation_create_controller", "animation_edit_controller",
+            "animation_get_controller", "asset_find", "asset_get_import_settings", "asset_get_info",
+            "asset_import", "asset_move", "component_add", "component_find", "component_get_all",
+            "component_remove", "component_set_properties", "component_set_property", "event_add_listener",
+            "event_find_all", "event_list_listeners", "event_remove_listener", "find_orphan_scripts",
+            "find_prefabs_with_component", "inspector_select", "layer_create", "layer_list",
+            "material_assign", "material_create", "material_duplicate", "prefab_create",
+            "prefab_create_variant", "prefab_instantiate", "reference_set", "scene_create_gameobject",
+            "scene_setup", "tag_create", "tag_delete", "tag_list",
+        ];
+
+        var markdownFiles = Directory.GetFiles(Path.Combine(PluginRoot, "skills"), "*.md", SearchOption.AllDirectories)
+            .Concat(Directory.GetFiles(Path.Combine(PluginRoot, "commands"), "*.md", SearchOption.AllDirectories))
+            .ToList();
+        Assert.NotEmpty(markdownFiles);
+
+        var offenders = new List<string>();
+        foreach (var file in markdownFiles)
+        {
+            var text = File.ReadAllText(file);
+            foreach (var name in retiredToolNames)
+            {
+                if (text.Contains(name, StringComparison.Ordinal))
+                {
+                    offenders.Add($"{file}: '{name}'");
+                }
+            }
+        }
+
+        Assert.True(offenders.Count == 0,
+            "Shipped skill/command markdown mentions retired v1.2 tool name(s): " + string.Join(", ", offenders));
+    }
 }

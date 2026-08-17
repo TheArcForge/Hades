@@ -43,6 +43,7 @@ public sealed class V12CleanupTests : IDisposable
           }
         }
         """) => File.WriteAllText(McpJsonPath, content);
+    string ReadMcpJson() => File.ReadAllText(McpJsonPath);
 
     string WriteClaudeDesktopConfig(string content)
     {
@@ -393,6 +394,66 @@ public sealed class V12CleanupTests : IDisposable
         Assert.False(result.Removed);
     }
 
+    // ---- M7: a UTF-16 CLAUDE.md used to dead-end with a misleading message ----
+
+    [Fact]
+    public void CleanClaudeMd_Utf16EncodedFile_RefusesWithAClearMessageNamingTheEncoding()
+    {
+        // V12Detector.ReadClaudeMd uses File.ReadAllText, which auto-detects and correctly decodes
+        // a UTF-16 BOM - so detection is NOT the bug here, and can legitimately report Shape.Marked
+        // for a genuinely UTF-16 file (asserted below). This class's own read/write is byte-level
+        // UTF-8 only (see this class's own "JSON edits are byte-level surgery" remarks), which -
+        // before this fix - silently decoded the UTF-16 bytes as mojibake, failed the marker
+        // re-match, and refused with "changed since it was classified": true of no byte actually on
+        // disk, and useless to a caller trying to figure out what to do next.
+        var content = "before\n" + Start + "\nblock\n" + End + "\nafter\n";
+        var preamble = System.Text.Encoding.Unicode.GetPreamble(); // UTF-16 LE BOM: FF FE
+        var encoded = System.Text.Encoding.Unicode.GetBytes(content);
+        File.WriteAllBytes(ClaudeMdPath, [.. preamble, .. encoded]);
+        var before = Snapshot(ClaudeMdPath);
+
+        var state = DetectClaudeMd();
+        Assert.Equal(ClaudeMdShape.Marked, state.Shape); // detection itself is unaffected
+
+        var result = V12Cleanup.CleanClaudeMd(_projectRoot, state, proceed: true);
+
+        Assert.False(result.Removed);
+        Assert.Contains("UTF-16", result.Message, StringComparison.OrdinalIgnoreCase);
+        AssertUnchanged(ClaudeMdPath, before);
+    }
+
+    // ---- M9: a read-only CLAUDE.md must be refused cleanly, never silently re-permissioned ----
+
+    [Fact]
+    public void CleanClaudeMd_ReadOnlyFile_RefusesAndLeavesFileAndPermissionsUntouched()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            // Same POSIX-only scope as every other permission test in this file - this suite's CI
+            // runs ubuntu-latest and macos-latest only (see .github/workflows/ci.yml).
+            return;
+        }
+
+        WriteClaudeMd("before\n" + Start + "\nblock\n" + End + "\nafter\n");
+        var before = Snapshot(ClaudeMdPath);
+        File.SetAttributes(ClaudeMdPath, FileAttributes.ReadOnly);
+        var readOnlyMode = File.GetUnixFileMode(ClaudeMdPath);
+
+        try
+        {
+            var result = V12Cleanup.CleanClaudeMd(_projectRoot, DetectClaudeMd(), proceed: true);
+
+            Assert.False(result.Removed);
+            Assert.Contains("read-only", result.Message, StringComparison.OrdinalIgnoreCase);
+            AssertUnchanged(ClaudeMdPath, before);
+            Assert.Equal(readOnlyMode, File.GetUnixFileMode(ClaudeMdPath));
+        }
+        finally
+        {
+            File.SetAttributes(ClaudeMdPath, FileAttributes.Normal);
+        }
+    }
+
     // ==================================================================
     // Packages/manifest.json: remove the entry, byte-identical otherwise
     // ==================================================================
@@ -720,7 +781,12 @@ public sealed class V12CleanupTests : IDisposable
     }
 
     // ==================================================================
-    // .mcp.json: the generated project-level config - removed wholesale
+    // .mcp.json: the generated project-level config - the "hades" entry under mcpServers is
+    // spliced out surgically, exactly like CleanClaudeDesktopConfig's own mcpServers/hades scan
+    // below. This class used to delete the whole file wholesale (File.Delete) on the assumption
+    // that v1.2 always wrote it and nothing else could be in it - false in practice, and exactly
+    // the defect these tests prove fixed: a hand-added second server, or a nested decoy sharing the
+    // "mcpServers"/"hades" names, must both survive untouched.
     // ==================================================================
 
     [Fact]
@@ -729,18 +795,215 @@ public sealed class V12CleanupTests : IDisposable
         var result = V12Cleanup.CleanMcpConfig(_projectRoot, proceed: true);
 
         Assert.False(result.Removed);
+        Assert.Equal(0, result.OccurrencesFound);
         Assert.False(File.Exists(McpJsonPath));
     }
 
     [Fact]
-    public void CleanMcpConfig_Present_DeletesTheWholeFile()
+    public void CleanMcpConfig_MalformedJson_RefusesAndLeavesFileUntouched()
     {
-        WriteMcpJson();
+        WriteMcpJson("{ not valid json ");
+        var before = Snapshot(McpJsonPath);
+
+        var result = V12Cleanup.CleanMcpConfig(_projectRoot, proceed: true);
+
+        Assert.False(result.Removed);
+        Assert.Equal(0, result.OccurrencesFound);
+        AssertUnchanged(McpJsonPath, before);
+    }
+
+    [Fact]
+    public void CleanMcpConfig_NoHadesEntry_ReportsNothingToDoAndLeavesFileUntouched()
+    {
+        WriteMcpJson("""{ "mcpServers": { "other-server": { "command": "npx" } } }""");
+        var before = Snapshot(McpJsonPath);
+
+        var result = V12Cleanup.CleanMcpConfig(_projectRoot, proceed: true);
+
+        Assert.False(result.Removed);
+        Assert.Equal(0, result.OccurrencesFound);
+        AssertUnchanged(McpJsonPath, before);
+    }
+
+    // ---- M1: used to File.Delete the whole file - proven fixed by these three ----
+
+    [Fact]
+    public void CleanMcpConfig_HadesPlusOtherServer_OnlyHadesIsRemoved_OtherServerByteIdentical()
+    {
+        // The headline fix: a project-level .mcp.json is exactly as easy for a user (or another
+        // tool) to hand-add a second server to, after v1.2 wrote it, as claude_desktop_config.json
+        // is - a wholesale delete destroyed that other server along with Hades' own entry.
+        WriteMcpJson(
+            "{\n" +
+            "  \"mcpServers\": {\n" +
+            "    \"hades\": {\n" +
+            "      \"command\": \"node\",\n" +
+            "      \"args\": [\n" +
+            "        \"/Users/mike/.arcforge/hades-hub/launcher.js\"\n" +
+            "      ]\n" +
+            "    },\n" +
+            "    \"other-server\": {\n" +
+            "      \"command\": \"npx\",\n" +
+            "      \"args\": [\n" +
+            "        \"-y\",\n" +
+            "        \"some-other-mcp-server\"\n" +
+            "      ]\n" +
+            "    }\n" +
+            "  }\n" +
+            "}\n");
 
         var result = V12Cleanup.CleanMcpConfig(_projectRoot, proceed: true);
 
         Assert.True(result.Removed);
-        Assert.False(File.Exists(McpJsonPath));
+        Assert.Equal(1, result.OccurrencesFound);
+        Assert.True(File.Exists(McpJsonPath)); // never deleted - see this class's own doc comment
+        Assert.Equal(
+            "{\n" +
+            "  \"mcpServers\": {\n" +
+            "    \"other-server\": {\n" +
+            "      \"command\": \"npx\",\n" +
+            "      \"args\": [\n" +
+            "        \"-y\",\n" +
+            "        \"some-other-mcp-server\"\n" +
+            "      ]\n" +
+            "    }\n" +
+            "  }\n" +
+            "}\n",
+            ReadMcpJson());
+    }
+
+    [Fact]
+    public void CleanMcpConfig_HadesIsOnlyServer_LeavesEmptyMcpServersObject_NeverDeletesTheFile()
+    {
+        // Mirrors CleanClaudeDesktopConfig_HadesIsOnlyServer_LeavesEmptyMcpServersObject exactly -
+        // per this class's own doc comment, "the file is now pointless" is never guessed at. An
+        // explicit fixture (not the default WriteMcpJson() one), so the expected output below is
+        // exact rather than depending on the default fixture's own raw-string-literal whitespace.
+        WriteMcpJson(
+            "{\n" +
+            "  \"mcpServers\": {\n" +
+            "    \"hades\": {\n" +
+            "      \"command\": \"node\"\n" +
+            "    }\n" +
+            "  }\n" +
+            "}\n");
+
+        var result = V12Cleanup.CleanMcpConfig(_projectRoot, proceed: true);
+
+        Assert.True(result.Removed);
+        Assert.Equal(1, result.OccurrencesFound);
+        Assert.True(File.Exists(McpJsonPath));
+        Assert.Equal(
+            "{\n" +
+            "  \"mcpServers\": {\n" +
+            "  }\n" +
+            "}\n",
+            ReadMcpJson());
+    }
+
+    [Fact]
+    public void CleanMcpConfig_NoGoAhead_ReportsOccurrencesFoundButLeavesFileUntouched()
+    {
+        // Dry-run parity: this class's own documented convention (see ManifestCleanupResult and
+        // ClaudeDesktopConfigCleanupResult's own OccurrencesFound) is that a dry run reports exactly
+        // what the real run would do, never less.
+        WriteMcpJson();
+        var before = Snapshot(McpJsonPath);
+
+        var result = V12Cleanup.CleanMcpConfig(_projectRoot, proceed: false);
+
+        Assert.False(result.Removed);
+        Assert.Equal(1, result.OccurrencesFound);
+        Assert.True(File.Exists(McpJsonPath));
+        AssertUnchanged(McpJsonPath, before);
+    }
+
+    // ---- M8: the span scanner used to match "hades" inside ANY container literally named
+    // "mcpServers", regardless of how deeply nested - not just the top-level one ----
+
+    [Fact]
+    public void CleanMcpConfig_NestedMcpServersDecoyElsewhereInFile_OnlyTopLevelHadesRemoved_DecoyUntouched()
+    {
+        // Live-shaped repro: a backup blob elsewhere in the file happens to carry its own nested
+        // mcpServers/hades pair. Depth-blind matching does not distinguish this from the real,
+        // top-level entry - it spliced out whichever the reader reached first, which could be the
+        // decoy instead of (or as well as) the real one.
+        WriteMcpJson(
+            "{\n" +
+            "  \"mcpServers\": {\n" +
+            "    \"hades\": {\n" +
+            "      \"command\": \"node\"\n" +
+            "    },\n" +
+            "    \"other-server\": {\n" +
+            "      \"command\": \"npx\"\n" +
+            "    }\n" +
+            "  },\n" +
+            "  \"backupOfOldConfig\": {\n" +
+            "    \"mcpServers\": {\n" +
+            "      \"hades\": {\n" +
+            "        \"command\": \"node\",\n" +
+            "        \"args\": [\n" +
+            "          \"decoy - must survive\"\n" +
+            "        ]\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }\n" +
+            "}\n");
+
+        var result = V12Cleanup.CleanMcpConfig(_projectRoot, proceed: true);
+
+        Assert.True(result.Removed);
+        Assert.Equal(1, result.OccurrencesFound); // only the top-level one counted
+        var written = ReadMcpJson();
+        Assert.Equal(
+            "{\n" +
+            "  \"mcpServers\": {\n" +
+            "    \"other-server\": {\n" +
+            "      \"command\": \"npx\"\n" +
+            "    }\n" +
+            "  },\n" +
+            "  \"backupOfOldConfig\": {\n" +
+            "    \"mcpServers\": {\n" +
+            "      \"hades\": {\n" +
+            "        \"command\": \"node\",\n" +
+            "        \"args\": [\n" +
+            "          \"decoy - must survive\"\n" +
+            "        ]\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }\n" +
+            "}\n",
+            written);
+    }
+
+    [Fact]
+    public void CleanMcpConfig_OnlyNestedDecoyExists_NoTopLevelHades_ReportsNothingAndLeavesDecoyUntouched()
+    {
+        // The sharper case: no top-level "hades" at all, only a nested decoy. Before the fix, the
+        // depth-blind scanner still found and removed the nested one; the fix must report zero
+        // occurrences and leave the whole file byte-identical.
+        WriteMcpJson(
+            "{\n" +
+            "  \"mcpServers\": {\n" +
+            "    \"other-server\": {\n" +
+            "      \"command\": \"npx\"\n" +
+            "    }\n" +
+            "  },\n" +
+            "  \"backupOfOldConfig\": {\n" +
+            "    \"mcpServers\": {\n" +
+            "      \"hades\": {\n" +
+            "        \"command\": \"node\"\n" +
+            "      }\n" +
+            "    }\n" +
+            "  }\n" +
+            "}\n");
+        var before = Snapshot(McpJsonPath);
+
+        var result = V12Cleanup.CleanMcpConfig(_projectRoot, proceed: true);
+
+        Assert.False(result.Removed);
+        Assert.Equal(0, result.OccurrencesFound);
+        AssertUnchanged(McpJsonPath, before);
     }
 
     [Fact]
@@ -754,6 +1017,42 @@ public sealed class V12CleanupTests : IDisposable
         Assert.False(result.Removed);
         Assert.True(File.Exists(McpJsonPath));
         AssertUnchanged(McpJsonPath, before);
+    }
+
+    // ---- M9: a read-only target must be refused cleanly, never silently re-permissioned ----
+
+    [Fact]
+    public void CleanMcpConfig_ReadOnlyFile_RefusesAndLeavesFileAndPermissionsUntouched()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            // FileAttributes.ReadOnly is honoured for writes on Windows too, but this suite's CI
+            // runs ubuntu-latest and macos-latest only (see .github/workflows/ci.yml) - same POSIX
+            // scope as every other permission test in this file.
+            return;
+        }
+
+        WriteMcpJson();
+        var before = Snapshot(McpJsonPath);
+        File.SetAttributes(McpJsonPath, FileAttributes.ReadOnly);
+        // Captured AFTER marking read-only, deliberately: the claim under test is "the refused
+        // cleanup attempt leaves permissions exactly as they were AT THE MOMENT OF THE ATTEMPT",
+        // not "restores whatever they were before this test ever touched the file".
+        var readOnlyMode = File.GetUnixFileMode(McpJsonPath);
+
+        try
+        {
+            var result = V12Cleanup.CleanMcpConfig(_projectRoot, proceed: true);
+
+            Assert.False(result.Removed);
+            Assert.Contains("read-only", result.Message, StringComparison.OrdinalIgnoreCase);
+            AssertUnchanged(McpJsonPath, before);
+            Assert.Equal(readOnlyMode, File.GetUnixFileMode(McpJsonPath)); // never re-permissioned
+        }
+        finally
+        {
+            File.SetAttributes(McpJsonPath, FileAttributes.Normal);
+        }
     }
 
     // ==================================================================
@@ -1144,6 +1443,62 @@ public sealed class V12CleanupTests : IDisposable
         Assert.True(result.Removed);
         Assert.True(File.Exists(memoryFile));
         Assert.Equal("# Authored conventions - never delete\n", File.ReadAllText(memoryFile));
+    }
+
+    // ==================================================================
+    // M5: AtomicWriteBytes must never leave a stray *.hades-cleanup-tmp file behind when the
+    // final rename fails - it wrote the temp file once and nothing else ever cleaned it up.
+    // ==================================================================
+
+    [Fact]
+    public void CleanClaudeMd_MoveFailsAfterTempFileWritten_TempFileIsCleanedUpNotLeftStray()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            // chflags (BSD file flags) is macOS-specific - this suite's CI also runs ubuntu-latest
+            // (see .github/workflows/ci.yml), which has no equivalent invocable the same way. A
+            // directory-write-permission trick (chmod) was considered instead, but denying a
+            // directory's own write bit blocks deleting the SAME temp file just as much as it
+            // blocks renaming onto the target - proving nothing distinct about THIS fix, since the
+            // temp file could never be removed by anything under that setup either. chflags uchg on
+            // ONLY the target file selectively fails the rename while leaving an unrelated file's
+            // own delete unaffected - confirmed empirically, not merely assumed - which is what
+            // isolates "did the fix clean up after itself" from "was cleanup even possible here".
+            return;
+        }
+
+        WriteClaudeMd("before\n" + Start + "\nblock\n" + End + "\nafter\n");
+        var targetBefore = Snapshot(ClaudeMdPath);
+        var tmpPath = ClaudeMdPath + ".hades-cleanup-tmp";
+
+        // macOS's user-immutable flag - a BSD chflags mechanism entirely separate from the POSIX
+        // owner-write permission bit .NET's own FileAttributes.ReadOnly reflects (see IsReadOnly's
+        // own doc comment) - so this class's read-only pre-check does NOT intercept this case:
+        // AtomicWriteBytes' own File.Move is what actually fails here, exactly the scenario this
+        // fix targets, rather than the earlier, differently-refused M9 case.
+        RunChflags("uchg", ClaudeMdPath);
+        try
+        {
+            var ex = Record.Exception(() => V12Cleanup.CleanClaudeMd(_projectRoot, DetectClaudeMd(), proceed: true));
+
+            Assert.NotNull(ex); // the move genuinely failed here - not silently swallowed
+            Assert.False(File.Exists(tmpPath), "the temp file must not survive a failed rename");
+            AssertUnchanged(ClaudeMdPath, targetBefore); // the failed move touched nothing at the target either
+        }
+        finally
+        {
+            RunChflags("nouchg", ClaudeMdPath);
+        }
+    }
+
+    static void RunChflags(string flag, string path)
+    {
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/usr/bin/chflags", [flag, path])
+        {
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+        })!;
+        process.WaitForExit();
     }
 
     // ==================================================================

@@ -221,6 +221,26 @@ public class ObservationServiceTests : IDisposable
     }
 
     [Fact]
+    public void SyncAfterDisposeReturnsQuietlyInsteadOfThrowingObjectDisposed()
+    {
+        // The acquire-side twin of SyncsFinallyReleaseSurvivesADisposeThatRacedInDuringProjectSynced
+        // above: if Dispose() -> _indexGate.Dispose() runs BEFORE a call reaches _indexGate.Wait(),
+        // Wait() itself throws ObjectDisposedException - and that line used to sit outside Sync's
+        // own try/catch, so the exception propagated straight out of Sync. On a Timer/watcher
+        // thread, an unhandled exception is not "this sync failed", it is a process crash - the
+        // exact failure mode Sync's catch block exists to prevent. Disposing first and then
+        // calling Sync reproduces that ordering deterministically, with no dependence on real
+        // thread timing.
+        var service = MakeProject();
+        var observation = new ObservationService(service);
+        observation.Dispose();
+
+        var ex = Record.Exception(() => observation.Sync(Guid));
+
+        Assert.Null(ex);
+    }
+
+    [Fact]
     public void DisposeStopsWatchingAndIsSafeTwice()
     {
         var service = MakeProject();

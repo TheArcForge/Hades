@@ -46,7 +46,7 @@ namespace Hades.Tests.Editor
         static MainThreadPump MakeIdlePump() => new MainThreadPump();
 
         static HadesClient MakeClient(FakeApp app, Hello hello, MainThreadPump pump = null,
-            Func<JsonRpcRequest, JsonValue> handleRequest = null)
+            Func<JsonRpcRequest, JsonValue> handleRequest = null, int? maxRequestLineChars = null)
         {
             // Tiny backoff bounds so reconnect tests run in milliseconds, not seconds - the
             // schedule itself (exponential + jitter) is a HadesClient implementation detail, not
@@ -54,7 +54,8 @@ namespace Hades.Tests.Editor
             return new HadesClient(() => app.ConnectionInfo, hello,
                 pump ?? MakeIdlePump(),
                 handleRequest ?? (request => JsonValue.Bool(true)),
-                TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(80));
+                TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(80),
+                maxRequestLineChars: maxRequestLineChars);
         }
 
         [Test]
@@ -257,6 +258,40 @@ namespace Hades.Tests.Editor
             Assert.IsFalse(response.IsError);
         }
 
+        // ---------------------------------------------------------------- bounded request line read (B-F1)
+        //
+        // Hades.Core.Editors.EditorListener.ReadRawLineAsync bounds the two raw handshake lines
+        // on the app side - but a connected app peer could still send an unbounded request line
+        // with no '\n', growing this reader's buffer without limit, once the connection is past
+        // the handshake. Mirrors the equivalent app-side proof in EditorSessionTests.cs
+        // (Hades.Core.Tests): a tiny configured cap so this test moves bytes, not megabytes;
+        // production always uses HadesClient's own real, much larger default.
+
+        [Test]
+        public async Task OversizedRequestLineWithNoNewline_FaultsTheConnection_InsteadOfGrowingUnbounded()
+        {
+            const int tinyCap = 64;
+            using var app = new FakeApp();
+            using var client = MakeClient(app, MakeHello(), maxRequestLineChars: tinyCap);
+            client.Start();
+
+            var first = await app.AcceptAndHandshakeAsync(TimeSpan.FromSeconds(5));
+
+            // Well over tinyCap, and deliberately never terminated by '\n' - the exact flood shape
+            // a buggy/hostile/skewed peer would send. Left open afterwards (not explicitly closed
+            // here) - the bound itself, not an external drop, must be what ends this connection.
+            await first.WriteRawTextAsync(new string('x', tinyCap * 4));
+
+            // HadesClient must notice the over-cap line on its own and abandon this connection,
+            // the same way DroppedConnection_ReconnectsAndSendsExactlyOneHelloPerConnection
+            // proves an ordinary drop: a fresh connection completes a new handshake.
+            using var second = await app.AcceptAndHandshakeAsync(TimeSpan.FromSeconds(5));
+            Assert.IsNull(second.HelloParseError, second.HelloParseError);
+            Assert.IsNotNull(second.Hello);
+
+            first.Dispose();
+        }
+
         [Test]
         public async Task Dispose_EndsTheIoThread()
         {
@@ -372,6 +407,10 @@ namespace Hades.Tests.Editor
             }
 
             public Task WriteRawLineAsync(string line) => _writer.WriteLineAsync(line);
+
+            /// <summary>Writes raw text with NO trailing newline - unlike <see cref="WriteRawLineAsync"/>,
+            /// which always appends one. Used to simulate a line that never terminates.</summary>
+            public Task WriteRawTextAsync(string text) => _writer.WriteAsync(text);
 
             public Task SendRequestAsync(string method, long id)
             {

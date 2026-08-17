@@ -116,6 +116,7 @@ public sealed record ConsoleLogResult
     [JsonPropertyName("entries")] public required IReadOnlyList<ConsoleLogEntryResult> Entries { get; init; }
     [JsonPropertyName("count")] public required int Count { get; init; }
     [JsonPropertyName("totalBuffered")] public required int TotalBuffered { get; init; }
+    [JsonPropertyName("totalMatching")] public required int TotalMatching { get; init; }
 }
 
 /// <summary>One failed test case from a completed project_run_tests run.</summary>
@@ -293,6 +294,7 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
             Entries = entries,
             Count = (int)EditorComponentTools.Int(result, "count"),
             TotalBuffered = (int)EditorComponentTools.Int(result, "totalBuffered"),
+            TotalMatching = (int)EditorComponentTools.Int(result, "totalMatching"),
         };
     }
 
@@ -347,6 +349,23 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
     static int? TryIntProperty(WireJson value, string key) =>
         value.TryGetProperty(key, out var v) && v!.Kind == WireKind.Integer ? (int)v.AsInteger() : null;
 
+    static readonly long MinUnixTimeMilliseconds = DateTimeOffset.MinValue.ToUnixTimeMilliseconds();
+    static readonly long MaxUnixTimeMilliseconds = DateTimeOffset.MaxValue.ToUnixTimeMilliseconds();
+
+    /// <summary>Converts an untrusted Unix-milliseconds value - the plugin's own reported
+    /// expiresAtUtcMs for 'begin' above - into a <see cref="DateTimeOffset"/> by CLAMPING into the
+    /// range <see cref="DateTimeOffset.FromUnixTimeMilliseconds"/> can represent, rather than
+    /// calling it directly, which throws <see cref="ArgumentOutOfRangeException"/> outside that
+    /// range. Thrown from 'begin' above, that exception would surface AFTER the plugin has already
+    /// taken Unity's reload lock (this call already told it to) but BEFORE <c>leases.RecordHeld</c>
+    /// runs - leaving the plugin holding the lock with the app never having recorded it, a desync
+    /// that only self-heals at the plugin's own lease TTL, and as a raw, non-<see cref="McpException"/>
+    /// error instead of a clean tool failure. Clamping instead of throwing means 'begin' always
+    /// completes and RecordHeld always runs - see EditorSession.SendLeaseRequestAsync's identical
+    /// helper (Hades.Core.Editors) for the other caller of the same underlying plugin field.</summary>
+    static DateTimeOffset ClampToUnixTimeMilliseconds(long milliseconds) =>
+        DateTimeOffset.FromUnixTimeMilliseconds(Math.Clamp(milliseconds, MinUnixTimeMilliseconds, MaxUnixTimeMilliseconds));
+
     // ---------------------------------------------------------------- script_editing_session
 
     [McpServerTool(Name = "script_editing_session", Title = "Script Editing Session", ReadOnly = false, UseStructuredContent = true)]
@@ -378,7 +397,7 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
                 var result = await editor.SendCommandAsync(productGuid, "project.begin_script_editing", @params).ConfigureAwait(false);
 
                 var leaseId = EditorComponentTools.Str(result, "leaseId");
-                var expiresAtUtc = DateTimeOffset.FromUnixTimeMilliseconds(EditorComponentTools.Int(result, "expiresAtUtcMs"));
+                var expiresAtUtc = ClampToUnixTimeMilliseconds(EditorComponentTools.Int(result, "expiresAtUtcMs"));
 
                 // The plugin's own answer, read back off its response - never the requested
                 // ttlSeconds above, which the plugin may not have honoured verbatim (e.g. a

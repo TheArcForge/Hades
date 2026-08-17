@@ -208,22 +208,32 @@ public sealed class GraphDatabase : IDisposable
     const int MaxTraceDepth = 10;
 
     /// <summary>
-    /// Walks `references` edges outward. Iterative with an explicit visited set: Unity projects
-    /// contain reference cycles as a matter of course (a prefab referencing a manager that
-    /// references the prefab), so a recursive walk without one does not terminate. Only `kind =
-    /// "references"` edges count as a dependency here — `instance_of` and `corresponds_to` answer
-    /// a different question (what this scene instantiates / what a stripped object stands in
-    /// for), not "what does this asset depend on".
+    /// Walks `references` and `instance_of` edges outward. Iterative with an explicit visited
+    /// set: Unity projects contain reference cycles as a matter of course (a prefab referencing a
+    /// manager that references the prefab), so a recursive walk without one does not terminate.
     ///
-    /// F6-honesty: a `references` edge whose target GUID resolves to no node — most often now
-    /// because the target lives outside every scanned root (a registry package resolved into
-    /// Library/PackageCache, never walked regardless of extension) rather than because its kind
-    /// goes unindexed, now that textures, models, audio, fonts, shaders, and animation clips are
-    /// indexed too (see <see cref="Unity.ImportedAssetKind"/>) — is no longer silently dropped. It
-    /// cannot become a <see cref="DependencyHit"/> (there is no path to walk further from), but it
-    /// is real — a row in the `edges` table, exactly as resolvable as any other — so it is
-    /// reported via <see cref="DependencyTrace.Dangling"/> instead of vanishing. See
-    /// <see cref="DanglingDependency"/>'s own class doc comment.
+    /// F19: `instance_of` — a PrefabInstance's `m_SourcePrefab`, naming the prefab a nested
+    /// instance or variant is sourced from — counts as a dependency here just like an ordinary
+    /// `references` edge: a prefab nesting another prefab is exactly a "what does this asset
+    /// depend on" relationship, and find_references_to (<see cref="ReferencesTo"/> /
+    /// <see cref="ReferencingFiles"/>) already reported it in reverse, since neither of those
+    /// filter by kind — only the forward walk did. `corresponds_to` — a stripped placeholder
+    /// object's link to the real object it stands in for inside that same nested prefab — stays
+    /// excluded: it exists to resolve individual objects within an instance, not to name a
+    /// file-level dependency, and every PrefabInstance that writes a corresponds_to edge also
+    /// writes an instance_of edge to the same target file (see AssetIndexer's PrefabInstance
+    /// handling), so walking it too would only add duplicate hits, never a reachable one this
+    /// walk would otherwise miss.
+    ///
+    /// F6-honesty: a `references` or `instance_of` edge whose target GUID resolves to no node —
+    /// most often now because the target lives outside every scanned root (a registry package
+    /// resolved into Library/PackageCache, never walked regardless of extension) rather than
+    /// because its kind goes unindexed, now that textures, models, audio, fonts, shaders, and
+    /// animation clips are indexed too (see <see cref="Unity.ImportedAssetKind"/>) — is no longer
+    /// silently dropped. It cannot become a <see cref="DependencyHit"/> (there is no path to walk
+    /// further from), but it is real — a row in the `edges` table, exactly as resolvable as any
+    /// other — so it is reported via <see cref="DependencyTrace.Dangling"/> instead of vanishing.
+    /// See <see cref="DanglingDependency"/>'s own class doc comment.
     /// </summary>
     public DependencyTrace TraceDependencies(string rootPath, int maxDepth)
     {
@@ -263,12 +273,14 @@ public sealed class GraphDatabase : IDisposable
         return new DependencyTrace { Hits = hits, Dangling = dangling };
     }
 
-    /// <summary>One hop of <see cref="TraceDependencies"/>: every distinct `references` edge
-    /// <paramref name="path"/> carries directly, as (target guid, a sample property path) pairs.
-    /// Distinct GUIDs are yielded once each rather than once per edge, since a file's edges
-    /// routinely repeat a target many times over (e.g. every component in a prefab pointing back
-    /// at its own GameObject) — the property path kept for each is simply the first one seen,
-    /// same convention as <see cref="ReferencingFile.SampleVia"/>. Resolving each guid via
+    /// <summary>One hop of <see cref="TraceDependencies"/>: every distinct `references` or
+    /// `instance_of` edge <paramref name="path"/> carries directly, as (target guid, a sample
+    /// property path) pairs — see <see cref="TraceDependencies"/>'s own doc comment (F19) for
+    /// which edge kinds count as a dependency and why `corresponds_to` does not. Distinct GUIDs
+    /// are yielded once each rather than once per edge, since a file's edges routinely repeat a
+    /// target many times over (e.g. every component in a prefab pointing back at its own
+    /// GameObject) — the property path kept for each is simply the first one seen, same
+    /// convention as <see cref="ReferencingFile.SampleVia"/>. Resolving each guid via
     /// <see cref="PathForGuid"/> — deciding whether it becomes a hop or a dangling dependency — is
     /// the caller's job, not this method's: unlike the pre-F6-honesty TargetsOf this replaces,
     /// dropping an unresolved guid here would make it unreportable.</summary>
@@ -278,7 +290,7 @@ public sealed class GraphDatabase : IDisposable
 
         foreach (var edge in EdgesFromPath(path))
         {
-            if (edge.Kind != "references" || edge.ToGuid is not { } guid) continue;
+            if (edge.Kind is not ("references" or "instance_of") || edge.ToGuid is not { } guid) continue;
             if (!seen.Add(guid)) continue;
 
             yield return (guid, edge.PropertyPath);
@@ -319,12 +331,15 @@ public sealed class GraphDatabase : IDisposable
     /// continue from it. A GUID is a Unity .meta file's identity, so it names exactly one file in
     /// a well-formed project — checked against the real Hades-Unity-Client corpus (224 distinct
     /// GUIDs, zero mapping to more than one path) rather than assumed — but LIMIT 1 keeps that an
-    /// assumption this degrades under gracefully, not one it can violate.
+    /// assumption this degrades under gracefully, not one it can violate. The ORDER BY makes the
+    /// degraded case DETERMINISTIC: a project with a duplicated GUID (a copy-pasted .meta) always
+    /// resolves to the lexicographically-first path, not whichever row SQLite happens to visit
+    /// first — the same question must never give two different answers across calls.
     /// </summary>
     public string? PathForGuid(string guid)
     {
         using var command = _connection.CreateCommand();
-        command.CommandText = "SELECT path FROM nodes WHERE guid = $guid LIMIT 1;";
+        command.CommandText = "SELECT path FROM nodes WHERE guid = $guid ORDER BY path ASC LIMIT 1;";
         command.Parameters.AddWithValue("$guid", guid);
         return command.ExecuteScalar() as string;
     }
@@ -1115,6 +1130,19 @@ public sealed class GraphDatabase : IDisposable
 
         return results;
     }
+
+    /// <summary>
+    /// The complete, fixed set of edge kinds this graph ever writes - "references", "instance_of",
+    /// and "corresponds_to", all sourced from Unity YAML (see <see cref="OrphanScripts"/>'s own doc
+    /// comment for the same fact, stated from the dead-code-detection angle). Unlike node kinds -
+    /// an open, DATA-dependent vocabulary that varies per project, validated by asking the graph
+    /// itself what is actually there (see <see cref="ProjectService.KnownNodeKinds"/>) - edge kinds
+    /// are a closed, CODE-dependent vocabulary fixed at build time. This is the one place that list
+    /// is written down, so QueryTools' 'edgeKind' validation (the F7 fix's sibling for edgeKind) can
+    /// check against it directly and eagerly, with no database round trip, and with no second
+    /// hand-maintained copy that could silently drift from this one.
+    /// </summary>
+    public static readonly string[] KnownEdgeKinds = ["references", "instance_of", "corresponds_to"];
 
     /// <summary>
     /// The structured filter behind query_graph - kind, name pattern, path prefix, and edge

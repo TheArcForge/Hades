@@ -209,7 +209,7 @@ Check both:
        on the old surface, not the new one — see "If you're on the old server" below.
 
 2. **Server version.** Ask Claude to call the `hades_status` tool. Check the `version` field.
-   - **New app reports `2.0.0-beta.2`** — a fixed constant (`HadesTools.cs`, `ServerVersion`).
+   - **New app reports `2.0.0-beta.3`** — a fixed constant (`HadesTools.cs`, `ServerVersion`).
    - **Old v1.2 package reports whatever Unity Package Manager has installed** —
      `Editor/MCP/Tools/GraphQueryTools.cs`'s `hades_status` reads it live via
      `PackageInfo.FindForAssembly(...).version`, not a hardcoded string. For the current old
@@ -302,6 +302,16 @@ Hades.app is running. Enabling launch-at-login for Hades — the Claude Code onb
 own toggle, or Settings → Login — prevents this class of failure entirely, since Hades is then
 already running before any Claude Code session starts.
 
+**A PlayMode `project_run_tests` run saves open scenes to disk, even unsaved scratch changes.**
+Entering play mode makes Unity's own Test Runner save whatever scenes are open; `project_run_tests`
+with `testMode: PlayMode` inherits that behavior and doesn't say so, so a tracked scene can change
+with no explicit `scene_apply`/`scene_manage save` in between — confirmed directly, across separate
+testing sessions. **EditMode runs are unaffected** — the tool's own description already notes
+that EditMode triggers a domain reload, and that path never saves scenes. If a PlayMode run leaves
+scratch content behind, the recovery is clean: remove it via `scene_apply`, then `scene_manage`
+`save` — the rest of the file round-trips byte-identical. Check `git status` on scenes you have
+open before and after a PlayMode run if this matters to you.
+
 Fixes for the findings raised during this testing round are in progress and not yet reflected
 here. If something you hit isn't described above, it's more likely new than already known —
 report it.
@@ -351,7 +361,7 @@ Include:
 
 - What you did, what you expected, what actually happened.
 - Which install path (cask / DMG), and whether Gatekeeper fired.
-- `hades_status`'s output (gives the MCP server version — `2.0.0-beta.2` for the new app — and
+- `hades_status`'s output (gives the MCP server version — `2.0.0-beta.3` for the new app — and
   which projects the app knows about). Paste it directly.
 - macOS version and confirmation you're on Apple Silicon.
 - For anything Unity-mutation-related: the actual `.unity`/`.prefab`/`.mat`/`.controller` YAML

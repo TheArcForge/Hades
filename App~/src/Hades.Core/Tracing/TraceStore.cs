@@ -43,6 +43,14 @@ public sealed record TraceSummary
     public long? EndUtcMs { get; init; }
     public string? Status { get; init; }
     public long? DurationMs { get; init; }
+
+    /// <summary>SQLite's own monotonically-increasing rowid for this trace's row - never meaningful
+    /// on its own, only as a deterministic tiebreaker when two traces share the same
+    /// <see cref="StartUtcMs"/> (millisecond resolution, and a real burst can record two calls
+    /// inside one tick - see <see cref="RecentTraces"/>'s own doc comment). Always present: every
+    /// row in the <c>traces</c> table has one, whether or not <see cref="TraceStore"/> ever
+    /// references it by name elsewhere.</summary>
+    public required long RowId { get; init; }
 }
 
 /// <summary>One row of <c>spans</c>. <see cref="Attributes"/> and <see cref="Events"/> are raw
@@ -215,14 +223,28 @@ public sealed class TraceStore : IDisposable
         return traceId;
     }
 
-    /// <summary>Most recent traces, newest first - the default "what has Hades been doing" view.</summary>
+    /// <summary>
+    /// Most recent traces, newest first - the default "what has Hades been doing" view.
+    ///
+    /// Ordered <c>start_time DESC, rowid DESC</c> - <c>start_time</c> alone is not enough: it is
+    /// millisecond resolution, and a real burst of tool calls can easily record two (or three)
+    /// inside one tick, in which case <c>start_time</c> ties and SQLite would otherwise settle the
+    /// order however its own query plan happens to (in practice, rowid-descending already, since
+    /// idx_traces_start_time is read backwards to satisfy the DESC clause - but that was never
+    /// GUARANTEED, only incidental). rowid only ever grows, so ordering by it explicitly makes
+    /// "newest first, ties broken by most-recently-recorded first" a real, deterministic contract
+    /// rather than an accident of the current query plan - see
+    /// <see cref="Hades.Server.Control.TracesEndpoint.GroupIntoSequences"/>'s own doc comment for
+    /// why a caller downstream (rendering a same-millisecond burst as a sequence Pattern) actually
+    /// depends on that determinism.
+    /// </summary>
     public IReadOnlyList<TraceSummary> RecentTraces(int limit = 50)
     {
         using var command = _connection.CreateCommand();
         command.CommandText = """
-            SELECT trace_id, root_span_name, start_time, end_time, status, total_duration_ms
+            SELECT trace_id, root_span_name, start_time, end_time, status, total_duration_ms, rowid
             FROM traces
-            ORDER BY start_time DESC
+            ORDER BY start_time DESC, rowid DESC
             LIMIT $limit;
             """;
         command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, MaxResults));
@@ -234,7 +256,7 @@ public sealed class TraceStore : IDisposable
     {
         using var command = _connection.CreateCommand();
         command.CommandText = """
-            SELECT trace_id, root_span_name, start_time, end_time, status, total_duration_ms
+            SELECT trace_id, root_span_name, start_time, end_time, status, total_duration_ms, rowid
             FROM traces
             WHERE status = 'error'
             ORDER BY start_time DESC
@@ -253,7 +275,7 @@ public sealed class TraceStore : IDisposable
         using (var command = _connection.CreateCommand())
         {
             command.CommandText = """
-                SELECT trace_id, root_span_name, start_time, end_time, status, total_duration_ms
+                SELECT trace_id, root_span_name, start_time, end_time, status, total_duration_ms, rowid
                 FROM traces WHERE trace_id = $traceId;
                 """;
             command.Parameters.AddWithValue("$traceId", traceId);
@@ -381,6 +403,7 @@ public sealed class TraceStore : IDisposable
                 EndUtcMs = reader.IsDBNull(3) ? null : reader.GetInt64(3),
                 Status = reader.IsDBNull(4) ? null : reader.GetString(4),
                 DurationMs = reader.IsDBNull(5) ? null : reader.GetInt64(5),
+                RowId = reader.GetInt64(6),
             });
         }
 

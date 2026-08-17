@@ -267,20 +267,41 @@ public sealed class RootsRouter(ProjectService projects)
     /// arithmetic against already-registered projects, never a filesystem walk. Returns the
     /// project's own stored <see cref="UnityProject.Path"/> alongside its guid — never
     /// <paramref name="canonicalRoot"/> itself — because a root merely INSIDE the project (its
-    /// Assets folder, say) has no ProjectSettings.asset of its own for a caller to re-Adopt.</summary>
+    /// Assets folder, say) has no ProjectSettings.asset of its own for a caller to re-Adopt.
+    ///
+    /// <para>When SEVERAL known projects equal-or-contain <paramref name="canonicalRoot"/> — one
+    /// registered project nested inside another registered project's own tree — the DEEPEST match
+    /// (the longest matching canonical path, i.e. the most specific containing project) wins, not
+    /// whichever <see cref="ProjectService.KnownProjects"/> happens to enumerate first
+    /// (alphabetical by <see cref="UnityProject.Name"/> — see <c>ProjectStore.All</c> — which has
+    /// no relationship to nesting depth at all). A root inside the inner project is unambiguously
+    /// about the inner project; routing it to the outer one instead would be exactly the kind of
+    /// wrong-but-silent guess this class's own doc comment says routing must never make.</para></summary>
     (string ProductGuid, string Path)? MatchAgainstKnownProjects(string canonicalRoot)
     {
+        (string ProductGuid, string Path, string Known)? deepest = null;
+
         foreach (var project in projects.KnownProjects())
         {
-            var known = Canonicalize(project.Path);
-            if (canonicalRoot.Equals(known, StringComparison.Ordinal)
-                || canonicalRoot.StartsWith(known + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            string known;
+            try
             {
-                return (project.ProductGuid, project.Path);
+                known = Canonicalize(project.Path);
             }
+            catch (Exception e) when (e is ArgumentException or IOException or UnauthorizedAccessException)
+            {
+                continue; // A corrupted stored path (see ResolveAsync's own reported-root guard) just matches nothing.
+            }
+
+            var contains = canonicalRoot.Equals(known, StringComparison.Ordinal)
+                || canonicalRoot.StartsWith(known + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+            if (!contains) continue;
+
+            if (deepest is null || known.Length > deepest.Value.Known.Length)
+                deepest = (project.ProductGuid, project.Path, known);
         }
 
-        return null;
+        return deepest is { } match ? (match.ProductGuid, match.Path) : null;
     }
 
     /// <summary>Guid of the Unity project rooted EXACTLY at <paramref name="canonicalRoot"/> —
@@ -290,27 +311,27 @@ public sealed class RootsRouter(ProjectService projects)
         ProjectIdentity.IsUnityProject(canonicalRoot) ? ProjectIdentity.TryReadProductGuid(canonicalRoot) : null;
 
     /// <summary>
-    /// Lexically normalizes (<see cref="Path.GetFullPath(string)"/> plus trimming a trailing
-    /// separator) and resolves one level of symlink, the same two-part shape as
-    /// <c>Indexing.ProjectWalker</c>'s own <c>IsInside</c>/<c>CanonicalIdentity</c> helpers. A
-    /// root reported by an MCP client is exactly as likely to arrive with a trailing slash, or as
-    /// a symlinked alias (macOS: <c>/tmp</c> → <c>/private/tmp</c>), as any other path this
-    /// process is handed, and an exact-string compare has already been the wrong tool for that
-    /// once in this codebase (see <see cref="MatchAgainstKnownProjects"/>'s own doc comment).
+    /// Thin delegate to <see cref="ProjectStore.Canonicalize"/> - the SAME full-chain,
+    /// every-component realpath(3)-semantics resolution <see cref="ProjectStore.Adopt"/> uses to
+    /// decide what a project's own stored <see cref="UnityProject.Path"/> looks like, reached here
+    /// via that method's <c>internal</c> accessibility plus Hades.Core's own
+    /// <see cref="System.Runtime.CompilerServices.InternalsVisibleToAttribute"/> naming
+    /// <c>Hades.Server</c> (see that method's own doc comment for why).
+    ///
+    /// This used to be a genuinely separate implementation here - lexical normalization
+    /// (<see cref="Path.GetFullPath(string)"/> plus trimming a trailing separator) plus exactly
+    /// ONE <see cref="FileSystemInfo.ResolveLinkTarget(bool)"/> call on the final path component -
+    /// one component short of what a root reported by an MCP client actually needs: such a root is
+    /// exactly as likely to sit under a symlinked ANCESTOR (macOS: <c>/tmp</c> → <c>/private/tmp</c>,
+    /// or <c>Path.GetTempPath()</c>'s own <c>/var</c> → <c>/private/var</c>) as under a symlinked
+    /// leaf, and leaf-only resolution left <see cref="MatchAgainstKnownProjects"/> above comparing a
+    /// leaf-only-resolved fresh root against <see cref="ProjectStore.Adopt"/>'s own full-chain-
+    /// resolved stored Path - two different spellings of the identical directory, an exact match
+    /// that should have succeeded silently instead failing every time, so an already-known project
+    /// got auto-adopted and announced as brand new on every single roots-resolution call. Delegating
+    /// to the ProjectStore implementation - rather than upgrading this copy in parallel and hoping
+    /// the two never drift apart again - is what makes that agreement structural instead of merely
+    /// coincidental.
     /// </summary>
-    static string Canonicalize(string path)
-    {
-        var full = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar);
-        if (!Directory.Exists(full)) return full; // Nothing to symlink-resolve; matches nothing downstream anyway.
-
-        try
-        {
-            var target = new DirectoryInfo(full).ResolveLinkTarget(returnFinalTarget: true)?.FullName;
-            return target?.TrimEnd(Path.DirectorySeparatorChar) ?? full;
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            return full;
-        }
-    }
+    static string Canonicalize(string path) => ProjectStore.Canonicalize(path);
 }

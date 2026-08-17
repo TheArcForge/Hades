@@ -127,13 +127,22 @@ public sealed record RebuildResult
 {
     public required int NodesBefore { get; init; }
     public required int NodesAfter { get; init; }
+
+    /// <summary>I5: per-file diagnostics from this rebuild — <see
+    /// cref="Indexing.ScriptIndexer"/> and <see cref="Indexing.AssetIndexer"/> already build
+    /// this list (a file that could not be read, or - I1 - could not be parsed); <see
+    /// cref="ProjectService.Reindex"/> used to discard it entirely. Empty, never null, when
+    /// nothing went wrong.</summary>
+    public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
 /// <summary>
 /// One project's live Editor attachment, as reported by hades_charon_status - see
 /// <see cref="ProjectService.GetCharonStatus"/>. Three states, not two:
 ///  - No registration in <see cref="EditorRegistry"/> at all: <see cref="Attached"/> false,
-///    <see cref="Busy"/> false, every other field null. "Not attached."
+///    <see cref="Busy"/> false, every other field null EXCEPT <see cref="PluginVersionOnDisk"/>,
+///    which may still report an on-disk install even with nothing attached - see that property's
+///    own doc comment. "Not attached."
 ///  - A registration whose main thread answered the busy probe within the timeout:
 ///    <see cref="Attached"/> true, <see cref="Busy"/> false. "Attached."
 ///  - A registration whose main thread did NOT answer in time: <see cref="Attached"/> true,
@@ -161,6 +170,25 @@ public sealed record CharonStatus
     /// comment for why the live value is preferred where callers compare it against
     /// Editors.PluginInstaller.AppPluginVersion).</summary>
     public string? PluginVersion { get; init; }
+
+    /// <summary>
+    /// The plugin version found on disk at the project's own
+    /// <c>Assets/Hades/Runtime/HadesBoot.cs</c> - see
+    /// <see cref="Editors.PluginInstaller.InstalledPluginVersion"/> - populated ONLY when <see
+    /// cref="Attached"/> is false. Closes a real gap: with no Editor attached, <see
+    /// cref="PluginVersion"/> is always null (it is hello-derived - there is no hello to derive it
+    /// from), so a caller could not previously tell "the plugin is installed on disk, Unity just
+    /// has not imported/reconnected it yet" apart from "nothing is installed in this project at
+    /// all" - two very different remedies (open/focus Unity, vs. installPlugin first). Always null
+    /// while <see cref="Attached"/> is true: the live <see cref="PluginVersion"/> is authoritative
+    /// then, and re-reading the disk copy on top of it would add a second, potentially-stale
+    /// source of truth for the exact same fact (see <see cref="Editors.PluginVersionSkew"/>'s own
+    /// class doc comment for why the live value is preferred). Also null, even while detached,
+    /// when nothing is installed on disk either - see
+    /// <see cref="Editors.PluginInstaller.InstalledPluginVersion"/>'s own doc comment for why
+    /// "not installed" and "installed but unreadable" collapse to the same null.
+    /// </summary>
+    public string? PluginVersionOnDisk { get; init; }
 }
 
 /// <summary>
@@ -338,7 +366,19 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
 
         if (_memoryImported.TryAdd(project.ProductGuid, 0))
         {
-            _memory.ImportFromArcforge(project.ProductGuid, projectRoot);
+            try
+            {
+                _memory.ImportFromArcforge(project.ProductGuid, projectRoot);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // The project genuinely registered above (_store.Adopt already wrote
+                // project.json), so a failed import must not abort adoption - throwing here
+                // would leave a half-adopted project whose ProjectAdopted below never fires.
+                // Removing the marker keeps the import retryable on a later Adopt instead of
+                // this process permanently giving up after one environmental failure.
+                _memoryImported.TryRemove(project.ProductGuid, out _);
+            }
         }
 
         ProjectAdopted?.Invoke(project);
@@ -378,46 +418,104 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
         }
     }
 
-    void Reindex(UnityProject project)
+    /// <summary>
+    /// Full reindex of one project: walks scripts and assets from scratch, then reconciles
+    /// file_state against disk. Returns the merged per-file diagnostics <see
+    /// cref="Indexing.ScriptIndexer"/> and <see cref="Indexing.AssetIndexer"/> collected (I5) —
+    /// previously discarded here entirely, so a poison file's own I1 warning never reached any
+    /// caller of <see cref="RebuildGraph"/>.
+    ///
+    /// I6: each file's recorded on-disk state (mtime/size) is captured BEFORE indexing reads its
+    /// content, not after. Recording it after — the previous order — meant a file that changed
+    /// between being read and being stat'd was recorded with its NEW stamp against the OLD
+    /// content that was actually indexed: a silent, permanent miss, since the next sweep would
+    /// see recorded and on-disk state already agreeing and never revisit it. Stamping first means
+    /// the worst case shifts to one redundant reindex next sweep, never a missed one.
+    ///
+    /// I8: SweepStaleNodes (called inside IndexProject, once per scan root) already removes a
+    /// deleted file's graph nodes and edges, but never its file_state row. <see
+    /// cref="GraphDatabase.DeleteNodesForPath"/> does remove that row too (see its own doc
+    /// comment) — calling it here for every path this run's sweep found deleted closes that gap
+    /// the exact same way <see cref="SyncChanges"/> already handles its own deletions. Safe to
+    /// call even for a path SweepStaleNodes already cleared: a DELETE against rows that no
+    /// longer exist is a no-op.
+    /// </summary>
+    IReadOnlyList<string> Reindex(UnityProject project)
     {
         using var database = OpenGraph(project.ProductGuid);
-        ScriptIndexer.IndexProject(project.Path, database);
-        AssetIndexer.IndexProject(project.Path, database);
 
-        // Record what everything looked like, so the next sweep can tell what moved.
+        // Sweep BEFORE indexing, not after — see this method's own doc comment (I6). What
+        // "changed since last recorded" means is unaffected by whether IndexProject has run yet:
+        // both sides of that comparison (file_state, on-disk) are independent of the graph.
         var sweep = ProjectSweeper.Sweep(project.Path, database);
-        database.UpsertFileState(ProjectSweeper.StateFor(project.Path, sweep.Added.Concat(sweep.Changed)));
+        var freshState = ProjectSweeper.StateFor(project.Path, sweep.Added.Concat(sweep.Changed));
+
+        var scripts = ScriptIndexer.IndexProject(project.Path, database);
+        var assets = AssetIndexer.IndexProject(project.Path, database);
+
+        database.UpsertFileState(freshState);
+
+        // I8: file_state rows for files gone since the state above was captured.
+        foreach (var deleted in sweep.Deleted) database.DeleteNodesForPath(deleted);
 
         _lastIndexed[project.ProductGuid] = DateTimeOffset.UtcNow;
+
+        return [.. sweep.Warnings, .. scripts.Warnings, .. assets.Warnings];
     }
 
     /// <summary>
     /// Brings the graph up to date by indexing only what differs from the recorded state. Returns
     /// the sweep so a caller can log or act on what moved; a project with no changes costs one
     /// sweep and nothing else.
+    ///
+    /// I2: acquires the SAME per-project <see cref="_indexGates"/> semaphore <see
+    /// cref="RebuildGraph"/> and <see cref="EnsureIndexed"/> both do, before touching the graph —
+    /// see <see cref="RebuildGraph"/>'s own doc comment for the full lock-ordering reasoning. This
+    /// method used to acquire no gate at all, so a concurrent <see cref="RebuildGraph"/> (or a
+    /// second, overlapping call here) could run against the same project through two independent
+    /// database connections with nothing stopping the two from interleaving writes and losing
+    /// updates — the same class of race <see cref="RebuildGraph"/>'s own gate was added to close,
+    /// just never extended to this, its most frequent caller (the ObservationService watcher and
+    /// periodic sweep both reach the graph only through here).
     /// </summary>
     public SweepResult? SyncChanges(string productGuid)
     {
         if (_store.Get(productGuid) is not { } project) return null;
 
-        using var database = OpenGraph(productGuid);
-        var sweep = ProjectSweeper.Sweep(project.Path, database);
-
-        if (!sweep.AnythingChanged) return sweep;
-
-        // Deletions first, and by explicit path — never by sweeping a partial visited-set.
-        foreach (var deleted in sweep.Deleted) database.DeleteNodesForPath(deleted);
-
-        var toIndex = sweep.NeedsIndexing;
-        if (toIndex.Count > 0)
+        var gate = _indexGates.GetOrAdd(productGuid, static _ => new SemaphoreSlim(1, 1));
+        gate.Wait();
+        try
         {
-            ScriptIndexer.IndexFiles(project.Path, database, toIndex);
-            AssetIndexer.IndexFiles(project.Path, database, toIndex);
-            database.UpsertFileState(ProjectSweeper.StateFor(project.Path, toIndex));
-        }
+            using var database = OpenGraph(productGuid);
+            var sweep = ProjectSweeper.Sweep(project.Path, database);
 
-        _lastIndexed[productGuid] = DateTimeOffset.UtcNow;
-        return sweep;
+            if (!sweep.AnythingChanged) return sweep;
+
+            // Deletions first, and by explicit path — never by sweeping a partial visited-set.
+            foreach (var deleted in sweep.Deleted) database.DeleteNodesForPath(deleted);
+
+            var toIndex = sweep.NeedsIndexing;
+            var warnings = sweep.Warnings;
+            if (toIndex.Count > 0)
+            {
+                // I6: stat BEFORE indexing reads file content — see Reindex's own doc comment
+                // for why the order matters.
+                var preReadState = ProjectSweeper.StateFor(project.Path, toIndex);
+
+                var scripts = ScriptIndexer.IndexFiles(project.Path, database, toIndex);
+                var assets = AssetIndexer.IndexFiles(project.Path, database, toIndex);
+                database.UpsertFileState(preReadState);
+
+                warnings = [.. warnings, .. scripts.Warnings, .. assets.Warnings]; // I5
+            }
+
+            _lastIndexed[productGuid] = DateTimeOffset.UtcNow;
+            return sweep with { Warnings = warnings };
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     public IReadOnlyList<GraphNode> Search(string productGuid, string pattern, string? kind = null, int limit = 50)
@@ -864,18 +962,49 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
 
     /// <summary>
     /// Forces a full reindex regardless of whether this process already indexed the project this
-    /// run, and reports the node count immediately before and after. Returns null when the
-    /// project is unknown.
+    /// run, and reports the node count immediately before and after, plus any per-file warnings
+    /// the reindex collected (I5). Returns null when the project is unknown.
+    ///
+    /// Acquires the SAME per-project <see cref="_indexGates"/> semaphore <see
+    /// cref="EnsureIndexed"/> AND <see cref="SyncChanges"/> both do before touching <see
+    /// cref="Reindex"/> - a forced rebuild used to call <see cref="Reindex"/> directly, bypassing
+    /// that gate entirely, so it could run concurrently with a routine <see cref="EnsureIndexed"/>
+    /// OR an ObservationService sweep - which reaches the graph only through <see
+    /// cref="SyncChanges"/>, and (I2) used to acquire no gate of its own at all - reindexing the
+    /// SAME project through a second, independent database connection, with nothing stopping the
+    /// two from interleaving writes and losing updates.
+    ///
+    /// I2's lock-ordering design, in full: there is exactly ONE lock per project - this same
+    /// <see cref="_indexGates"/> semaphore - and all three entry points (this method, <see
+    /// cref="EnsureIndexed"/>, <see cref="SyncChanges"/>) acquire it and nothing else while
+    /// touching this project's graph, so there is no second lock to order against and therefore
+    /// no cycle that could deadlock. This blocks (synchronously) until any such indexing already
+    /// in flight for this project finishes first - exactly as two concurrent <see
+    /// cref="EnsureIndexed"/> callers already block on each other - never runs Reindex twice for
+    /// one call, and cannot deadlock against <see cref="EnsureIndexed"/> or <see
+    /// cref="SyncChanges"/>: every caller of all three methods (hades_rebuild_graph and the
+    /// Control API's async rebuild operation here; RootsRouter and EnsureIndexed's own re-check
+    /// there; the ObservationService watcher/periodic sweep for SyncChanges) is a top-level entry
+    /// point that never runs from inside an already-held gate.
     /// </summary>
     public RebuildResult? RebuildGraph(string productGuid)
     {
         if (_store.Get(productGuid) is not { } project) return null;
 
-        var before = Summary(productGuid)?.TotalNodes ?? 0;
-        Reindex(project);
-        var after = Summary(productGuid)?.TotalNodes ?? 0;
+        var gate = _indexGates.GetOrAdd(productGuid, static _ => new SemaphoreSlim(1, 1));
+        gate.Wait();
+        try
+        {
+            var before = Summary(productGuid)?.TotalNodes ?? 0;
+            var warnings = Reindex(project);
+            var after = Summary(productGuid)?.TotalNodes ?? 0;
 
-        return new RebuildResult { NodesBefore = before, NodesAfter = after };
+            return new RebuildResult { NodesBefore = before, NodesAfter = after, Warnings = warnings };
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     // ---------------------------------------------------------------- Charon (Editor attachment)
@@ -895,18 +1024,30 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
     /// <summary>
     /// Reports one project's live Editor attachment for hades_charon_status - see
     /// <see cref="CharonStatus"/> for the three states this distinguishes. No registration in the
-    /// editor registry at all means "not attached", decided synchronously. A registration answers
-    /// the hello-derived fields immediately - no round trip needed, they were sent at connect time
-    /// - and only <see cref="CharonStatus.Busy"/> needs one, via <see cref="BusyProbeMethod"/>.
-    /// Returns null only when <paramref name="productGuid"/> itself is unknown to Hades - same
+    /// editor registry at all means "not attached", decided synchronously - but still worth one
+    /// file read: <see cref="Editors.PluginInstaller.InstalledPluginVersion"/> against this
+    /// project's own path, so <see cref="CharonStatus.PluginVersionOnDisk"/> can tell "plugin
+    /// installed, Unity has not (re)connected" apart from "nothing installed at all" (see that
+    /// property's own doc comment). A registration answers the hello-derived fields immediately -
+    /// no round trip needed, they were sent at connect time - and only <see
+    /// cref="CharonStatus.Busy"/> needs one, via <see cref="BusyProbeMethod"/>. Returns null only
+    /// when <paramref name="productGuid"/> itself is unknown to Hades - same
     /// null-means-unknown-project convention as <see cref="GetMemorySummary"/>.
     /// </summary>
     public async Task<CharonStatus?> GetCharonStatus(string productGuid)
     {
-        if (_store.Get(productGuid) is null) return null;
+        if (_store.Get(productGuid) is not { } project) return null;
 
         var editor = _editorRegistry.Get(productGuid);
-        if (editor is null) return new CharonStatus { Attached = false, Busy = false };
+        if (editor is null)
+        {
+            return new CharonStatus
+            {
+                Attached = false,
+                Busy = false,
+                PluginVersionOnDisk = PluginInstaller.InstalledPluginVersion(project.Path),
+            };
+        }
 
         var responsive = await MainThreadIsResponsiveAsync(editor.Session, CharonProbeTimeout).ConfigureAwait(false);
 
@@ -1053,8 +1194,26 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
             }
         }
 
-        return findings.Take(Math.Clamp(limit, 1, 500)).ToList();
+        return findings.Take(Math.Clamp(limit, 1, MaxValidateMemoryFetch)).ToList();
     }
+
+    /// <summary>The largest <c>limit</c> validate_memory documents as its own maximum (MemoryTools.
+    /// ValidateMemory: "Maximum findings to return (1-500, default 100)") - what a CALLER may
+    /// legitimately request. Deliberately kept separate from <see cref="MaxValidateMemoryFetch"/>,
+    /// the ceiling actually applied to the <c>Take</c> above - conflating the two was exactly
+    /// <see cref="Graph.GraphDatabase.MaxSearchLimit"/>'s own pre-fix defect (see that constant's
+    /// doc comment for the general mechanism), reproduced here: this method kept a single clamp at
+    /// 500 - the SAME value as the documented max - so MemoryTools.ValidateMemory's own "limit + 1"
+    /// truncation-detection sentinel was silently discarded at exactly limit=500, and `truncated`
+    /// could never read true no matter how many real findings existed beyond it.</summary>
+    const int MaxValidateMemoryLimit = 500;
+
+    /// <summary>One more than <see cref="MaxValidateMemoryLimit"/>, so a caller AT the documented
+    /// maximum - whose own limit+1 sentinel becomes exactly <see cref="MaxValidateMemoryLimit"/> + 1
+    /// - still gets an honest <c>truncated</c> answer. Mirrors <see
+    /// cref="Graph.GraphDatabase.MaxSearchFetch"/> exactly; see that constant's own doc comment for
+    /// why the extra one is what makes the sentinel trick work at the boundary, not just below it.</summary>
+    const int MaxValidateMemoryFetch = MaxValidateMemoryLimit + 1;
 
     /// <summary>
     /// Reads one authored memory document directly - the Control API's "read one" surface (Plan 11

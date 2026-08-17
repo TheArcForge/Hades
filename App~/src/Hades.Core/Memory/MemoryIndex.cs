@@ -171,7 +171,14 @@ public sealed class MemoryIndex : IDisposable
 
         if (Directory.Exists(memoryDir))
         {
-            foreach (var path in Directory.EnumerateFiles(memoryDir, "*.md")
+            // Not Directory.EnumerateFiles(memoryDir, "*.md"): that search pattern's case
+            // sensitivity follows the underlying filesystem, case-SENSITIVE on Linux (unlike
+            // Windows/macOS's usual defaults) - a document named e.g. "CAPS.MD" would silently
+            // never be indexed, and so never found by Search, on Linux alone. Filtering in C# with
+            // OrdinalIgnoreCase makes every platform behave the same, matching
+            // MemoryStore.EnumerateMdFiles's identical fix.
+            foreach (var path in Directory.EnumerateFiles(memoryDir)
+                         .Where(p => Path.GetFileName(p).EndsWith(".md", StringComparison.OrdinalIgnoreCase))
                          .OrderBy(p => p, StringComparer.Ordinal))
             {
                 var name = Path.GetFileName(path);

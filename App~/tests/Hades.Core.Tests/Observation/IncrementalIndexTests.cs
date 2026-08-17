@@ -173,6 +173,59 @@ public class IncrementalIndexTests : IDisposable
         Directory.Delete(external, recursive: true);
     }
 
+    // ---------------------------------------------------------------- I10: unreadable directory
+    //
+    // The sweep used to treat a directory it could not even list as "everything under it was
+    // deleted" — Deleted is computed purely from "recorded but not seen this walk", and a
+    // directory read failure meant nothing under it was ever seen. An unreadable directory (a
+    // permissions hiccup, a not-yet-synced mount, ...) must instead be skipped with a warning,
+    // its previously recorded state left exactly alone.
+
+    // CA1416: File.SetUnixFileMode is (obviously) POSIX-only. Hades only ever runs on macOS/Unix
+    // (see AppPaths and every other Unix-assuming path in this codebase) and this test exists
+    // specifically to simulate a Unix permissions failure, so the platform-compatibility warning
+    // has nothing to protect here — suppressed for exactly the two call sites that need it.
+#pragma warning disable CA1416
+    [Fact]
+    public void AnUnreadableDirectory_PreservesItsRecordedState_InsteadOfReportingDeletions()
+    {
+        MakeProject();
+        Write("Assets/Locked/Hidden.cs", "public class Hidden { }");
+        var service = NewService();
+        service.AdoptAndIndex(_projectRoot);
+        Assert.Single(service.Search(Guid, "Hidden"));
+
+        var lockedDir = Path.Combine(_projectRoot, "Assets", "Locked");
+        File.SetUnixFileMode(lockedDir, UnixFileMode.None);
+        try
+        {
+            var sweep = service.SyncChanges(Guid)!;
+
+            Assert.DoesNotContain("Assets/Locked/Hidden.cs", sweep.Deleted);
+            Assert.NotEmpty(sweep.Warnings);
+            Assert.Single(service.Search(Guid, "Hidden"));
+        }
+        finally
+        {
+            // Restore before Dispose()'s recursive delete runs — chmod itself needs no
+            // permission on lockedDir (ownership is what matters), but deleting its contents
+            // afterward does.
+            File.SetUnixFileMode(lockedDir,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+#pragma warning restore CA1416
+
+    // I4 (.meta-only changes invisible to the sweep) was investigated but NOT fixed this round:
+    // the natural fix — folding a .meta's own mtime into its owning asset's tracked mtime — was
+    // implemented, proven to correctly detect a guid-only edit, and then REVERTED after it broke
+    // Hades.Server.Tests.SummaryToolTests.GetRecentlyChanged_SortsNewestFirstAndHonoursSince:
+    // file_state.mtime_utc is also the sort key get_recently_changed exposes to callers, and
+    // folding in an unrelated .meta timestamp can pull an asset's reported "last changed" time
+    // forward independent of its own content ever changing. A correct fix needs the .meta's own
+    // mtime tracked separately from file_state (e.g. its own table), which is a GraphSchema/
+    // GraphDatabase change outside this pass's file ownership. See the final report for detail.
+
     public void Dispose()
     {
         foreach (var dir in new[] { _appRoot, _projectRoot })

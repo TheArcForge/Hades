@@ -101,9 +101,18 @@ public sealed class EditorProxy(ProjectService projects, EditorRegistry registry
     public TimeSpan CommandTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Resolves <paramref name="project"/> exactly as every other tool does
-    /// (<see cref="ProjectResolver.Resolve"/>), confirms an Editor is attached and responsive, and
-    /// sends <paramref name="method"/> to it - returning the plugin's raw result. Throws
+    /// Resolves <paramref name="project"/> via the synchronous, non-roots-aware
+    /// <see cref="ProjectResolver.Resolve"/> - an explicit handle, or the sole known project when
+    /// exactly one is known; anything else (several known projects, no handle) throws the ordinary
+    /// "needs a 'project' argument" <see cref="McpException"/>, since this call alone has no way to
+    /// ask a live MCP session's roots for the answer. A caller that wants THAT disambiguation must
+    /// resolve first, via <c>Hades.Server.Mcp.ToolSupport.ResolveProjectAsync</c> (roots-capable,
+    /// but needs the live <c>RequestContext</c> this call does not have), and pass the
+    /// already-resolved productGuid here as <paramref name="project"/> instead of a raw handle -
+    /// <see cref="ProjectResolver.Resolve"/> accepts a productGuid exactly as readily as a typed
+    /// handle (see its own <c>byId</c> branch), so passing one through needs no separate "already
+    /// resolved" mode on this side. Confirms an Editor is attached and responsive, and sends
+    /// <paramref name="method"/> to it - returning the plugin's raw result. Throws
     /// <see cref="McpException"/> for every runtime failure: an unresolvable project handle (same
     /// wording as any other tool), no Editor attached, an Editor that is attached but busy, the
     /// plugin's own reported error, this call's own timeout, or - see the class doc comment's "ack
@@ -143,8 +152,7 @@ public sealed class EditorProxy(ProjectService projects, EditorRegistry registry
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new McpException(
-                $"'{method}' timed out after {CommandTimeout.TotalSeconds:F0}s waiting for the Unity Editor to respond.");
+            throw TimeoutError(method, @params);
         }
         catch (Exception e) when (IsConnectionDrop(e))
         {
@@ -230,6 +238,40 @@ public sealed class EditorProxy(ProjectService projects, EditorRegistry registry
             $"'{method}' was interrupted: the Unity Editor's connection dropped before its response arrived "
             + $"({detail}). Whether it applied cannot be determined right now - interrupted, state "
             + "unverified, re-query before retrying.");
+    }
+
+    /// <summary>
+    /// Unlike <see cref="AmbiguousError"/>, this is NOT a dropped connection -
+    /// <see cref="ProjectService.GetCharonStatus"/> already confirmed the Editor was attached and
+    /// responsive moments earlier, so Unity's main thread is almost certainly still working through
+    /// <paramref name="method"/> synchronously, exactly as measured against a real Editor: a batch that
+    /// outruns <see cref="CommandTimeout"/> keeps applying operations long after this exception is
+    /// thrown. Giving up on the wait must not be misread as Unity giving up on the work, so the message
+    /// says plainly that nothing already applied is undone and more may still land, rather than leaving
+    /// a caller to assume a timeout means nothing happened.
+    /// </summary>
+    McpException TimeoutError(string method, JsonValue? @params)
+    {
+        // Every batch tool (material_apply, scene_apply, prefab_apply, animation_apply,
+        // project_settings_apply - see e.g. MaterialApplyTool.MaterialApply) sends its whole spec
+        // as one 'operations' array under this exact key, so this is the one place EditorProxy can
+        // learn how big the interrupted batch was without knowing which specific tool called it.
+        // Absent for single-shot commands (project_run_tests, assets.refresh, ...) - the count is
+        // simply omitted rather than guessed.
+        var operationCount = @params is not null
+            && @params.TryGetProperty("operations", out var operations)
+            && operations!.Kind == JsonValueKind.Array
+                ? operations.Items.Count
+                : (int?)null;
+        var subject = operationCount is { } count ? $"'{method}' ({count} operation(s))" : $"'{method}'";
+
+        return new McpException(
+            $"{subject} timed out after {CommandTimeout.TotalSeconds:F0}s waiting for the Unity Editor to "
+            + "respond - the Editor may still be executing it, since giving up on the wait does not cancel "
+            + "the work. Anything already applied is NOT rolled back, and more may land after this error "
+            + "returns. Call hades_charon_status, which will keep reporting the Editor busy until the work "
+            + "actually finishes, then check project_get_console_log or re-query the affected paths to see "
+            + "what has actually landed before retrying.");
     }
 
     string ProjectName(string productGuid) => projects.Get(productGuid)?.Name ?? productGuid;

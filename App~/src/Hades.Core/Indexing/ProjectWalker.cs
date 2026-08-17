@@ -161,7 +161,17 @@ public static class ProjectWalker
     /// <see cref="Directory.EnumerateDirectories"/> follows symlinks, so without this the walk
     /// is exponential in branching (not depth) and effectively unbounded.
     /// </summary>
-    public static IEnumerable<string> EnumerateSourceFiles(string root, string searchPattern)
+    /// <param name="failedDirectories">
+    /// I10: when supplied, every directory this walk could not read (permissions, a transient
+    /// lock, a not-yet-synced network/cloud mount, ...) is appended here, as the SAME path
+    /// string that was passed to <see cref="Directory.GetFiles"/> — i.e. relative to whatever
+    /// <paramref name="root"/> the caller is currently walking. A caller comparing recorded
+    /// state against this walk's output (<see cref="Observation.ProjectSweeper.Sweep"/>) needs
+    /// this to tell "genuinely deleted" apart from "could not confirm either way" - nothing
+    /// yielded from under a failed directory is evidence it no longer exists.
+    /// </param>
+    public static IEnumerable<string> EnumerateSourceFiles(string root, string searchPattern,
+        List<string>? failedDirectories = null)
     {
         var pending = new Stack<string>();
         var visited = new HashSet<string>(StringComparer.Ordinal);
@@ -189,6 +199,9 @@ public static class ProjectWalker
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                // I10: reported, not just skipped — see this parameter's own doc comment for why
+                // "skip" alone let a caller mistake "could not check" for "confirmed gone".
+                failedDirectories?.Add(directory);
                 continue;
             }
 

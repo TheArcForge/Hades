@@ -1,4 +1,6 @@
+using System.Reflection;
 using Hades.Core;
+using Hades.Core.Projects;
 using Hades.Core.Storage;
 using Hades.Server.Mcp;
 
@@ -18,6 +20,28 @@ public class RootsRouterTests : IDisposable
             $"  productGUID: {guid}\n");
         Directory.CreateDirectory(Path.Combine(root, "Assets"));
         return root;
+    }
+
+    /// <summary>
+    /// Test-only realpath oracle - invokes the actual (internal) <see cref="ProjectStore.Canonicalize"/>
+    /// via reflection rather than re-implementing it, so this helper can never drift from what
+    /// RootsRouter's own Canonicalize (a thin delegate to it) actually does. Needed by any fixture
+    /// that builds a symlink's own TARGET from <see cref="Path.GetTempPath"/>: that path itself sits
+    /// under a symlinked ancestor on macOS (<c>/var</c> -&gt; <c>/private/var</c>), and
+    /// <see cref="ProjectStore"/>'s single-pass, component-by-component resolution does not re-walk
+    /// a just-substituted symlink target's own ancestors - so a symlink created with a non-canonical
+    /// target only gets PARTIALLY resolved. Pre-resolving with this helper before a symlink's target
+    /// is ever written keeps every fixture's target already-canonical, side-stepping that requirement
+    /// entirely - same technique ProjectStoreTests's own RealPath helper and the fixture it feeds
+    /// (Adopt_ThroughAnIntermediateSymlinkedDirectory_ResolvesTheFullChain_SoBothSpellingsConvergeOnOneRow)
+    /// already use for the identical reason.
+    /// </summary>
+    static string RealPath(string path)
+    {
+        var method = typeof(ProjectStore).GetMethod("Canonicalize", BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("ProjectStore.Canonicalize not found — has it been renamed?");
+
+        return (string)method.Invoke(null, [path])!;
     }
 
     (ProjectService Service, RootsRouter Router) NewRouter()
@@ -221,6 +245,35 @@ public class RootsRouterTests : IDisposable
     }
 
     [Fact]
+    public async Task ResolveAsync_SkipsAKnownProjectWithACorruptedStoredPath_RatherThanThrowing()
+    {
+        // The bug this guards: MatchAgainstKnownProjects used to canonicalize each KNOWN
+        // project's own stored Path with no guard, unlike the reported root's own Canonicalize
+        // call a few lines above it in ResolveAsync (the try/catch around `canonical =
+        // Canonicalize(raw)`). A corrupted project.json - Path == "" here - makes
+        // Path.GetFullPath throw ArgumentException, which used to propagate straight out of
+        // ResolveAsync instead of just meaning "this project does not match". Written directly
+        // via a second ProjectStore on the SAME AppPaths (never through Adopt, which always
+        // canonicalizes and could never itself produce this) to simulate exactly that corruption.
+        var (_, router) = NewRouter();
+        new ProjectStore(new AppPaths(_appRoot)).Save(new UnityProject
+        {
+            ProductGuid = "aaaabbbbccccddddeeeeffff00009999",
+            Path = "",
+            Name = "Corrupt",
+        });
+
+        var plain = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(plain);
+        _projectRoots.Add(plain);
+
+        var result = await router.ResolveAsync(new FakeRootsProvider(plain));
+
+        Assert.False(result.IsResolved);
+        Assert.Contains("No Unity project", result.Error);
+    }
+
+    [Fact]
     public async Task ResolveAsync_CanonicalizesATrailingSlashBeforeMatching()
     {
         var root = MakeUnityProject("aaaabbbbccccddddeeeeffff00001111");
@@ -255,6 +308,94 @@ public class RootsRouterTests : IDisposable
         {
             Directory.Delete(link);
         }
+    }
+
+    [Fact]
+    public async Task ResolveAsync_MatchesAKnownProjectReportedThroughAnIntermediateSymlinkedAncestor()
+    {
+        // The bug this guards: RootsRouter's own Canonicalize used to resolve only the LEAF
+        // component's own symlink, so a reported root sitting under a symlinked ANCESTOR - macOS's
+        // own /tmp -> /private/tmp is exactly this shape, since /tmp is never the leaf of a project
+        // path like /tmp/MyProj - canonicalized to a spelling that never matched the known
+        // project's own fully-resolved stored Path (ProjectStore.Adopt already resolves the FULL
+        // chain). The already-known project then looked unmatched and got silently re-adopted and
+        // re-announced as brand new on every call - unlike
+        // ResolveAsync_CanonicalizesASymlinkedRootBeforeMatching above, where the symlink IS the
+        // reported root's own leaf and leaf-only resolution already handled it. Built from scratch
+        // (scratch/link -> scratch/real) rather than relying on any particular OS's own ambient
+        // symlinks - the same shape ProjectStoreTests's own
+        // Adopt_ThroughAnIntermediateSymlinkedDirectory_ResolvesTheFullChain_SoBothSpellingsConvergeOnOneRow
+        // test uses for the storage side of this identical invariant - including pre-resolving
+        // "scratch" via RealPath before it ever becomes a symlink's own TARGET text: resolution is
+        // single-pass, so a target written with a not-yet-canonical ancestor of its own (e.g. this
+        // process's own GetTempPath(), under macOS's /var -> /private/var) would only be partially
+        // resolved when the "link" component substitutes it in - a fixture-construction pitfall,
+        // not the production bug this test exists to pin.
+        var scratch = RealPath(Path.Combine(Path.GetTempPath(), Path.GetRandomFileName()));
+        var real = Path.Combine(scratch, "real");
+        var link = Path.Combine(scratch, "link");
+        var projectViaReal = Path.Combine(real, "Proj");
+        var projectViaLink = Path.Combine(link, "Proj");
+
+        Directory.CreateDirectory(Path.Combine(projectViaReal, "ProjectSettings"));
+        File.WriteAllText(Path.Combine(projectViaReal, "ProjectSettings", "ProjectSettings.asset"),
+            "  productGUID: aaaabbbbccccddddeeeeffff00003333\n");
+        Directory.CreateDirectory(Path.Combine(projectViaReal, "Assets"));
+        Directory.CreateSymbolicLink(link, real);
+
+        try
+        {
+            var (service, router) = NewRouter();
+            service.AdoptAndIndex(projectViaReal); // Known via the REAL spelling.
+
+            // Reported root arrives through the INTERMEDIATE symlink, never the project's own leaf.
+            var result = await router.ResolveAsync(new FakeRootsProvider(projectViaLink));
+
+            Assert.True(result.IsResolved);
+            Assert.Equal("aaaabbbbccccddddeeeeffff00003333", result.ProductGuid);
+            Assert.Null(result.Announcement); // Already known - must not re-announce as new.
+        }
+        finally
+        {
+            Directory.Delete(link);
+            Directory.Delete(scratch, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ResolveAsync_PicksTheDeepestKnownProjectWhenOneIsNestedInsideAnother()
+    {
+        // Deliberately named so ProjectStore.All's alphabetical-by-Name ordering (what
+        // KnownProjects() returns) visits the OUTER project BEFORE the inner one - proving this
+        // test fails for the right reason if MatchAgainstKnownProjects still returned the FIRST
+        // equals-or-contains match instead of the DEEPEST one: "AAA_Outer..." sorts before
+        // "ZZZ_Inner" regardless of either one's own random suffix.
+        var outer = Path.Combine(Path.GetTempPath(), "AAA_Outer_" + Path.GetRandomFileName());
+        Directory.CreateDirectory(Path.Combine(outer, "ProjectSettings"));
+        File.WriteAllText(Path.Combine(outer, "ProjectSettings", "ProjectSettings.asset"),
+            "  productGUID: aaaabbbbccccddddeeeeffff00001111\n");
+        Directory.CreateDirectory(Path.Combine(outer, "Assets"));
+        _projectRoots.Add(outer);
+
+        // A second, fully independent Unity project nested INSIDE the outer one's own tree - e.g.
+        // a stray copy, an embedded example project, or a submodule.
+        var inner = Path.Combine(outer, "Nested", "ZZZ_Inner");
+        Directory.CreateDirectory(Path.Combine(inner, "ProjectSettings"));
+        File.WriteAllText(Path.Combine(inner, "ProjectSettings", "ProjectSettings.asset"),
+            "  productGUID: bbbbccccddddeeeeffff000011112222\n");
+        Directory.CreateDirectory(Path.Combine(inner, "Assets"));
+
+        var (service, router) = NewRouter();
+        service.AdoptAndIndex(outer);
+        service.AdoptAndIndex(inner);
+
+        // A root inside the INNER project must resolve to the inner project specifically - it is
+        // also, technically, inside the outer one, but the outer is the wrong, less-specific
+        // answer for a root that sits inside the deeper, more specific project.
+        var result = await router.ResolveAsync(new FakeRootsProvider(Path.Combine(inner, "Assets")));
+
+        Assert.True(result.IsResolved);
+        Assert.Equal("bbbbccccddddeeeeffff000011112222", result.ProductGuid);
     }
 
     [Fact]

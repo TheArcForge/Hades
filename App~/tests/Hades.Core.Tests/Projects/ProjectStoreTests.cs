@@ -1,3 +1,4 @@
+using System.Reflection;
 using Hades.Core.Projects;
 using Hades.Core.Storage;
 
@@ -6,9 +7,27 @@ namespace Hades.Core.Tests.Projects;
 public class ProjectStoreTests : IDisposable
 {
     readonly string _appRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-    readonly string _projectRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+    readonly string _projectRoot = RealPath(Path.Combine(Path.GetTempPath(), Path.GetRandomFileName()));
 
     ProjectStore NewStore() => new(new AppPaths(_appRoot));
+
+    /// <summary>
+    /// Test-only realpath oracle - invokes the actual (private) <see cref="ProjectStore.Canonicalize"/>
+    /// via reflection rather than re-implementing it, so this helper can never drift from what the
+    /// method under test actually does. Needed because <see cref="Path.GetTempPath"/> itself sits
+    /// under a symlinked ancestor on macOS (<c>/var</c> -&gt; <c>/private/var</c>): now that
+    /// Canonicalize resolves the FULL chain (see that method's own doc comment), every fixture root
+    /// built from GetTempPath() must be pre-resolved here, ONCE, at construction - otherwise
+    /// Assert.Equal(_projectRoot, ...) below would fail for a reason that has nothing to do with the
+    /// behavior each test actually names and exercises.
+    /// </summary>
+    static string RealPath(string path)
+    {
+        var method = typeof(ProjectStore).GetMethod("Canonicalize", BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("ProjectStore.Canonicalize not found — has it been renamed?");
+
+        return (string)method.Invoke(null, [path])!;
+    }
 
     void MakeUnityProject(string guid)
     {
@@ -56,7 +75,7 @@ public class ProjectStoreTests : IDisposable
         MakeUnityProject("aaaabbbbccccddddeeeeffff00001111");
         NewStore().Adopt(_projectRoot);
 
-        var movedRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var movedRoot = RealPath(Path.Combine(Path.GetTempPath(), Path.GetRandomFileName()));
         Directory.CreateDirectory(Path.Combine(movedRoot, "ProjectSettings"));
         File.WriteAllText(Path.Combine(movedRoot, "ProjectSettings", "ProjectSettings.asset"),
             "  productGUID: aaaabbbbccccddddeeeeffff00001111\n");
@@ -68,6 +87,100 @@ public class ProjectStoreTests : IDisposable
         Assert.Equal(movedRoot, store.Get("aaaabbbbccccddddeeeeffff00001111")!.Path);
 
         Directory.Delete(movedRoot, recursive: true);
+    }
+
+    [Fact]
+    public void Adopt_CanonicalizesATrailingSlash_SoTheStoredNameAndPathAreStable()
+    {
+        MakeUnityProject("aaaabbbbccccddddeeeeffff00001111");
+        var store = NewStore();
+
+        var withTrailingSlash = _projectRoot.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var project = store.Adopt(withTrailingSlash);
+
+        Assert.NotNull(project);
+        Assert.Equal(_projectRoot, project!.Path);
+        Assert.Equal(Path.GetFileName(_projectRoot), project.Name);
+    }
+
+    [Fact]
+    public void Adopt_ThroughASymlinkAlias_ResolvesPathToTheRealDirectory_ButNameTracksTheCallersOwnLeaf()
+    {
+        MakeUnityProject("aaaabbbbccccddddeeeeffff00001111");
+        var store = NewStore();
+
+        var link = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateSymbolicLink(link, _projectRoot);
+        try
+        {
+            var viaLink = store.Adopt(link);
+            Assert.NotNull(viaLink);
+            // Path always resolves to the REAL directory regardless of which spelling was
+            // adopted - see Canonicalize's own doc comment: only the STORED PATH is canonical.
+            Assert.Equal(_projectRoot, viaLink!.Path);
+            // Name, by contrast, is deliberately NOT canonicalized: it is the leaf of whatever
+            // path the caller actually supplied ("link"'s own basename here), not the real
+            // directory's name - otherwise a project opened through a symlinked alias would show
+            // up renamed to something the user never typed or saw in Finder/Explorer.
+            Assert.Equal(Path.GetFileName(link), viaLink.Name);
+
+            // Re-adopting via the real path afterward keeps the SAME identity - same ProductGuid,
+            // same canonical Path - it is only Name that tracks each call's own spelling, which
+            // here happens to equal _projectRoot's basename because that's what was passed in.
+            var viaReal = store.Adopt(_projectRoot);
+            Assert.Equal(_projectRoot, viaReal!.Path);
+            Assert.Equal(Path.GetFileName(_projectRoot), viaReal.Name);
+            Assert.Single(store.All());
+        }
+        finally
+        {
+            Directory.Delete(link);
+        }
+    }
+
+    [Fact]
+    public void Adopt_ThroughAnIntermediateSymlinkedDirectory_ResolvesTheFullChain_SoBothSpellingsConvergeOnOneRow()
+    {
+        // The bug this guards: Canonicalize used to resolve only the LEAF component's own
+        // symlink, so a symlink one or more levels ABOVE the leaf - macOS's own /tmp ->
+        // /private/tmp is exactly this shape, since /tmp is never the leaf of a project path
+        // like /tmp/MyProj - passed straight through unresolved. This test builds that same
+        // shape from scratch (scratch/link -> scratch/real, project rooted at scratch/link/Proj)
+        // rather than depending on any particular OS's own ambient symlinks.
+        const string guid = "aaaabbbbccccddddeeeeffff00002222";
+
+        var scratch = RealPath(Path.Combine(Path.GetTempPath(), Path.GetRandomFileName()));
+        var real = Path.Combine(scratch, "real");
+        var link = Path.Combine(scratch, "link");
+        var projectViaReal = Path.Combine(real, "Proj");
+        var projectViaLink = Path.Combine(link, "Proj");
+
+        Directory.CreateDirectory(Path.Combine(projectViaReal, "ProjectSettings"));
+        File.WriteAllText(Path.Combine(projectViaReal, "ProjectSettings", "ProjectSettings.asset"), $"  productGUID: {guid}\n");
+        Directory.CreateSymbolicLink(link, real);
+
+        try
+        {
+            var store = NewStore();
+
+            var viaLink = store.Adopt(projectViaLink);
+            Assert.NotNull(viaLink);
+            // The INTERMEDIATE "link" component is resolved away, not just a leaf-level link.
+            Assert.Equal(projectViaReal, viaLink!.Path);
+
+            var viaReal = store.Adopt(projectViaReal);
+            Assert.NotNull(viaReal);
+            Assert.Equal(projectViaReal, viaReal!.Path);
+
+            // Both spellings must converge on the SAME row, not one each - the exact duplicate
+            // registration Canonicalize exists to prevent.
+            Assert.Single(store.All());
+        }
+        finally
+        {
+            Directory.Delete(link);
+            Directory.Delete(scratch, recursive: true);
+        }
     }
 
     [Fact]

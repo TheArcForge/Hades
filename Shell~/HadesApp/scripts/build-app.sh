@@ -193,9 +193,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.0.0-beta.2</string>
+    <string>2.0.0-beta.3</string>
     <key>CFBundleVersion</key>
-    <string>2</string>
+    <string>3</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <!-- No Dock icon, no Cmd+Tab entry - see this script's own header and

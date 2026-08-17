@@ -175,6 +175,51 @@ public class MemoryToolsTests : IClassFixture<WebApplicationFactory<Program>>, I
     }
 
     [Fact]
+    public async Task RecallMemory_AtTheDocumentedMaxLimit_ReportsTruncatedHonestlyWhenMoreThan50RealMatchesExist()
+    {
+        // The identical sentinel-clamp defect ValidateMemory's own AtTheDocumentedMaxLimit test
+        // pins (see that test's comment for the general shape), at recall_memory's own boundary
+        // instead: 50, not 500. recall_memory returns one hit per matching document (see
+        // RecallMemory_ReturnsRankedExcerptsWithSourceDocumentNamed above), so 51 separate
+        // documents each containing the query term give 51 real matches against a limit of
+        // exactly 50.
+        for (var i = 0; i < 51; i++)
+        {
+            WriteMemoryDoc($"doc{i:D3}.md", $"wombat entry number {i}.");
+        }
+
+        var structured = Structured(await McpTestClient.CallTool(_factory, "recall_memory",
+            new { query = "wombat", limit = 50 }));
+
+        Assert.Equal(50, structured.GetProperty("totalReturned").GetInt32());
+        Assert.True(structured.GetProperty("truncated").GetBoolean(),
+            "51 real matches exist but only 50 were requested - truncated must be true");
+    }
+
+    [Fact]
+    public async Task RecallMemory_AnOverMaxLimit_StillReportsTruncatedHonestly()
+    {
+        // MemoryTools.RecallMemory's own fix (see its doc comment): 'limit' is clamped to this
+        // tool's documented maximum of 50 BEFORE the "+1" sentinel is added, so a caller-supplied
+        // limit far above 50 cannot skip the clamp and make 'truncated' - computed against the
+        // unclamped limit - silently report false while real matches beyond the documented max
+        // are dropped. 60 documents each match the query term - comfortably under the 200-row
+        // ceiling MemoryIndex.Search itself still applies regardless of what this tool requests.
+        for (var i = 0; i < 60; i++)
+        {
+            WriteMemoryDoc($"doc{i:D3}.md", $"wombat entry number {i}.");
+        }
+
+        var structured = Structured(await McpTestClient.CallTool(_factory, "recall_memory",
+            new { query = "wombat", limit = 10000 }));
+
+        Assert.Equal(50, structured.GetProperty("results").EnumerateArray().Count());
+        Assert.Equal(50, structured.GetProperty("totalReturned").GetInt32());
+        Assert.True(structured.GetProperty("truncated").GetBoolean(),
+            "60 real matches exist but the documented max is 50 - truncated must be true even though the caller asked for 10000");
+    }
+
+    [Fact]
     public async Task RecallMemory_IsAdvertisedAsReadOnlyWithASchema()
     {
         var tool = Assert.Single((await McpTestClient.ListTools(_factory))
@@ -289,6 +334,23 @@ public class MemoryToolsTests : IClassFixture<WebApplicationFactory<Program>>, I
     }
 
     [Fact]
+    public async Task ProposeMemoryUpdate_ExtensionLessTargetFile_RecordsTheNormalizedDotMdTarget()
+    {
+        // Real v1.2 .arcforge imports carry target_file values with no ".md" - the server has
+        // always documented "patterns" (no extension) as valid input. A freshly-created proposal
+        // must record the normalized "patterns.md" so an eventual accept never lands its content
+        // in an extension-less file invisible to every *.md listing surface.
+        var structured = Structured(await McpTestClient.CallTool(_factory, "propose_memory_update",
+            new { targetFile = "patterns", content = "Some proposed text." }));
+
+        var fileName = structured.GetProperty("fileName").GetString()!;
+        var memoryDir = Paths.MemoryDir(ProjectGuid);
+        var parsed = MemoryFile.Parse(fileName, File.ReadAllText(Path.Combine(memoryDir, "proposals", fileName)));
+
+        Assert.Equal("patterns.md", parsed.Frontmatter["target_file"]);
+    }
+
+    [Fact]
     public async Task ProposeMemoryUpdate_IsNotAdvertisedAsReadOnly()
     {
         var tool = Assert.Single((await McpTestClient.ListTools(_factory))
@@ -333,6 +395,42 @@ public class MemoryToolsTests : IClassFixture<WebApplicationFactory<Program>>, I
         await McpTestClient.CallTool(_factory, "validate_memory");
 
         Assert.Equal(content, File.ReadAllText(Path.Combine(Paths.MemoryDir(ProjectGuid), "pitfalls.md")));
+    }
+
+    [Fact]
+    public async Task ValidateMemory_AtTheDocumentedMaxLimit_ReportsTruncatedHonestlyWhenMoreThan500RealFindingsExist()
+    {
+        // The identical Plan-15 sentinel-clamp defect (see
+        // SummaryToolTests.GetRecentlyChanged_AtTheDocumentedMaxLimit's own comment for the general
+        // shape), in the one spot that fix skipped: MemoryTools.ValidateMemory passed a sentinel
+        // limit+1, but ProjectService.ValidateMemory's own inner clamp ceiling was the SAME value
+        // (500) as the documented max, discarding that sentinel exactly at the boundary. 501
+        // distinct stale references are seeded in one document so the "distinct per document" dedup
+        // ValidateMemory applies cannot itself account for the count.
+        WriteMemoryDoc("pitfalls.md", string.Join("\n",
+            Enumerable.Range(0, 501).Select(i => $"See `Assets/Scripts/Missing{i}.cs` for details.")));
+
+        var structured = Structured(await McpTestClient.CallTool(_factory, "validate_memory", new { limit = 500 }));
+
+        Assert.Equal(500, structured.GetProperty("totalReturned").GetInt32());
+        Assert.True(structured.GetProperty("truncated").GetBoolean(),
+            "501 real findings exist but only 500 were requested - truncated must be true");
+    }
+
+    [Fact]
+    public async Task ValidateMemory_AnOverMaxLimit_StillReportsTruncatedHonestly()
+    {
+        // A caller-supplied limit above the documented maximum (500) must not silently bypass it,
+        // nor make 'truncated' compute against the unclamped raw limit - same second half of the
+        // defect SummaryToolTests.GetRecentlyChanged_AnOverMaxLimit proves for get_recently_changed.
+        WriteMemoryDoc("pitfalls.md", string.Join("\n",
+            Enumerable.Range(0, 501).Select(i => $"See `Assets/Scripts/Missing{i}.cs` for details.")));
+
+        var structured = Structured(await McpTestClient.CallTool(_factory, "validate_memory", new { limit = 5000 }));
+
+        Assert.Equal(500, structured.GetProperty("totalReturned").GetInt32());
+        Assert.True(structured.GetProperty("truncated").GetBoolean(),
+            "501 real findings exist but the documented max is 500 - truncated must be true even though the caller asked for 5000");
     }
 
     [Fact]

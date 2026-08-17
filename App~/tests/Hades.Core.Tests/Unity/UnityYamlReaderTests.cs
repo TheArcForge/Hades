@@ -206,4 +206,18 @@ public class UnityYamlReaderTests
         // A file being written while indexed must degrade, never crash the indexer.
         Assert.NotNull(UnityYamlReader.Read(Header + "--- !u!1 &778\nGameObject:\n  m_Name: \"unterminated", "Assets/T.prefab"));
     }
+
+    [Fact]
+    public void PoisonClassIdHeaderIsReportedAsUnparseable_NotAnUnhandledOverflow()
+    {
+        // I1: a class id this large (2^32) overflows Int32. The header pre-scan that parses it
+        // used to run OUTSIDE any try/catch, so it threw straight out of Read as a bare
+        // OverflowException naming no file at all — aborting a full rebuild entirely and, via
+        // ObservationService's blanket catch, vanishing from an incremental sync with zero log
+        // output. It must now surface as a typed, catchable, per-file diagnostic instead.
+        var content = Header + "--- !u!4294967296 &111\nGameObject:\n  m_Name: Poison\n";
+
+        var ex = Assert.Throws<UnityYamlParseException>(() => UnityYamlReader.Read(content, "Assets/Poison.prefab"));
+        Assert.Contains("Assets/Poison.prefab", ex.Message);
+    }
 }

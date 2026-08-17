@@ -1,8 +1,10 @@
 using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Hades.Core;
 using Hades.Core.Editors;
 using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using WireJson = Hades.Contract.Wire.JsonValue;
 using WireKind = Hades.Contract.Wire.JsonValueKind;
@@ -25,9 +27,13 @@ public sealed record SceneApplyOperation : IBatchOperation
     [JsonPropertyName("primitive")] [OpField("create")] public string? Primitive { get; init; }
     [JsonPropertyName("tag")] [OpField("create")] public string? Tag { get; init; }
     [JsonPropertyName("layer")] [OpField("create")] public string? Layer { get; init; }
-    [JsonPropertyName("position")] [OpField("create")] public float[]? Position { get; init; }
-    [JsonPropertyName("rotation")] [OpField("create")] public float[]? Rotation { get; init; }
-    [JsonPropertyName("scale")] [OpField("create")] public float[]? Scale { get; init; }
+    // JsonElement, not float[]: see BuildOperation/FloatArray's own doc comment for why - a
+    // float[]-typed field is the one shape strict enough that the MCP SDK's own argument binding
+    // (which runs before this tool ever sees the call) throws an opaque, swallowed JsonException
+    // for a shape mismatch instead of reaching this tool's own, actionable error handling.
+    [JsonPropertyName("position")] [OpField("create")] public JsonElement? Position { get; init; }
+    [JsonPropertyName("rotation")] [OpField("create")] public JsonElement? Rotation { get; init; }
+    [JsonPropertyName("scale")] [OpField("create")] public JsonElement? Scale { get; init; }
 
     // addComponent / removeComponent / setProperties / setReference / addListener / removeListener / delete / reparent / rename / select -
     // every op but create, per SceneApplyTool's own [Description] parameter text (the authoritative
@@ -129,7 +135,7 @@ public sealed record SceneApplyResult
 /// instead.</para>
 /// </summary>
 [McpServerToolType]
-public sealed class SceneApplyTool(EditorProxy editor)
+public sealed class SceneApplyTool(EditorProxy editor, ProjectService projects)
 {
     /// <summary>Every 'op' this tool accepts - also what an unknown op's rejection message lists,
     /// so a caller can self-correct without guessing. Must stay in sync with SceneApplyCommands.
@@ -174,7 +180,8 @@ public sealed class SceneApplyTool(EditorProxy editor)
                    + "delete{target}, reparent{target,newParent?}, rename{target,newName}, "
                    + "select{target}.")]
         IReadOnlyList<SceneApplyOperation> operations,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         if (operations is null || operations.Count == 0)
             throw new McpException("scene_apply needs a non-empty 'operations' array.");
@@ -196,10 +203,11 @@ public sealed class SceneApplyTool(EditorProxy editor)
         OperationFieldValidator.RejectUnknownFields("scene_apply", operations);
 
         var wireOperations = WireJson.NewArray();
-        foreach (var op in operations) wireOperations.Add(BuildOperation(op));
+        for (var i = 0; i < operations.Count; i++) wireOperations.Add(BuildOperation(operations[i], i));
 
         var @params = WireJson.NewObject().SetProperty("operations", wireOperations);
-        var result = await editor.SendCommandAsync(project, "scene.apply", @params).ConfigureAwait(false);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
+        var result = await editor.SendCommandAsync(productGuid, "scene.apply", @params).ConfigureAwait(false);
 
         return MapResult(result, operations.Count);
     }
@@ -212,7 +220,7 @@ public sealed class SceneApplyTool(EditorProxy editor)
     /// object with only the keys THIS operation actually set) rather than sent as explicit nulls -
     /// the plugin's JsonParams helpers already treat "absent" and "present but null" as equivalent
     /// for every optional field, so there is nothing to lose by omitting.</summary>
-    static WireJson BuildOperation(SceneApplyOperation op)
+    static WireJson BuildOperation(SceneApplyOperation op, int index)
     {
         var o = WireJson.NewObject().SetProperty("op", WireJson.String(op.Op));
 
@@ -221,9 +229,9 @@ public sealed class SceneApplyTool(EditorProxy editor)
         if (!string.IsNullOrEmpty(op.Primitive)) o.SetProperty("primitive", WireJson.String(op.Primitive));
         if (!string.IsNullOrEmpty(op.Tag)) o.SetProperty("tag", WireJson.String(op.Tag));
         if (!string.IsNullOrEmpty(op.Layer)) o.SetProperty("layer", WireJson.String(op.Layer));
-        if (op.Position is not null) o.SetProperty("position", FloatArray(op.Position));
-        if (op.Rotation is not null) o.SetProperty("rotation", FloatArray(op.Rotation));
-        if (op.Scale is not null) o.SetProperty("scale", FloatArray(op.Scale));
+        if (op.Position is { } position) o.SetProperty("position", FloatArray(position, index, op.Op, "position"));
+        if (op.Rotation is { } rotation) o.SetProperty("rotation", FloatArray(rotation, index, op.Op, "rotation"));
+        if (op.Scale is { } scale) o.SetProperty("scale", FloatArray(scale, index, op.Op, "scale"));
 
         if (!string.IsNullOrEmpty(op.Target)) o.SetProperty("target", WireJson.String(op.Target));
         if (!string.IsNullOrEmpty(op.Type)) o.SetProperty("type", WireJson.String(op.Type));
@@ -254,12 +262,51 @@ public sealed class SceneApplyTool(EditorProxy editor)
         return o;
     }
 
-    static WireJson FloatArray(float[] xyz)
+    /// <summary>Converts one of 'position'/'rotation'/'scale' (bound as JsonElement - see
+    /// SceneApplyOperation's own field comment for why) into the wire's own array-of-numbers shape.
+    /// Raises a clean, actionable McpException - the same convention every other rejection in this
+    /// file already uses - for a shape mismatch (an object where an array was expected, e.g. a
+    /// caller sending a Vector3 the way Unity's inspector displays one, {"x":.,"y":.,"z":.}, or a
+    /// non-numeric array element), rather than letting the MCP SDK's own argument binding throw an
+    /// opaque JsonException for it before this tool ever runs at all - see this field's own doc
+    /// comment for why that happened when this was a plain float[].</summary>
+    static WireJson FloatArray(JsonElement element, int index, string opName, string fieldName)
     {
+        if (element.ValueKind != JsonValueKind.Array)
+        {
+            throw new McpException(
+                $"scene_apply operations[{index}] (op '{opName}'): '{fieldName}' must be an array "
+                + $"of numbers, e.g. [1, 2, 3] - got {Describe(element)}.");
+        }
+
         var array = WireJson.NewArray();
-        foreach (var component in xyz) array.Add(WireJson.Float(component));
+        var i = 0;
+        foreach (var item in element.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Number)
+            {
+                throw new McpException(
+                    $"scene_apply operations[{index}] (op '{opName}'): '{fieldName}[{i}]' must be "
+                    + $"a number, got {Describe(item)}.");
+            }
+            array.Add(WireJson.Float(item.GetSingle()));
+            i++;
+        }
         return array;
     }
+
+    /// <summary>A short, human-readable description of a JsonElement's SHAPE for an error message -
+    /// never its full content (which could be large, or - for a string - misleadingly suggest the
+    /// VALUE was the problem rather than the shape).</summary>
+    static string Describe(JsonElement element) => element.ValueKind switch
+    {
+        JsonValueKind.Object => "an object",
+        JsonValueKind.Array => "an array",
+        JsonValueKind.String => "a string",
+        JsonValueKind.True or JsonValueKind.False => "a boolean",
+        JsonValueKind.Null or JsonValueKind.Undefined => "null",
+        _ => "a non-numeric value",
+    };
 
     // ---------------------------------------------------------------- wire result -> SceneApplyResult
 

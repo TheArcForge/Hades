@@ -80,8 +80,9 @@ public static class ScriptIndexer
         foreach (var root in ProjectWalker.ResolveScanRoots(projectRoot, warnings))
         {
             var visited = new HashSet<string>(StringComparer.Ordinal);
+            var failedDirectories = new List<string>();
 
-            foreach (var file in ProjectWalker.EnumerateSourceFiles(root.AbsolutePath, "*.cs"))
+            foreach (var file in ProjectWalker.EnumerateSourceFiles(root.AbsolutePath, "*.cs", failedDirectories))
             {
                 filesScanned++;
                 var relativePath = ProjectWalker.ToRecordedPath(root, file);
@@ -117,6 +118,19 @@ public static class ScriptIndexer
                 }
             }
 
+            // I10: a directory this walk could not even read is not evidence anything under it
+            // was deleted — reserved from the sweep below exactly like an unresolvable package's
+            // prefix already is (same parameter, same reasoning), and named in a warning rather
+            // than silently wiping whatever was previously recorded for it.
+            var reserved = unreachablePackagePrefixes;
+            if (failedDirectories.Count > 0)
+            {
+                var unreadablePrefixes = failedDirectories.Select(dir => ProjectWalker.ToRecordedPath(root, dir)).ToList();
+                reserved = [.. unreachablePackagePrefixes, .. unreadablePrefixes];
+                foreach (var prefix in unreadablePrefixes)
+                    warnings.Add($"{prefix}: directory could not be read this rebuild; previously recorded state preserved.");
+            }
+
             // A file deleted or renamed since the last index was never visited above, so
             // delete-then-insert alone would leave its nodes behind forever. Scoped to this
             // root's prefix and called once per root actually resolved — a root that failed to
@@ -126,7 +140,7 @@ public static class ScriptIndexer
             // sweep cannot reach into a namespace nothing this run actually walked. A package
             // embedded INSIDE the project is deliberately excluded from that reserved set — the
             // generic "Packages" walk covers it directly and is the only thing that ever will.
-            database.SweepStaleNodes(root.PathPrefix, visited, unreachablePackagePrefixes, [".cs"]);
+            database.SweepStaleNodes(root.PathPrefix, visited, reserved, [".cs"]);
         }
 
         return new IndexResult

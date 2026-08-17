@@ -146,6 +146,31 @@ public sealed class TracesGroupIntoSequencesTests
         Assert.Equal(1000, seq.EndUtcMs);
         Assert.Equal(0, seq.DurationMs);
     }
+
+    [Fact]
+    public void SameMillisecondTies_RenderInInsertionOrder_NeverReversedByAnUnstableTiebreak()
+    {
+        // T3: StartUtcMs alone cannot order three calls recorded inside the same millisecond - a
+        // real burst shows durationMs 0, so this is not a contrived edge case. TraceStore.
+        // RecentTraces hands GroupIntoSequences its rows newest-first, ties broken by SQLite's own
+        // rowid DESC (see that method's own doc comment) - so the RAW input order for a tied group
+        // is descending-by-insertion (last-inserted first), exactly as built here: gamma(3) then
+        // beta(2) then alpha(1). A plain stable OrderBy(StartUtcMs) would leave that reversed tie
+        // order untouched and render "gamma -> beta -> alpha". RowId - ascending, the same
+        // insertion-order signal TraceSummary.RowId/TraceStore's own rowid column carry end to end
+        // (see TraceRetentionTests.RecentTraces_ExposesRowIdAsAMonotonicInsertionOrderTiebreaker) -
+        // is the tiebreaker that recovers the true call order.
+        var sequences = TracesEndpoint.GroupIntoSequences([
+            new TraceRecordSnapshot { TraceId = "t3", Tool = "gamma", StartUtcMs = 9000, EndUtcMs = 9000, Status = "ok", RowId = 3 },
+            new TraceRecordSnapshot { TraceId = "t2", Tool = "beta", StartUtcMs = 9000, EndUtcMs = 9000, Status = "ok", RowId = 2 },
+            new TraceRecordSnapshot { TraceId = "t1", Tool = "alpha", StartUtcMs = 9000, EndUtcMs = 9000, Status = "ok", RowId = 1 },
+        ]);
+
+        var seq = Assert.Single(sequences);
+        Assert.Equal("alpha → beta → gamma", seq.Pattern);
+        Assert.Equal(["alpha", "beta", "gamma"], seq.Tools);
+        Assert.Equal(["t1", "t2", "t3"], seq.TraceIds);
+    }
 }
 
 /// <summary>
@@ -570,6 +595,127 @@ public sealed class TracesEndpointHttpTests : IDisposable
         var failure = Assert.Single(body.GetProperty("failures").EnumerateArray());
         Assert.Equal("component_add", failure.GetProperty("tool").GetString());
         Assert.Equal("Unknown component type 'Foo'.", failure.GetProperty("error").GetString());
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // T2: failures/slow used to window silently - GetSequences already reports 'truncated' (see
+    // Sequences tests above / TracesResolveSequencesTests.Truncated_PassesThroughFromTheCaller),
+    // but GetFailures/GetSlowTools clamped the limit and dropped the remainder with no marker.
+    // Same clamp-first, truncated-from-the-clamped-limit arithmetic as GetSequences, copied
+    // exactly: fetch with the CLAMPED limit, truncated = returned count >= that clamped limit.
+    // -----------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Failures_Truncated_IsFalseWhenEverythingFits()
+    {
+        using (var store = TraceStore.Open(_projects.Paths.TracesDb(ProjectGuid)))
+        {
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            RecordCall(store, "component_add", now, now + 10, ok: false, errorMessage: "boom");
+        }
+
+        using var listener = new ControlListener(ConnectionFilePath, projects: _projects);
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Get, $"/control/traces/failures?project={ProjectGuid}", listener.Token));
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Single(body.GetProperty("failures").EnumerateArray());
+        Assert.False(body.GetProperty("truncated").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Failures_Truncated_IsTrueWhenTheLimitClampsTheResult()
+    {
+        using (var store = TraceStore.Open(_projects.Paths.TracesDb(ProjectGuid)))
+        {
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            for (var i = 0; i < 5; i++)
+                RecordCall(store, $"bad_{i}", now + i, now + i + 10, ok: false, errorMessage: "boom");
+        }
+
+        using var listener = new ControlListener(ConnectionFilePath, projects: _projects);
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Get, $"/control/traces/failures?project={ProjectGuid}&limit=3", listener.Token));
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(3, body.GetProperty("failures").GetArrayLength());
+        Assert.True(body.GetProperty("truncated").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Failures_Truncated_ReflectsTheClampedLimit_EvenWhenTheRequestedLimitExceedsTheMaximum()
+    {
+        using (var store = TraceStore.Open(_projects.Paths.TracesDb(ProjectGuid)))
+        {
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            RecordCall(store, "component_add", now, now + 10, ok: false, errorMessage: "boom");
+        }
+
+        using var listener = new ControlListener(ConnectionFilePath, projects: _projects);
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        // Far above TracesEndpoint's own MaxLimit (500) - must clamp, not throw, and 'truncated'
+        // must be computed from the CLAMPED limit, not the raw requested one: false here, since
+        // one recorded failure is nowhere near even the clamped ceiling.
+        var response = await client.SendAsync(Request(HttpMethod.Get, $"/control/traces/failures?project={ProjectGuid}&limit=99999", listener.Token));
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Single(body.GetProperty("failures").EnumerateArray());
+        Assert.False(body.GetProperty("truncated").GetBoolean());
+    }
+
+    [Fact]
+    public async Task SlowTools_Truncated_IsFalseWhenEverythingFits()
+    {
+        using (var store = TraceStore.Open(_projects.Paths.TracesDb(ProjectGuid)))
+        {
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            RecordCall(store, "fast_tool", now, now + 10, ok: true);
+            RecordCall(store, "slow_tool", now, now + 5000, ok: true);
+        }
+
+        using var listener = new ControlListener(ConnectionFilePath, projects: _projects);
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Get, $"/control/traces/slow?project={ProjectGuid}", listener.Token));
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(2, body.GetProperty("tools").GetArrayLength());
+        Assert.False(body.GetProperty("truncated").GetBoolean());
+    }
+
+    [Fact]
+    public async Task SlowTools_Truncated_IsTrueWhenTheLimitClampsTheResult()
+    {
+        using (var store = TraceStore.Open(_projects.Paths.TracesDb(ProjectGuid)))
+        {
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            // SlowestTools groups by tool name, so five DISTINCT tool names are needed to produce
+            // five rows for a limit=3 request to actually clamp.
+            for (var i = 0; i < 5; i++)
+                RecordCall(store, $"tool_{i}", now, now + 10 + i, ok: true);
+        }
+
+        using var listener = new ControlListener(ConnectionFilePath, projects: _projects);
+        listener.Start();
+        using var client = ClientFor(listener);
+
+        var response = await client.SendAsync(Request(HttpMethod.Get, $"/control/traces/slow?project={ProjectGuid}&limit=3", listener.Token));
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(3, body.GetProperty("tools").GetArrayLength());
+        Assert.True(body.GetProperty("truncated").GetBoolean());
     }
 
     public void Dispose()

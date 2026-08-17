@@ -240,4 +240,18 @@ public class RoslynScriptScannerTests
 
         Assert.Empty(types);
     }
+
+    [Fact]
+    public void SkipsATypeDeclarationWithNoName()
+    {
+        // I11: a syntactically broken declaration (mid-edit, or a genuine syntax error) still
+        // produces a BaseTypeDeclarationSyntax node in Roslyn's error-tolerant tree, but with a
+        // MISSING identifier token - empty text. Previously that became a real Class node named
+        // "", polluting search results with an unnamed, unusable entry instead of just not being
+        // indexed at all.
+        var types = Scan("public class { }\npublic class Real { }");
+
+        var type = Assert.Single(types);
+        Assert.Equal("Real", type.Name);
+    }
 }

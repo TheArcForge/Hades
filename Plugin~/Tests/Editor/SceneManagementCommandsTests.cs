@@ -1,5 +1,6 @@
 // C# 9 only in this file - see the file banner in Contract/MiniJson.cs.
 using System;
+using System.IO;
 using Hades.Contract.Wire;
 using Hades.Runtime;
 using Hades.Tools;
@@ -76,6 +77,9 @@ namespace Hades.Tests.Editor
         static long IntProp(JsonValue result, string key) =>
             result.TryGetProperty(key, out var v) && v.Kind == JsonValueKind.Integer ? v.AsInteger() : long.MinValue;
 
+        static string AbsolutePath(string projectRelativePath) =>
+            Path.Combine(Directory.GetParent(Application.dataPath).FullName, projectRelativePath.Replace('/', Path.DirectorySeparatorChar));
+
         static string SaveAdditiveScratchScene(string fileName)
         {
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
@@ -131,6 +135,88 @@ namespace Hades.Tests.Editor
             var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("scene.save", JsonValue.NewObject())));
 
             StringAssert.Contains("path", ex.Message);
+        }
+
+        // -------------------------------------------------------------- scene.save - path guard (F16/F17/F20)
+
+        [Test]
+        public void SaveScene_WithTraversalPath_RefusedBeforeAnyWrite()
+        {
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String("Assets/../EscapedSave.unity"));
+
+            var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("scene.save", @params)));
+
+            StringAssert.Contains("EscapedSave.unity", ex.Message);
+            Assert.IsFalse(File.Exists(AbsolutePath("EscapedSave.unity")));
+        }
+
+        [Test]
+        public void SaveScene_WithAbsolutePathIntoAssets_Refused()
+        {
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            // A CORRECT absolute path landing inside Assets/ must still be refused - only a plain
+            // project-relative form is accepted (see AssetPathGuard's own doc comment for why).
+            var path = AbsolutePath(ScratchDir + "/AbsSave.unity");
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String(path));
+
+            Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("scene.save", @params)));
+            Assert.IsNull(AssetDatabase.LoadAssetAtPath<SceneAsset>(ScratchDir + "/AbsSave.unity"));
+        }
+
+        [Test]
+        public void SaveScene_WithNonNormalizedDotSlashPath_Refused()
+        {
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String(ScratchDir + "/./NotNormalizedSave.unity"));
+
+            Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("scene.save", @params)));
+            // Not even created at the normalized equivalent - a caller must resubmit the clean form itself.
+            Assert.IsNull(AssetDatabase.LoadAssetAtPath<SceneAsset>(ScratchDir + "/NotNormalizedSave.unity"));
+        }
+
+        [Test]
+        public void SaveScene_WithPathComponentOverSafeByteLimit_Refused()
+        {
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var tooLongName = new string('a', 245) + ".unity"; // 251 bytes, over the 240-byte safe bound
+            var path = ScratchDir + "/" + tooLongName;
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String(path));
+
+            var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("scene.save", @params)));
+
+            StringAssert.Contains("bytes", ex.Message);
+            Assert.IsFalse(File.Exists(AbsolutePath(path)));
+        }
+
+        /// <summary>Unlike scene.create/scene.duplicate, scene.save's explicit-path branch is a
+        /// SAVE-AS: it may legitimately land on a .unity file that already exists - including,
+        /// unremarkably, the currently open scene's own path (the common case: a caller passes
+        /// 'path' explicitly instead of omitting it). This is the reason scene.save routes through
+        /// RequireWellFormedProjectPath rather than RequireNewAssetPath - this test pins that choice
+        /// down so a future change cannot silently swap in the existence-refusing guard instead.</summary>
+        [Test]
+        public void SaveScene_WithPathOfAlreadyExistingUnrelatedScene_Overwrites()
+        {
+            var existingPath = SaveAdditiveScratchScene("AlreadyExists.unity");
+            new GameObject("SaveAsMarker");
+
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String(existingPath));
+            var result = CommandTable.Dispatch(gate, Request("scene.save", @params));
+
+            Assert.AreEqual(existingPath, StringProp(result, "saved"));
+            Assert.AreEqual(existingPath, SceneManager.GetActiveScene().path);
         }
 
         // ------------------------------------------------------------------------------ scene.create
@@ -204,6 +290,37 @@ namespace Hades.Tests.Editor
             Assert.IsNull(AssetDatabase.LoadAssetAtPath<SceneAsset>(path));
         }
 
+        // -------------------------------------------------------- scene.create - path guard (F16/F17/F20)
+
+        [Test]
+        public void CreateScene_TraversalPath_RefusedBeforeAnyWrite()
+        {
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String("Assets/../Escaped.unity"));
+
+            var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("scene.create", @params)));
+
+            StringAssert.Contains("Escaped.unity", ex.Message);
+            Assert.IsFalse(File.Exists(AbsolutePath("Escaped.unity")));
+        }
+
+        [Test]
+        public void CreateScene_ExistingFile_Refused()
+        {
+            var path = SaveAdditiveScratchScene("AlreadyThere.unity");
+
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String(path));
+
+            var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("scene.create", @params)));
+
+            StringAssert.Contains("already exists", ex.Message);
+        }
+
         // --------------------------------------------------------------------------- scene.duplicate
 
         [Test]
@@ -258,6 +375,60 @@ namespace Hades.Tests.Editor
             Undo.PerformUndo();
 
             Assert.IsNull(AssetDatabase.LoadAssetAtPath<SceneAsset>(destPath));
+        }
+
+        // ---------------------------------------------------- scene.duplicate - path guard (F16/F17/F20/F21)
+
+        [Test]
+        public void DuplicateScene_TraversalDestPath_RefusedBeforeAnyWrite()
+        {
+            var sourcePath = SaveAdditiveScratchScene("TraversalDupSource.unity");
+
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var @params = JsonValue.NewObject()
+                .SetProperty("sourcePath", JsonValue.String(sourcePath))
+                .SetProperty("destPath", JsonValue.String("Assets/../EscapedDup.unity"));
+
+            var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("scene.duplicate", @params)));
+
+            StringAssert.Contains("EscapedDup.unity", ex.Message);
+            Assert.IsFalse(File.Exists(AbsolutePath("EscapedDup.unity")));
+        }
+
+        [Test]
+        public void DuplicateScene_ExistingDestFile_Refused()
+        {
+            var sourcePath = SaveAdditiveScratchScene("ExistDupSource.unity");
+            var destPath = SaveAdditiveScratchScene("ExistDupDest.unity");
+
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var @params = JsonValue.NewObject().SetProperty("sourcePath", JsonValue.String(sourcePath)).SetProperty("destPath", JsonValue.String(destPath));
+
+            var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("scene.duplicate", @params)));
+
+            StringAssert.Contains("already exists", ex.Message);
+        }
+
+        /// <summary>F21: a scene duplicated onto itself was accepted. The existence check alone
+        /// closes this - destPath already has a file at it (itself) - with no separate
+        /// source-equals-dest special case needed.</summary>
+        [Test]
+        public void DuplicateScene_OntoItself_Refused()
+        {
+            var path = SaveAdditiveScratchScene("DupSelf.unity");
+
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var @params = JsonValue.NewObject().SetProperty("sourcePath", JsonValue.String(path)).SetProperty("destPath", JsonValue.String(path));
+
+            var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("scene.duplicate", @params)));
+
+            StringAssert.Contains("already exists", ex.Message);
         }
 
         // ------------------------------------------------------------------------------ scene.set_build

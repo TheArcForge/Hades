@@ -124,7 +124,20 @@ public sealed class MemoryStore(AppPaths paths)
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            File.Copy(sourceFile, destination);
+            try
+            {
+                File.Copy(sourceFile, destination);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A file that cannot be read or copied is skipped and reported like any other
+                // invalid source - one bad file must never abort the files after it. A partial
+                // destination would satisfy the already-exists gate above and permanently block
+                // this file's retry on the next import, so it is removed best-effort.
+                try { File.Delete(destination); } catch (Exception) { /* best effort */ }
+                skipped.Add(new MemoryImportSkip { Source = sourceLabel, Reason = ex.Message });
+                return;
+            }
             imported.Add(destinationLabel);
         }
 
@@ -153,9 +166,18 @@ public sealed class MemoryStore(AppPaths paths)
 
     /// <summary>*.md files directly inside <paramref name="dir"/>, in a stable order - directory
     /// enumeration order is not guaranteed by the OS, and a deterministic order keeps an import
-    /// report (and the collision rule in <see cref="ImportFromArcforge"/>) reproducible.</summary>
+    /// report (and the collision rule in <see cref="ImportFromArcforge"/>) reproducible.
+    ///
+    /// Filtered in C# with <see cref="string.EndsWith(string, StringComparison)"/> rather than via
+    /// <see cref="Directory.EnumerateFiles(string, string)"/>'s own "*.md" search pattern: that
+    /// pattern's case sensitivity follows the underlying filesystem, which is case-SENSITIVE on
+    /// Linux (unlike Windows/macOS's usual defaults) - a source file named e.g. "CAPS.MD" would
+    /// silently never be found, and never imported, on Linux alone. OrdinalIgnoreCase here makes
+    /// every platform behave the same, regardless of the filesystem underneath it.</summary>
     static IEnumerable<string> EnumerateMdFiles(string dir) =>
-        Directory.EnumerateFiles(dir, "*.md").OrderBy(f => f, StringComparer.Ordinal);
+        Directory.EnumerateFiles(dir)
+            .Where(f => Path.GetFileName(f).EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(f => f, StringComparer.Ordinal);
 
     /// <summary>
     /// Resolves <paramref name="name"/> to an absolute path inside <paramref name="productGuid"/>'s
@@ -165,9 +187,15 @@ public sealed class MemoryStore(AppPaths paths)
     /// <see cref="Read"/>/<see cref="Write"/> and Task 2's import route every name through this
     /// (or <see cref="ResolveProposalPath"/>), so a caller-supplied or disk-supplied name can
     /// never write - or read - outside the memory directory it belongs to.
+    ///
+    /// <paramref name="name"/> is validated BEFORE <see cref="NormalizeDocumentName"/> ever sees
+    /// it - only the already-safe, already-contained result is normalized. Appending ".md" to a
+    /// resolved path cannot itself introduce a traversal, but normalizing first and validating
+    /// second would defeat the traversal check instead: ".." would become "...md", a harmless
+    /// -looking single path segment that no longer trips the parent-directory check below.
     /// </summary>
     string ResolveDocumentPath(string productGuid, string name) =>
-        ValidatedChildPath(paths.MemoryDir(productGuid), name);
+        NormalizeDocumentName(ValidatedChildPath(paths.MemoryDir(productGuid), name));
 
     /// <summary>Same discipline as <see cref="ResolveDocumentPath"/>, one level down: a name
     /// inside memory/proposals/, used only by Task 2's import.</summary>
@@ -175,6 +203,38 @@ public sealed class MemoryStore(AppPaths paths)
         ValidatedChildPath(Path.Combine(paths.MemoryDir(productGuid), ProposalsDirName), name);
 
     const string ProposalsDirName = "proposals";
+
+    /// <summary>
+    /// Appends ".md" when <paramref name="name"/> does not already end with it, checked
+    /// case-insensitively so "conventions.MD" is left alone rather than becoming
+    /// "conventions.MD.md". Every document this store reads or writes is a markdown file by
+    /// definition (see this class's own doc comment), so "conventions" and "conventions.md" name
+    /// the SAME document, not two different ones.
+    ///
+    /// This is the fix for an invisible-orphan defect: a proposal accepted with an extension-less
+    /// <c>target_file</c> - the real shape a v1.2 <c>.arcforge/memory</c> import produces, copied
+    /// byte-for-byte by <see cref="ImportFromArcforge"/> - used to land its merged content in a
+    /// bare, extension-less file that every *.md listing surface (<see cref="EnumerateMdFiles"/>
+    /// here, and <see cref="MemoryIndex"/>'s own sync) enumerates straight past. Applied here, at
+    /// <see cref="ResolveDocumentPath"/>, it closes that for every caller uniformly - the control
+    /// API's own document editor (<see cref="Read"/>/<see cref="Write"/> via
+    /// <c>MemoryEndpoint.GetDocument</c>/<c>WriteDocument</c>) and an accepted proposal's merge
+    /// (<c>MemoryEndpoint.AcceptProposal</c>) alike - rather than a special case in just one of
+    /// them.
+    ///
+    /// Blank/null input is returned unchanged rather than throwing here: <see cref="ValidatedChildPath"/>
+    /// is what owns rejecting a blank name with its own clear message, and this must never
+    /// pre-empt that with an unrelated NullReferenceException.
+    ///
+    /// <c>internal</c> for the same reason <see cref="ValidatedChildPath"/> is:
+    /// <see cref="MemoryProposals.Write"/> reuses this EXACT normalization for the target_file it
+    /// records, rather than a second, independently-maintained copy of the same ".md" rule.
+    /// </summary>
+    internal static string NormalizeDocumentName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return name;
+        return name.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? name : name + ".md";
+    }
 
     /// <summary>
     /// Validates <paramref name="name"/> as a safe, single-segment basename directly inside

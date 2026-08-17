@@ -69,14 +69,41 @@ public sealed record MemoryProposalInfo
 /// </summary>
 public sealed class MemoryProposals(AppPaths paths)
 {
+    /// <summary>Serializes <see cref="AllocateAndLand"/> - see that method's own doc comment for
+    /// why the retry-on-IOException loop ALONE was empirically not enough: under a live 16-way
+    /// concurrent-Write test, several threads' internal check-then-rename windows (inside .NET's
+    /// own <see cref="File.Move(string, string, bool)"/> implementation, not this class's code)
+    /// overlapped closely enough that one thread's move silently succeeded over another's
+    /// just-landed file WITHOUT throwing - the retry loop can only retry a failure it is told
+    /// about. See <see cref="_statusLock"/>'s own doc comment for why instance-scoping either lock
+    /// is correct, not merely convenient.</summary>
+    readonly object _allocationLock = new();
+
+    /// <summary>Serializes <see cref="SetStatus"/>'s read-modify-write - see that method's own doc
+    /// comment for the race this closes. A separate lock from <see cref="_allocationLock"/>
+    /// deliberately: <see cref="Write"/> (creating a proposal) and <see cref="SetStatus"/> (updating
+    /// one that already exists) never touch the same file, so serializing one against the other
+    /// would cost concurrency for no correctness benefit.
+    ///
+    /// Both locks are instance-scoped, not static: <c>ProjectService</c> (the only real caller,
+    /// constructed once via dependency injection) holds exactly one <see cref="MemoryProposals"/>
+    /// for the whole process (see Program.cs's <c>AddSingleton&lt;ProjectService&gt;</c>), so an
+    /// instance lock already serializes every real concurrent call in the process; a static lock
+    /// would additionally, needlessly serialize unrelated <see cref="MemoryProposals"/> instances
+    /// (every test in this suite constructs its own) for no correctness benefit.</summary>
+    readonly object _statusLock = new();
+
     /// <summary>
     /// Writes a new proposal file and returns its name. <paramref name="targetFile"/> names the
-    /// authored document the proposal is ABOUT (e.g. "patterns.md" or "patterns" - it need not
-    /// exist yet, since a proposal may suggest an entirely new document); it is never itself
-    /// opened or written to. The new file's name is derived from <paramref name="createdAt"/> and
-    /// <paramref name="targetFile"/> (e.g. "20260801-153000-patterns.md"), disambiguated with a
-    /// numeric suffix on collision so two proposals landing in the same second never overwrite one
-    /// another - a proposal must never silently vanish.
+    /// authored document the proposal is ABOUT (e.g. "patterns.md" or "patterns", normalized to
+    /// always carry ".md" - see <see cref="MemoryStore.NormalizeDocumentName"/> - before it is
+    /// recorded; it need not exist yet, since a proposal may suggest an entirely new document); it
+    /// is never itself opened or written to. The new file's name is derived from
+    /// <paramref name="createdAt"/> and <paramref name="targetFile"/> (e.g.
+    /// "20260801-153000-patterns.md"), disambiguated with a numeric suffix on collision so two
+    /// proposals landing in the same second never overwrite one another - a proposal must never
+    /// silently vanish. That guarantee holds under real concurrency, not just sequential calls -
+    /// see <see cref="AllocateAndLand"/> for the mechanism that actually makes it true.
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="targetFile"/> is null/blank, or is not
     /// a plain document name (contains a path separator).</exception>
@@ -84,14 +111,20 @@ public sealed class MemoryProposals(AppPaths paths)
         DateTimeOffset createdAt)
     {
         ValidateTargetFile(targetFile);
+        // Same ".md" normalization MemoryStore applies at its own write boundary (accepting a
+        // proposal), applied here too so a FRESHLY-created proposal's own target_file is never the
+        // extension-less shape that makes an eventually-accepted document invisible to every *.md
+        // listing surface - see MemoryStore.NormalizeDocumentName's own doc comment. This does not
+        // retroactively fix a proposal already on disk (e.g. a v1.2 .arcforge import, copied
+        // byte-for-byte - see MemoryStore.ImportFromArcforge); MemoryStore's own normalization at
+        // accept time is what covers those.
+        var normalizedTargetFile = MemoryStore.NormalizeDocumentName(targetFile);
 
         var proposalsDir = Path.Combine(paths.MemoryDir(productGuid), ProposalsDirName);
         Directory.CreateDirectory(proposalsDir);
 
-        var fileName = UniqueFileName(proposalsDir, createdAt, targetFile);
-        var fullContent = BuildFrontmatter(targetFile, createdAt, rationale) + content;
-
-        AtomicWrite(Path.Combine(proposalsDir, fileName), fullContent);
+        var fullContent = BuildFrontmatter(normalizedTargetFile, createdAt, rationale) + content;
+        var fileName = AllocateAndLand(proposalsDir, createdAt, normalizedTargetFile, fullContent);
 
         // Bare basename, not "{ProposalsDirName}/{fileName}" - see MemoryProposal.FileName's own
         // doc comment for why a prefixed shape here was a defect, not a design choice.
@@ -107,9 +140,15 @@ public sealed class MemoryProposals(AppPaths paths)
         var proposalsDir = Path.Combine(paths.MemoryDir(productGuid), ProposalsDirName);
         if (!Directory.Exists(proposalsDir)) return [];
 
-        var parsed = Directory.EnumerateFiles(proposalsDir, "*.md")
+        // Not Directory.EnumerateFiles(proposalsDir, "*.md"): that search pattern's case
+        // sensitivity follows the underlying filesystem, case-SENSITIVE on Linux - see
+        // MemoryStore.EnumerateMdFiles's identical fix. A ".MD"-suffixed proposal (byte-for-byte
+        // copied in by MemoryStore.ImportFromArcforge with whatever case its source had) would
+        // silently never be listed there alone.
+        var parsed = Directory.EnumerateFiles(proposalsDir)
             .Select(Path.GetFileName)
             .OfType<string>()
+            .Where(name => name.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
             .Select(name => ParseProposal(name, File.ReadAllText(Path.Combine(proposalsDir, name))));
 
         return OrderForReview(parsed).ToList();
@@ -135,7 +174,7 @@ public sealed class MemoryProposals(AppPaths paths)
     ///
     /// <b>Equal-status rows stay contiguous</b> - <see cref="MemoryProposalInfo.Status"/> itself is
     /// the tiebreak, ordinal, before falling back to the pre-existing newest-name-first order
-    /// (filenames are timestamp-prefixed - see <see cref="UniqueFileName"/> - so a descending
+    /// (filenames are timestamp-prefixed - see <see cref="AllocateAndLand"/> - so a descending
     /// ordinal sort on the name is already chronological). This is not a claim that one status
     /// outranks another; it only guarantees that a shell grouping consecutive equal-status rows
     /// into sections (see <c>ProposalQueueView</c>'s own doc comment) never has to split one status
@@ -182,13 +221,25 @@ public sealed class MemoryProposals(AppPaths paths)
         ArgumentException.ThrowIfNullOrWhiteSpace(status);
 
         var path = ResolveProposalPath(productGuid, fileName);
-        if (!File.Exists(path)) return false;
 
-        var file = MemoryFile.Parse(fileName, File.ReadAllText(path));
-        var fields = new Dictionary<string, string>(file.Frontmatter, StringComparer.Ordinal) { ["status"] = status };
+        // _statusLock: without it, two concurrent calls on the SAME proposal (a human clicking
+        // Accept while another tab clicks Defer) could each read the status BEFORE either had
+        // written it back, so whichever call's own atomic write happened to land last would
+        // silently win in full - including reverting the other call's status change - with neither
+        // caller ever told anything but success. The lock makes the two calls line up instead: the
+        // second call's read always sees the first call's completed write, so the final status is
+        // whichever call entered the lock second, deterministically, not whichever call's write
+        // happened to land last.
+        lock (_statusLock)
+        {
+            if (!File.Exists(path)) return false;
 
-        AtomicWrite(path, BuildFrontmatterBlock(fields) + file.Body);
-        return true;
+            var file = MemoryFile.Parse(fileName, File.ReadAllText(path));
+            var fields = new Dictionary<string, string>(file.Frontmatter, StringComparer.Ordinal) { ["status"] = status };
+
+            AtomicWrite(path, BuildFrontmatterBlock(fields) + file.Body);
+            return true;
+        }
     }
 
     /// <summary>
@@ -265,19 +316,74 @@ public sealed class MemoryProposals(AppPaths paths)
     static string Slug(string targetFile) =>
         targetFile.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? targetFile[..^3] : targetFile;
 
-    /// <summary>Appends "-2", "-3", ... until a free name is found, so two proposals generated in
-    /// the same second for the same target never collide - the timestamp alone is only
-    /// second-resolution.</summary>
-    static string UniqueFileName(string proposalsDir, DateTimeOffset at, string targetFile)
+    /// <summary>
+    /// Allocates a unique file name for a new proposal AND lands <paramref name="content"/> under
+    /// it, atomically, in the same operation. Replaces a former two-step "find a free name via a
+    /// File.Exists loop, then write it" approach that was a check-then-act race: two concurrent
+    /// <see cref="Write"/> calls could both pass the File.Exists check for the SAME candidate
+    /// before either had created it, after which the second call's <c>File.Move(overwrite: true)</c>
+    /// would silently destroy the first's just-landed proposal - both callers told success, one
+    /// proposal gone. "A proposal must never silently vanish" (see <see cref="Write"/>'s own doc
+    /// comment) is a correctness contract, not a robustness nicety, so this is a defect fix, not a
+    /// hardening pass.
+    ///
+    /// Two layers, not one. <c>File.Move(temp, candidate, overwrite: false)</c> either lands the
+    /// file or throws <see cref="IOException"/> because candidate now exists; on exactly that
+    /// failure this advances to the next numeric suffix and retries against a new candidate - any
+    /// other exception is left to propagate, since "the name is taken" is the only reason to retry.
+    /// That alone was NOT sufficient by itself, empirically: under a live many-way concurrent-Write
+    /// test targeting the same second, several callers' own internal check-then-rename windows
+    /// (inside .NET's Unix <see cref="File.Move(string, string, bool)"/> implementation, which
+    /// checks existence and renames as two separate syscalls even with <c>overwrite: false</c>)
+    /// overlapped closely enough that one call's move silently succeeded over another's just-landed
+    /// file WITHOUT throwing - nothing for a retry loop to catch, because nothing failed. Wrapping
+    /// the whole allocate-and-land attempt in <see cref="_allocationLock"/> closes that: only one
+    /// call in this process can be inside a single File.Move at a time, so two callers can no longer
+    /// overlap inside that gap to begin with. The retry-on-IOException logic stays as a second,
+    /// independent guarantee - correct even without the lock, and cheap to keep.
+    ///
+    /// Still reader-never-sees-partial: each attempt writes to its own GUID-suffixed temp file
+    /// first - the same technique <see cref="AtomicWrite"/> uses for <see cref="SetStatus"/> - only
+    /// moved into place once it holds the complete content.
+    /// </summary>
+    string AllocateAndLand(string proposalsDir, DateTimeOffset at, string targetFile, string content)
     {
         var baseName = $"{at.UtcDateTime:yyyyMMdd-HHmmss}-{Slug(targetFile)}";
 
-        var candidate = $"{baseName}.md";
-        for (var suffix = 2; File.Exists(Path.Combine(proposalsDir, candidate)); suffix++)
-            candidate = $"{baseName}-{suffix}.md";
+        lock (_allocationLock)
+        {
+            for (var suffix = 1; suffix <= MaxAllocationAttempts; suffix++)
+            {
+                var candidateName = suffix == 1 ? $"{baseName}.md" : $"{baseName}-{suffix}.md";
+                var candidatePath = Path.Combine(proposalsDir, candidateName);
+                var temp = Path.Combine(proposalsDir, $".{candidateName}.{Guid.NewGuid():N}.tmp");
 
-        return candidate;
+                File.WriteAllText(temp, content);
+                try
+                {
+                    File.Move(temp, candidatePath, overwrite: false);
+                    return candidateName;
+                }
+                catch (IOException)
+                {
+                    // candidateName was claimed by another concurrent Write between the moment we
+                    // picked it and this move - our temp file never became visible under its final
+                    // name, so remove it and retry against the next suffix.
+                    File.Delete(temp);
+                }
+            }
+        }
+
+        throw new IOException(
+            $"Could not allocate a unique proposal file name under '{proposalsDir}' for target "
+            + $"'{targetFile}' after {MaxAllocationAttempts} attempts.");
     }
+
+    /// <summary>Bounded so a persistent, non-collision failure (e.g. a read-only proposals
+    /// directory) fails loudly after a fixed number of tries instead of looping forever - genuine
+    /// collision could never realistically approach this many concurrent writers for one target in
+    /// one second.</summary>
+    const int MaxAllocationAttempts = 1000;
 
     // Stateless and safe to reuse - see MemoryFile's identical reasoning for its Deserializer.
     static readonly ISerializer Serializer = new SerializerBuilder().Build();

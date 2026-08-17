@@ -1,8 +1,10 @@
 using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Hades.Core;
 using Hades.Core.Editors;
 using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using WireJson = Hades.Contract.Wire.JsonValue;
 using WireKind = Hades.Contract.Wire.JsonValueKind;
@@ -100,7 +102,7 @@ public sealed record AnimationApplyResult
 /// animation.edit_controller's own existing handlers.</para>
 /// </summary>
 [McpServerToolType]
-public sealed class AnimationApplyTool(EditorProxy editor)
+public sealed class AnimationApplyTool(EditorProxy editor, ProjectService projects)
 {
     static readonly string[] ValidOps = ["assignController", "assignClip", "createController", "editController"];
 
@@ -138,7 +140,8 @@ public sealed class AnimationApplyTool(EditorProxy editor)
                    + "assignController's 'gameObjectPath' always names a scene object, never a "
                    + "file on disk.")]
         IReadOnlyList<AnimationApplyOperation> operations,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        RequestContext<CallToolRequestParams> context = null!)
     {
         if (operations is null || operations.Count == 0)
             throw new McpException("animation_apply needs a non-empty 'operations' array.");
@@ -163,7 +166,8 @@ public sealed class AnimationApplyTool(EditorProxy editor)
         foreach (var op in operations) wireOperations.Add(BuildOperation(op));
 
         var @params = WireJson.NewObject().SetProperty("operations", wireOperations);
-        var result = await editor.SendCommandAsync(project, "animation.apply", @params).ConfigureAwait(false);
+        var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
+        var result = await editor.SendCommandAsync(productGuid, "animation.apply", @params).ConfigureAwait(false);
 
         return MapResult(result, operations.Count);
     }

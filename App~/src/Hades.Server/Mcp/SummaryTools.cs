@@ -51,6 +51,15 @@ public sealed record CharonStatusResult
     /// doc comment for why degrading, not refusing, is the whole point.</summary>
     [JsonPropertyName("pluginVersion")] public string? PluginVersion { get; init; }
 
+    /// <summary>The plugin version found on disk — present only while <see cref="Attached"/> is
+    /// false AND a plugin is actually installed in the project's Assets/Hades. Distinguishes
+    /// "plugin installed, Unity has not (re)connected yet" from "nothing installed at all", which
+    /// <see cref="PluginVersion"/> alone cannot: that field is hello-derived and so is always
+    /// absent whenever nothing is attached. See <see cref="Hades.Core.CharonStatus.PluginVersionOnDisk"/>
+    /// for the full reasoning, including why this is never populated once <see cref="Attached"/>
+    /// is true.</summary>
+    [JsonPropertyName("pluginVersionOnDisk")] public string? PluginVersionOnDisk { get; init; }
+
     [JsonPropertyName("projectPath")] public string? ProjectPath { get; init; }
     [JsonPropertyName("processId")] public long? ProcessId { get; init; }
     [JsonPropertyName("connectionAgeSeconds")] public double? ConnectionAgeSeconds { get; init; }
@@ -164,9 +173,12 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
     [Description("Forces a full reindex of a project from scratch, ignoring whatever this process "
                + "already had cached, and reports the node count before and after. Full rebuilds "
                + "can take 10-60 seconds on large projects; the graph stays queryable throughout "
-               + "but results may be stale until it completes. Hades' incremental sync already "
-               + "keeps the graph current on its own — call this when you suspect the graph has "
-               + "drifted from disk, not as routine maintenance." + ToolSupport.SavedStateClause)]
+               + "but results may be stale until it completes. This call is fully synchronous for "
+               + "that entire duration — no cancellation, no progress reporting, and it waits its "
+               + "turn behind any other indexing already running for this project — so it can run "
+               + "longer than a typical client-side timeout on a large project. Hades' incremental "
+               + "sync already keeps the graph current on its own — call this when you suspect the "
+               + "graph has drifted from disk, not as routine maintenance." + ToolSupport.SavedStateClause)]
     public async Task<RebuildResult> RebuildGraph(
         [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
@@ -229,6 +241,7 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
             Busy = status.Busy,
             UnityVersion = status.UnityVersion,
             PluginVersion = status.PluginVersion,
+            PluginVersionOnDisk = status.PluginVersionOnDisk,
             ProjectPath = status.ProjectPath,
             ProcessId = status.ProcessId,
             ConnectionAgeSeconds = status.ConnectionAge?.TotalSeconds,
@@ -245,9 +258,18 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
         string baseDetail;
         if (!status.Attached)
         {
-            baseDetail = "No Unity Editor is attached. Editor-dependent tools remain unavailable until "
-                 + "one connects — not hidden, not failing, simply not part of this server's tool "
-                 + "surface until then.";
+            // Distinguishes "the plugin is on disk, Unity just has not (re)connected" from "nothing
+            // is installed here at all" — two different remedies (open/focus Unity, vs. installing
+            // the plugin first) that used to collapse to the same "not attached" text. See
+            // Hades.Core.CharonStatus.PluginVersionOnDisk's own doc comment for why this can only
+            // ever be populated in this branch.
+            baseDetail = status.PluginVersionOnDisk is { } diskVersion
+                ? $"No Unity Editor is attached, but the Hades plugin (v{diskVersion}) is present "
+                  + "on disk for this project — open or focus Unity to let it import and connect. "
+                  + "Editor-dependent tools remain unavailable until then."
+                : "No Unity Editor is attached. Editor-dependent tools remain unavailable until "
+                  + "one connects — not hidden, not failing, simply not part of this server's tool "
+                  + "surface until then.";
         }
         else if (status.Busy)
         {

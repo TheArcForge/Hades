@@ -1,5 +1,6 @@
 // C# 9 only in this file - see the file banner in Contract/MiniJson.cs.
 using System;
+using System.IO;
 using System.Linq;
 using Hades.Contract.Wire;
 using Hades.Runtime;
@@ -65,6 +66,9 @@ namespace Hades.Tests.Editor
 
         static long IntProp(JsonValue result, string key) =>
             result.TryGetProperty(key, out var v) && v.Kind == JsonValueKind.Integer ? v.AsInteger() : long.MinValue;
+
+        static string AbsolutePath(string projectRelativePath) =>
+            Path.Combine(Directory.GetParent(Application.dataPath).FullName, projectRelativePath.Replace('/', Path.DirectorySeparatorChar));
 
         // -------------------------------------------------------------------------- material.create
 
@@ -135,6 +139,85 @@ namespace Hades.Tests.Editor
             Undo.PerformUndo();
 
             Assert.IsNull(AssetDatabase.LoadAssetAtPath<Material>(path));
+        }
+
+        // ---------------------------------------------------------- material.create - path guard (F16/F17/F20)
+
+        [Test]
+        public void CreateMaterial_TraversalPath_RefusedBeforeAnyWrite()
+        {
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String("Assets/../Escaped.mat"));
+
+            var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("material.create", @params)));
+
+            StringAssert.Contains("Assets/../Escaped.mat", ex.Message);
+            Assert.IsFalse(File.Exists(AbsolutePath("Escaped.mat")), "a refused traversal path must leave no file behind, inside or outside Assets/");
+        }
+
+        [Test]
+        public void CreateMaterial_AbsolutePathIntoAssets_Refused()
+        {
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            // A CORRECT absolute path landing inside Assets/ must still be refused - only a plain
+            // project-relative form is accepted (see AssetPathGuard's own doc comment for why).
+            var path = AbsolutePath(ScratchDir + "/Abs.mat");
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String(path));
+
+            Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("material.create", @params)));
+            Assert.IsNull(AssetDatabase.LoadAssetAtPath<Material>(ScratchDir + "/Abs.mat"));
+        }
+
+        [Test]
+        public void CreateMaterial_NonNormalizedDotSlashPath_Refused()
+        {
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String(ScratchDir + "/./NotNormalized.mat"));
+
+            Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("material.create", @params)));
+            // Not even created at the normalized equivalent - a caller must resubmit the clean form itself.
+            Assert.IsNull(AssetDatabase.LoadAssetAtPath<Material>(ScratchDir + "/NotNormalized.mat"));
+        }
+
+        [Test]
+        public void CreateMaterial_PathComponentOverSafeByteLimit_Refused()
+        {
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var tooLongName = new string('a', 245) + ".mat"; // 249 bytes, over the 240-byte safe bound
+            var path = ScratchDir + "/" + tooLongName;
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String(path));
+
+            var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("material.create", @params)));
+
+            StringAssert.Contains("bytes", ex.Message);
+            Assert.IsFalse(File.Exists(AbsolutePath(path)));
+        }
+
+        [Test]
+        public void CreateMaterial_ExistingFile_Refused_OriginalUntouched()
+        {
+            var path = ScratchDir + "/AlreadyThere.mat";
+            AssetDatabase.CreateAsset(new Material(Shader.Find("Unlit/Color")), path);
+
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String(path)).SetProperty("shader", JsonValue.String("Standard"));
+
+            var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("material.create", @params)));
+
+            StringAssert.Contains("already exists", ex.Message);
+            StringAssert.Contains("material_apply", ex.Message);
+            // F16's destructive half: the pre-existing file must be untouched, not silently replaced.
+            Assert.AreEqual("Unlit/Color", AssetDatabase.LoadAssetAtPath<Material>(path).shader.name);
         }
 
         // --------------------------------------------------------------------- material.set_property
@@ -373,6 +456,109 @@ namespace Hades.Tests.Editor
             Undo.PerformUndo();
 
             Assert.IsNull(AssetDatabase.LoadAssetAtPath<Material>(destPath));
+        }
+
+        // -------------------------------------------------------- material.duplicate - path guard (F16/F17/F20)
+
+        [Test]
+        public void DuplicateMaterial_TraversalDestPath_RefusedBeforeAnyWrite()
+        {
+            var sourcePath = ScratchDir + "/TravSource.mat";
+            AssetDatabase.CreateAsset(new Material(Shader.Find("Unlit/Color")), sourcePath);
+
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var @params = JsonValue.NewObject()
+                .SetProperty("sourcePath", JsonValue.String(sourcePath))
+                .SetProperty("destPath", JsonValue.String("Assets/../EscapedMatDup.mat"));
+
+            var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("material.duplicate", @params)));
+
+            StringAssert.Contains("EscapedMatDup.mat", ex.Message);
+            Assert.IsFalse(File.Exists(AbsolutePath("EscapedMatDup.mat")), "a refused traversal path must leave no file behind, inside or outside Assets/");
+        }
+
+        [Test]
+        public void DuplicateMaterial_AbsoluteDestPathIntoAssets_Refused()
+        {
+            var sourcePath = ScratchDir + "/AbsSource.mat";
+            AssetDatabase.CreateAsset(new Material(Shader.Find("Unlit/Color")), sourcePath);
+
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            // A CORRECT absolute path landing inside Assets/ must still be refused - only a plain
+            // project-relative form is accepted (see AssetPathGuard's own doc comment for why).
+            var destPath = AbsolutePath(ScratchDir + "/AbsDup.mat");
+            var @params = JsonValue.NewObject()
+                .SetProperty("sourcePath", JsonValue.String(sourcePath))
+                .SetProperty("destPath", JsonValue.String(destPath));
+
+            Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("material.duplicate", @params)));
+            Assert.IsNull(AssetDatabase.LoadAssetAtPath<Material>(ScratchDir + "/AbsDup.mat"));
+        }
+
+        [Test]
+        public void DuplicateMaterial_NonNormalizedDotSlashDestPath_Refused()
+        {
+            var sourcePath = ScratchDir + "/DotSource.mat";
+            AssetDatabase.CreateAsset(new Material(Shader.Find("Unlit/Color")), sourcePath);
+
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var @params = JsonValue.NewObject()
+                .SetProperty("sourcePath", JsonValue.String(sourcePath))
+                .SetProperty("destPath", JsonValue.String(ScratchDir + "/./NotNormalizedDup.mat"));
+
+            Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("material.duplicate", @params)));
+            // Not even created at the normalized equivalent - a caller must resubmit the clean form itself.
+            Assert.IsNull(AssetDatabase.LoadAssetAtPath<Material>(ScratchDir + "/NotNormalizedDup.mat"));
+        }
+
+        [Test]
+        public void DuplicateMaterial_DestPathComponentOverSafeByteLimit_Refused()
+        {
+            var sourcePath = ScratchDir + "/LongSource.mat";
+            AssetDatabase.CreateAsset(new Material(Shader.Find("Unlit/Color")), sourcePath);
+
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var tooLongName = new string('a', 245) + ".mat"; // 249 bytes, over the 240-byte safe bound
+            var destPath = ScratchDir + "/" + tooLongName;
+            var @params = JsonValue.NewObject()
+                .SetProperty("sourcePath", JsonValue.String(sourcePath))
+                .SetProperty("destPath", JsonValue.String(destPath));
+
+            var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("material.duplicate", @params)));
+
+            StringAssert.Contains("bytes", ex.Message);
+            Assert.IsFalse(File.Exists(AbsolutePath(destPath)));
+        }
+
+        [Test]
+        public void DuplicateMaterial_ExistingDestFile_Refused_OriginalUntouched()
+        {
+            var sourcePath = ScratchDir + "/ExistSource.mat";
+            AssetDatabase.CreateAsset(new Material(Shader.Find("Unlit/Color")), sourcePath);
+            var destPath = ScratchDir + "/ExistDupDest.mat";
+            AssetDatabase.CreateAsset(new Material(Shader.Find("Standard")), destPath);
+
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var @params = JsonValue.NewObject()
+                .SetProperty("sourcePath", JsonValue.String(sourcePath))
+                .SetProperty("destPath", JsonValue.String(destPath));
+
+            var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("material.duplicate", @params)));
+
+            StringAssert.Contains("already exists", ex.Message);
+            StringAssert.Contains("material_apply", ex.Message);
+            // F16's destructive half: the pre-existing file must be untouched, not silently replaced.
+            Assert.AreEqual("Standard", AssetDatabase.LoadAssetAtPath<Material>(destPath).shader.name);
         }
 
         // --------------------------------------------------------------------- material.swap_shader

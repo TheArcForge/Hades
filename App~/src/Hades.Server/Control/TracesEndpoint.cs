@@ -54,6 +54,14 @@ public sealed record TraceRecordSnapshot
     public required long StartUtcMs { get; init; }
     public long? EndUtcMs { get; init; }
     public string? Status { get; init; }
+
+    /// <summary>Insertion-order tiebreaker for two traces recorded in the same millisecond -
+    /// <see cref="Hades.Core.Tracing.TraceSummary.RowId"/>, carried through unchanged (see
+    /// <see cref="GetSequences"/>). Defaults to 0, which is harmless for every hand-built snapshot
+    /// elsewhere in this codebase's own tests: none of them share a <see cref="StartUtcMs"/> to
+    /// begin with, so a tie on RowId too never arises for them. See
+    /// <see cref="GroupIntoSequences"/>'s own doc comment for why this is needed at all.</summary>
+    public long RowId { get; init; }
 }
 
 /// <summary>One already-rendered <c>{key, valueDisplay}</c> pair, flattened out of a span's
@@ -142,6 +150,12 @@ public sealed record SlowToolRow
 public sealed record SlowToolsResult
 {
     [JsonPropertyName("tools")] public required IReadOnlyList<SlowToolRow> Tools { get; init; }
+
+    /// <summary>True when the underlying fetch hit its own limit - more tools may exist beyond
+    /// what is returned here. Same truncated/totalReturned idiom
+    /// <see cref="Hades.Server.Mcp.MemoryRecallResult"/> and <see cref="TraceSequencesResult"/>
+    /// already use.</summary>
+    [JsonPropertyName("truncated")] public required bool Truncated { get; init; }
 }
 
 /// <summary>One failed call - see <see cref="FailedCallsResult"/>. <see cref="Error"/> is the
@@ -162,6 +176,12 @@ public sealed record FailedCallRow
 public sealed record FailedCallsResult
 {
     [JsonPropertyName("failures")] public required IReadOnlyList<FailedCallRow> Failures { get; init; }
+
+    /// <summary>True when the underlying fetch hit its own limit - older failures may exist beyond
+    /// what is returned here. Same truncated/totalReturned idiom
+    /// <see cref="Hades.Server.Mcp.MemoryRecallResult"/> and <see cref="TraceSequencesResult"/>
+    /// already use.</summary>
+    [JsonPropertyName("truncated")] public required bool Truncated { get; init; }
 }
 
 /// <summary>
@@ -235,6 +255,7 @@ public static class TracesEndpoint
             StartUtcMs = t.StartUtcMs,
             EndUtcMs = t.EndUtcMs,
             Status = t.Status,
+            RowId = t.RowId,
         }).ToList();
 
         var sequences = GroupIntoSequences(snapshots);
@@ -271,8 +292,12 @@ public static class TracesEndpoint
     {
         if (!TryResolveProject(projects, project, out var productGuid, out var projectError)) return projectError!;
 
+        // Clamp first, fetch with the clamped limit, and report truncated from THAT clamped value
+        // (never the raw requested one) - the exact same idiom GetSequences above already uses.
+        var clampedLimit = Math.Clamp(limit, 1, MaxLimit);
+
         using var store = TraceStore.Open(projects.Paths.TracesDb(productGuid));
-        var slow = store.SlowestTools(Math.Clamp(limit, 1, MaxLimit));
+        var slow = store.SlowestTools(clampedLimit);
 
         return Results.Json(new SlowToolsResult
         {
@@ -283,6 +308,7 @@ public static class TracesEndpoint
                 AverageDurationMs = Math.Round(s.AverageDurationMs, 1),
                 MaxDurationMs = s.MaxDurationMs,
             }).ToList(),
+            Truncated = slow.Count >= clampedLimit,
         });
     }
 
@@ -290,8 +316,12 @@ public static class TracesEndpoint
     {
         if (!TryResolveProject(projects, project, out var productGuid, out var projectError)) return projectError!;
 
+        // Clamp first, fetch with the clamped limit, and report truncated from THAT clamped value
+        // (never the raw requested one) - the exact same idiom GetSequences above already uses.
+        var clampedLimit = Math.Clamp(limit, 1, MaxLimit);
+
         using var store = TraceStore.Open(projects.Paths.TracesDb(productGuid));
-        var failures = store.Failures(Math.Clamp(limit, 1, MaxLimit));
+        var failures = store.Failures(clampedLimit);
 
         var rows = failures.Select(f => new FailedCallRow
         {
@@ -302,7 +332,7 @@ public static class TracesEndpoint
             Error = ExtractErrorMessage(store, f.TraceId),
         }).ToList();
 
-        return Results.Json(new FailedCallsResult { Failures = rows });
+        return Results.Json(new FailedCallsResult { Failures = rows, Truncated = failures.Count >= clampedLimit });
     }
 
     // --------------------------------------------------------------------------------- pure core
@@ -312,11 +342,20 @@ public static class TracesEndpoint
     /// exact rule. Sorts its own input by <see cref="TraceRecordSnapshot.StartUtcMs"/> first, so a
     /// caller handing this newest-first (as <see cref="TraceStore.RecentTraces"/> does) or in any
     /// other order never has to remember to reorder it correctly beforehand.
+    ///
+    /// Ties on <see cref="TraceRecordSnapshot.StartUtcMs"/> (millisecond resolution - a real burst
+    /// can record two calls inside one tick) are broken by <see cref="TraceRecordSnapshot.RowId"/>,
+    /// ascending - never left to a plain stable sort's "whatever order the tied rows arrived in".
+    /// <see cref="TraceStore.RecentTraces"/> hands this method its rows newest-first with ties
+    /// broken rowid-DESCENDING (see that method's own doc comment), so without this second key a
+    /// same-millisecond group's relative order would survive this sort UNCHANGED - i.e. backwards,
+    /// last-recorded first - and <see cref="BuildSequence"/> below would render Pattern with the
+    /// tools in that same reversed order.
     /// </summary>
     public static IReadOnlyList<TraceSequenceRow> GroupIntoSequences(
         IReadOnlyList<TraceRecordSnapshot> traces, long gapThresholdMs = DefaultSequenceGapMs)
     {
-        var chronological = traces.OrderBy(t => t.StartUtcMs).ToList();
+        var chronological = traces.OrderBy(t => t.StartUtcMs).ThenBy(t => t.RowId).ToList();
 
         var sequences = new List<TraceSequenceRow>();
         List<TraceRecordSnapshot>? current = null;

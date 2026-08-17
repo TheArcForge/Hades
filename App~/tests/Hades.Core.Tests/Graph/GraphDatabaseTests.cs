@@ -29,6 +29,20 @@ public class GraphDatabaseTests : IDisposable
     }
 
     [Fact]
+    public void PathForGuid_DuplicatedGuid_AlwaysResolvesToTheLexicographicallyFirstPath()
+    {
+        // A copy-pasted .meta gives two files one GUID - degraded input, but the answer must be
+        // the same one every call, not whichever row SQLite happens to visit first.
+        using var db = Open();
+        db.UpsertNodes([
+            Node("Zeta", kind: "Prefab", path: "Assets/Zeta.prefab") with { Guid = "feedfacefeedfacefeedfacefeedface" },
+            Node("Alpha", kind: "Prefab", path: "Assets/Alpha.prefab") with { Guid = "feedfacefeedfacefeedfacefeedface" },
+        ]);
+
+        Assert.Equal("Assets/Alpha.prefab", db.PathForGuid("feedfacefeedfacefeedfacefeedface"));
+    }
+
+    [Fact]
     public void UpsertNodes_ThenSearchByName_FindsIt()
     {
         using var db = Open();

@@ -48,13 +48,25 @@ namespace Hades.Contract.Wire
                     return false;
                 }
 
+                // A TCP port is only ever valid in [1, 65535]. AsInteger() returns the full JSON
+                // integer range as a long, and a plain (int) cast truncates rather than
+                // range-checks once a value falls outside int's own range - silently wrapping a
+                // corrupt file or a hostile/skewed peer's out-of-range port into some other,
+                // unrelated port number instead of failing to parse.
+                var port = portValue.AsInteger();
+                if (port < 1 || port > 65535)
+                {
+                    error = $"Editor connection info 'port' must be between 1 and 65535, got {port}.";
+                    return false;
+                }
+
                 if (!json.TryGetProperty("token", out var tokenValue) || tokenValue!.Kind != JsonValueKind.String)
                 {
                     error = "Editor connection info must have a string 'token'.";
                     return false;
                 }
 
-                info = new EditorConnectionInfo { Port = (int)portValue.AsInteger(), Token = tokenValue.AsString() };
+                info = new EditorConnectionInfo { Port = (int)port, Token = tokenValue.AsString() };
                 return true;
             }
             catch (Exception e)

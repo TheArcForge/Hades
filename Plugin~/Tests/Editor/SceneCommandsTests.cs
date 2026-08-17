@@ -371,6 +371,54 @@ namespace Hades.Tests.Editor
             Assert.AreSame(originalParent.transform, child.transform.parent);
         }
 
+        // -------------------------------------------- scene.reparent_gameobject - cycle guard (F21)
+
+        [Test]
+        public void ReparentGameObject_UnderItself_Refused_NoLeaseTouched()
+        {
+            var go = new GameObject("SelfParent");
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject()
+                    .SetProperty("path", JsonValue.String("SelfParent"))
+                    .SetProperty("newParent", JsonValue.String("SelfParent"));
+
+                var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("scene.reparent_gameobject", @params)));
+
+                StringAssert.Contains("SelfParent", ex.Message);
+                Assert.IsNull(go.transform.parent);
+
+                AssertNeverTouchedLease(fake, gate);
+            }
+        }
+
+        [Test]
+        public void ReparentGameObject_UnderOwnDescendant_Refused_NoLeaseTouched()
+        {
+            var grandparent = new GameObject("Grandparent");
+            var parent = new GameObject("Parent");
+            parent.transform.SetParent(grandparent.transform);
+            var child = new GameObject("Child");
+            child.transform.SetParent(parent.transform);
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject()
+                    .SetProperty("path", JsonValue.String("Grandparent"))
+                    .SetProperty("newParent", JsonValue.String("Grandparent/Parent/Child"));
+
+                var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("scene.reparent_gameobject", @params)));
+
+                StringAssert.Contains("Grandparent", ex.Message);
+                Assert.IsNull(grandparent.transform.parent, "the cycle must be refused, leaving the hierarchy exactly as it was");
+
+                AssertNeverTouchedLease(fake, gate);
+            }
+        }
+
         // ---------------------------------------------------------------- scene.rename_gameobject
 
         [Test]

@@ -1,3 +1,4 @@
+import Foundation
 import HadesControl
 
 /// Builds a `ControlMigrationFetching` for a given connection (normally `ControlClient.init`) -
@@ -72,8 +73,28 @@ public struct LiveMigrationOffering: MigrationOffering {
         _ = try? await client.migrationImportTraces(productGuid: productGuid)
     }
 
+    /// The browsed path (fresh from an `NSOpenPanel`) and a stored row's path (from the server's
+    /// own `ProjectStore.Canonicalize`, which now resolves the FULL symlink chain - see that
+    /// method's own doc comment) can legitimately spell the same directory two different ways,
+    /// e.g. macOS's own `/tmp` vs `/private/tmp`. A single raw `==` would silently return `nil`
+    /// (no migration offer shown) whenever the two sides disagree. `resolvingSymlinksInPath()` is
+    /// realpath-equivalent (it DOES map `/tmp` -&gt; `/private/tmp`) and, like the server's own
+    /// resolution, is total for a nonexistent tail - it resolves as much of the path as exists on
+    /// disk and leaves the rest verbatim, never throwing. Deliberately dumb and total rather than
+    /// clever: both the raw and resolved spellings of the browsed path are compared against both
+    /// the raw and trailing-slash-trimmed spellings of every stored row's path, all locally
+    /// against the `projects()` list already fetched above - no extra server round trip.
     private func resolveProductGuid(forPath path: String, using client: any ControlMigrationFetching) async -> String? {
         guard let projects = try? await client.projects().projects else { return nil }
-        return projects.first(where: { $0.path == path })?.productGuid
+
+        let resolvedPath = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+
+        return projects.first(where: { row in
+            let storedPath = row.path
+            let storedPathTrimmed = storedPath.hasSuffix("/") ? String(storedPath.dropLast()) : storedPath
+
+            return path == storedPath || path == storedPathTrimmed
+                || resolvedPath == storedPath || resolvedPath == storedPathTrimmed
+        })?.productGuid
     }
 }

@@ -132,6 +132,31 @@ namespace Hades.Tests.Editor
             StringAssert.Contains("Ghost.mat", ex.Message);
         }
 
+        // -------------------------------------------------------- asset.move - destPath path guard (F16/F17)
+
+        [Test]
+        public void MoveAsset_TraversalDestPath_RefusedBeforeAnyWrite_NoLeaseTouched()
+        {
+            var sourcePath = ScratchDir + "/MoveSource.mat";
+            AssetDatabase.CreateAsset(new Material(Shader.Find("Standard")), sourcePath);
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject()
+                    .SetProperty("sourcePath", JsonValue.String(sourcePath))
+                    .SetProperty("destPath", JsonValue.String("Assets/../EscapedMove.mat"));
+
+                var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("asset.move", @params)));
+                StringAssert.Contains("EscapedMove.mat", ex.Message);
+                Assert.IsFalse(File.Exists(AbsolutePath("EscapedMove.mat")));
+                // A refused move must not have moved anything - the source stays exactly where it was.
+                Assert.IsNotNull(AssetDatabase.LoadAssetAtPath<Material>(sourcePath));
+
+                AssertNeverTouchedLease(fake, gate);
+            }
+        }
+
         // -------------------------------------------------------------------------- asset.import
 
         [Test]

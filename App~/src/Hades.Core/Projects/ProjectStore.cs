@@ -1,5 +1,13 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Hades.Core.Storage;
+
+// No dedicated AssemblyInfo.cs in this project, so this lives on the one method it exists for:
+// lets Hades.Server.Mcp.RootsRouter delegate to Canonicalize below (internal, not public - see
+// that method's own doc comment for the invariant this sharing exists to protect) instead of
+// keeping its own second copy. Still a one-way dependency - Hades.Server already references
+// Hades.Core (see ProjectResolver's own doc comment); this only lets it see one more member.
+[assembly: InternalsVisibleTo("Hades.Server")]
 
 namespace Hades.Core.Projects;
 
@@ -17,11 +25,24 @@ public sealed class ProjectStore(AppPaths paths)
     /// first, so quarantining never overwrites an existing quarantine file.</summary>
     const int MaxQuarantineSlots = 5;
 
+    /// <summary>Total symlink substitutions <see cref="Canonicalize"/> permits across one walk -
+    /// comfortably above any legitimate chain and small enough to fail fast (falling back to the
+    /// lexically-normalized input - see that method's own doc comment) on a cycle, e.g. a link
+    /// pointing at itself or at one of its own ancestors.</summary>
+    const int MaxLinkResolutions = 40;
+
     enum ReadOutcome { Missing, Ok, Corrupt, Unreadable }
 
     public UnityProject? Adopt(string projectRoot)
     {
-        var guid = ProjectIdentity.TryReadProductGuid(projectRoot);
+        // Canonicalized BEFORE anything else, so both the guid read below and the Path this
+        // project is stored under agree on ONE spelling regardless of how the caller spelled it
+        // this time - see Canonicalize's own doc comment for why a raw, verbatim projectRoot must
+        // never reach either. Name is deliberately the ONE exception - see its own assignment
+        // below for why it comes from the caller's original spelling instead.
+        var canonicalRoot = Canonicalize(projectRoot);
+
+        var guid = ProjectIdentity.TryReadProductGuid(canonicalRoot);
         if (guid is null) return null;
 
         var (outcome, existing) = ReadProjectFile(guid);
@@ -41,8 +62,13 @@ public sealed class ProjectStore(AppPaths paths)
         var project = new UnityProject
         {
             ProductGuid = guid,
-            Path = projectRoot,
-            Name = Path.GetFileName(projectRoot.TrimEnd(Path.DirectorySeparatorChar)),
+            Path = canonicalRoot,
+            // The ORIGINAL (lexically-normalized-only) leaf, NOT canonicalRoot's - so a project
+            // opened through a symlinked alias keeps showing the name the caller actually
+            // navigated to, instead of silently renaming to whatever the real directory beneath
+            // it happens to be called. Only Path is canonical (see Canonicalize's own doc
+            // comment); Name intentionally is not.
+            Name = Path.GetFileName(Path.GetFullPath(projectRoot).TrimEnd(Path.DirectorySeparatorChar)),
             UnityVersion = existing?.UnityVersion,
             FirstSeen = existing?.FirstSeen ?? now,
             LastSeen = now,
@@ -50,6 +76,96 @@ public sealed class ProjectStore(AppPaths paths)
 
         Save(project);
         return project;
+    }
+
+    /// <summary>
+    /// Lexically normalizes (<see cref="Path.GetFullPath(string)"/> plus trimming a trailing
+    /// separator) and then resolves symlinks at EVERY path component - realpath(3) semantics, not
+    /// just the leaf. <c>internal</c>, with <c>Hades.Server</c> named in this assembly's own
+    /// <see cref="System.Runtime.CompilerServices.InternalsVisibleToAttribute"/> (see this file's
+    /// top), specifically so <c>Hades.Server.Mcp.RootsRouter</c>'s own Canonicalize can be a thin
+    /// delegate to this exact method instead of a second copy of it - the one-way dependency this
+    /// crosses is the ordinary, already-established one (Hades.Server references Hades.Core;
+    /// Hades.Core must not reference Hades.Server - see <see cref="ProjectResolver"/>'s own doc
+    /// comment for that same constraint), just now reaching one member further than a public API
+    /// would need to.
+    ///
+    /// INVARIANT this sharing exists to protect: <see cref="Adopt"/> (via this method) decides the
+    /// one spelling a project's stored <see cref="UnityProject.Path"/> is kept under; RootsRouter's
+    /// own routing-time lookup matches a freshly reported root against that same stored Path and
+    /// only succeeds when ITS canonicalization of the fresh root agrees with THIS canonicalization
+    /// of the stored one, byte for byte. Two independently-maintained copies drifting apart is
+    /// exactly what broke that agreement once already: RootsRouter's own Canonicalize used to be
+    /// leaf-only, one component short of what this method does, and macOS's own <c>/tmp</c> -&gt;
+    /// <c>/private/tmp</c> (an INTERMEDIATE component for a project at <c>/tmp/MyProj</c>, never
+    /// the leaf) was enough to make an already-known project's canonical form disagree with itself
+    /// depending on which copy computed it - the known project silently failed to match its own
+    /// stored self, and got re-adopted and re-announced as brand new on every roots-resolution
+    /// call. Delegating here instead of maintaining a second implementation is what keeps that
+    /// from happening again.
+    ///
+    /// Walks the path component by component from the root, substituting each symlinked
+    /// directory with its target (<see cref="FileSystemInfo.ResolveLinkTarget(bool)"/> with
+    /// <c>returnFinalTarget: true</c>, so a multi-hop chain AT one component collapses in a
+    /// single step) before moving on to the next component. <see cref="MaxLinkResolutions"/>
+    /// bounds the total substitutions across the whole walk against a symlink cycle (e.g. a link
+    /// pointing at itself or at one of its own ancestors); hitting that bound - like any other
+    /// resolution error - falls back to the lexically-normalized input rather than throwing,
+    /// because a canonicalization failure must never take down <see cref="Adopt"/>.
+    ///
+    /// A component that does not exist on disk stops resolution right there and the remainder is
+    /// appended verbatim rather than probed further (nothing beneath a nonexistent directory can
+    /// exist either) - <see cref="Adopt"/> is about to check the result for a ProjectSettings
+    /// folder regardless, so a not-yet-real (or never-real) tail is expected input, not
+    /// exceptional; it reports "not a Unity project" either way once it gets there.
+    ///
+    /// Only the STORED PATH is canonical this way - <see cref="Adopt"/>'s <c>Name</c> deliberately
+    /// stays derived from the caller's ORIGINAL (pre-canonicalization) leaf; see its own
+    /// assignment for why.
+    /// </summary>
+    internal static string Canonicalize(string path)
+    {
+        var full = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar);
+
+        try
+        {
+            return ResolveFullChain(full);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return full;
+        }
+    }
+
+    static string ResolveFullChain(string full)
+    {
+        var root = Path.GetPathRoot(full) ?? "";
+        var segments = full[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+
+        var resolved = root;
+        var stoppedResolving = false; // set once a component doesn't exist; nothing beneath it can either.
+        var linkResolutions = 0;
+
+        foreach (var segment in segments)
+        {
+            var candidate = Path.Combine(resolved, segment);
+
+            if (stoppedResolving || !Directory.Exists(candidate))
+            {
+                stoppedResolving = true;
+            }
+            else if (new DirectoryInfo(candidate).ResolveLinkTarget(returnFinalTarget: true)?.FullName is { } target)
+            {
+                if (++linkResolutions > MaxLinkResolutions)
+                    throw new IOException($"Too many levels of symbolic links resolving '{full}'.");
+
+                candidate = target;
+            }
+
+            resolved = candidate;
+        }
+
+        return resolved.TrimEnd(Path.DirectorySeparatorChar);
     }
 
     public UnityProject? Get(string productGuid) => ReadProjectFile(productGuid).Project;

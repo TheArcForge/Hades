@@ -183,6 +183,44 @@ public sealed class ControlAuthTests : IDisposable
     }
 
     [Fact]
+    public void WriteConnectionFile_CreatesTheFileDirectlyAtMode0600()
+    {
+        // Direct unit test of ControlAuth.WriteConnectionFile itself (public static, so callable
+        // without a real listener/socket) - the fixed method creates the inode at 0600 in one
+        // syscall (FileStreamOptions.UnixCreateMode) rather than the old write-at-default-mode-
+        // then-chmod, which left the token briefly readable at 0644. Same OS guard as
+        // Start_WritesTheDiscoveryFileAtMode0600 above.
+        if (OperatingSystem.IsWindows()) return;
+
+        ControlAuth.WriteConnectionFile(ConnectionFilePath, port: 12345, token: "test-token");
+
+        var mode = File.GetUnixFileMode(ConnectionFilePath);
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, mode);
+    }
+
+    [Fact]
+    public void WriteConnectionFile_NarrowsAPreExistingFilesModeTo0600()
+    {
+        // FileStreamOptions.UnixCreateMode only takes effect when the call creates a genuinely
+        // NEW inode (see WriteConnectionFile's own doc comment) - a file already sitting at this
+        // path (a stale discovery file from a previous run, left at whatever mode it had) is
+        // reused/truncated by FileMode.Create instead, so this pins the defensive
+        // File.SetUnixFileMode that still runs after the write: the end state must be 0600
+        // regardless of what mode the file started at.
+        if (OperatingSystem.IsWindows()) return;
+
+        Directory.CreateDirectory(_tempDir);
+        File.WriteAllText(ConnectionFilePath, "stale");
+        File.SetUnixFileMode(ConnectionFilePath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+
+        ControlAuth.WriteConnectionFile(ConnectionFilePath, port: 12345, token: "test-token");
+
+        var mode = File.GetUnixFileMode(ConnectionFilePath);
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, mode);
+    }
+
+    [Fact]
     public void Start_WritesTheConnectionFileContainingThePortAndToken()
     {
         // The listener binds an OS-assigned ephemeral port (port 0 requested), so the file must

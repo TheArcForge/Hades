@@ -244,6 +244,17 @@ public actor CoreSupervisor {
     /// from wherever the cycle left off is what makes the budget actually deplete across
     /// repeated fast deaths, while a single call from a fresh `start()` (where
     /// `attemptsUsedInCurrentCycle` is always reset to 0 first) behaves exactly as before.
+    ///
+    /// Bails without spawning if `state` reads `.notStarted` after either suspension point below
+    /// (the backoff sleep, or `spawnOnce()`'s own awaits) - the fix for Defect D-B. `stop()` sets
+    /// `state = .notStarted` synchronously, with no `await` of its own in between, before it ever
+    /// terminates the reaper this cycle might still be polling - so a resume that observes
+    /// `.notStarted` here is proof a stop happened while this cycle was suspended, and must not
+    /// call `spawnOnce()` again (that would spawn a brand new core after the quit decision was
+    /// already made) or overwrite `.notStarted` with `.restarting`/`.running(.spawned)`/`.failed`.
+    /// `state` is never `.notStarted` mid-cycle on the normal, non-stopping path (it is always
+    /// `.starting`, `.restarting`, or on its way to `.running`/`.failed`), so this can never
+    /// false-positive a legitimate crash-respawn into bailing early.
     private func spawnWithRetries() async {
         var attempt = attemptsUsedInCurrentCycle
         while attempt < configuration.maxRestartAttempts {
@@ -251,8 +262,11 @@ public actor CoreSupervisor {
             if attempt > 1 {
                 state = .restarting(attempt: attempt)
                 try? await Task.sleep(for: configuration.backoff(attempt - 1))
+                if case .notStarted = state { return }
             }
-            if await spawnOnce() {
+            let spawnedSuccessfully = await spawnOnce()
+            if case .notStarted = state { return }
+            if spawnedSuccessfully {
                 state = .running(.spawned)
                 attemptsUsedInCurrentCycle = attempt
                 lastSpawnBecameRunningAt = .now

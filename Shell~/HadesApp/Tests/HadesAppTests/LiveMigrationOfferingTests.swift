@@ -51,6 +51,38 @@ struct LiveMigrationOfferingTests {
         #expect(await fetcher.lastDetectedProductGuid == "guid-1")
     }
 
+    @Test("isV12Project resolves a symlinked browsed path against an already-resolved stored path")
+    func isV12ProjectMatchesResolvedStoredPathAgainstASymlinkedBrowsedPath() async throws {
+        // The server's ProjectStore.Canonicalize now resolves the FULL symlink chain (not just
+        // the leaf - see that method's own doc comment), so a stored path can legitimately be
+        // spelled differently than whatever the user actually browsed to in NSOpenPanel - e.g.
+        // macOS's own /tmp vs /private/tmp. This builds that same shape from scratch
+        // (scratch/link -> scratch/real) rather than depending on any particular OS's own
+        // ambient symlinks.
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString)
+            .resolvingSymlinksInPath()
+        let real = scratch.appendingPathComponent("real")
+        let link = scratch.appendingPathComponent("link")
+
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        let fetcher = FakeMigrationFetcher(
+            projectsOutcome: .success(ProjectsResult(projects: [Self.row(path: real.path, productGuid: "guid-1")])),
+            detectOutcome: .success(Self.detectionResult(isV12: true)))
+        let connections = FakeConnectionProvider([ControlConnection(port: 1, token: "t")], repeatLast: true)
+        let offering = LiveMigrationOffering(discover: { await connections.provide() }, makeClient: { _ in fetcher })
+
+        // The browsed path (as NSOpenPanel would hand back) goes through the symlink, not the
+        // already-resolved real directory the server has stored.
+        let result = await offering.isV12Project(projectPath: link.path)
+
+        #expect(result == true)
+        #expect(await fetcher.lastDetectedProductGuid == "guid-1")
+    }
+
     @Test("isV12Project returns false, honestly, when detect reports the project is not v1.2")
     func isV12ProjectReturnsFalseWhenNotV12() async {
         let fetcher = FakeMigrationFetcher(

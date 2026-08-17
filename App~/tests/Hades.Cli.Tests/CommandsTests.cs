@@ -1,6 +1,8 @@
 using System.Net.Http.Headers;
+using System.Reflection;
 using Hades.Core;
 using Hades.Core.Editors;
+using Hades.Core.Projects;
 using Hades.Core.Storage;
 using Hades.Server.Control;
 
@@ -40,6 +42,24 @@ public sealed class CommandsTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_projectRoot, "ProjectSettings"));
         File.WriteAllText(Path.Combine(_projectRoot, "ProjectSettings", "ProjectSettings.asset"), $"  productGUID: {ProjectGuid}\n");
         _projects.AdoptAndIndex(_projectRoot);
+    }
+
+    /// <summary>
+    /// Test-only realpath oracle - invokes the actual (internal) <see cref="ProjectStore.Canonicalize"/>
+    /// via reflection rather than re-implementing it, so this helper can never drift from what the
+    /// server actually does. Needed because <see cref="Path.GetTempPath"/> itself sits under a
+    /// symlinked ancestor on macOS (<c>/var</c> -&gt; <c>/private/var</c>): now that Canonicalize
+    /// resolves the FULL chain, a project adopted from <see cref="_projectRoot"/> is stored (and so
+    /// echoed back by the server) under its resolved spelling, not the raw one - the one assertion
+    /// here that prints a full path must compare against THIS, for a reason that has nothing to do
+    /// with the CLI-printing behavior it actually names and exercises.
+    /// </summary>
+    static string RealPath(string path)
+    {
+        var method = typeof(ProjectStore).GetMethod("Canonicalize", BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("ProjectStore.Canonicalize not found — has it been renamed?");
+
+        return (string)method.Invoke(null, [path])!;
     }
 
     (ControlListener Listener, HttpClient Client) StartListener()
@@ -153,7 +173,7 @@ public sealed class CommandsTests : IDisposable
         Assert.Equal(0, exitCode);
         var text = output.ToString();
         Assert.Contains($"- {ProjectName}", text);
-        Assert.Contains($"path:         {_projectRoot}", text);
+        Assert.Contains($"path:         {RealPath(_projectRoot)}", text);
         Assert.Contains($"productGuid:  {ProjectGuid}", text);
         // AdoptAndIndex indexes synchronously, so this is already "indexed", not "indexing" - see
         // the Status test's own note on why the exact age ("indexed 0s ago") is not pinned here.

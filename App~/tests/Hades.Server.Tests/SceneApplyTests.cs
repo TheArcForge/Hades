@@ -351,4 +351,84 @@ public sealed class SceneApplyTests(WebApplicationFactory<Program> factory) : Ed
 
         Assert.Contains("scene.apply requires an 'operations' array parameter.", McpTestClient.ErrorText(envelope));
     }
+
+    // ---------------------------------------------------------------- malformed position/rotation/scale: a clear error, not the bare SDK message
+
+    /// <summary>
+    /// 'position'/'rotation'/'scale' used to bind directly to a C# <c>float[]</c> - the ONE shape
+    /// among every *_apply/*_manage batch operation's fields anywhere in this codebase strict
+    /// enough that the MCP SDK's own argument binding (which runs BEFORE this tool's method body -
+    /// nothing here ever got a chance to run, let alone catch anything) throws a raw
+    /// <see cref="System.Text.Json.JsonException"/> for a shape mismatch. Unlike an
+    /// <see cref="McpException"/> thrown from INSIDE a tool method (every other rejection in this
+    /// file), whose own Message reaches the caller verbatim after the SDK's own "An error occurred
+    /// invoking '{tool}': " prefix, that binding-time JsonException's OWN message never reaches the
+    /// caller at all - the bare, colon-less "An error occurred invoking 'scene_apply'." with
+    /// nothing after it (the same known SDK limitation
+    /// <c>ToolCallTests.OmittingARequiredArgumentIsReportedAsAToolError</c> already documents for a
+    /// missing required argument), here hit by a very plausible caller mistake: sending a Vector3
+    /// the way Unity's own inspector displays one, {"x":.,"y":.,"z":.}, instead of the array this
+    /// tool actually expects. Every other field on every batch operation record in this codebase is
+    /// a string/JsonElement/int/bool - all of which System.Text.Json binds leniently enough that
+    /// this specific failure mode does not arise for them. SceneApplyOperation.Position/Rotation/
+    /// Scale are JsonElement? instead, precisely so a shape mismatch is instead caught INSIDE this
+    /// tool's own BuildOperation, as an ordinary McpException whose Message - unlike the swallowed
+    /// JsonException it replaces - does reach the caller.
+    /// </summary>
+    [Fact]
+    public async Task SceneApply_PositionSentAsAnObjectInsteadOfAnArray_SurfacesAClearError_NotTheBareSdkMessage()
+    {
+        var envelope = await McpTestClient.CallTool(Factory, "scene_apply", new
+        {
+            operations = new[]
+            {
+                new Dictionary<string, object>
+                {
+                    ["op"] = "create", ["name"] = "Enemy",
+                    ["position"] = new Dictionary<string, object> { ["x"] = 1, ["y"] = 2, ["z"] = 3 },
+                },
+            },
+        });
+
+        var text = McpTestClient.ErrorText(envelope);
+        // The bare, swallowed shape this used to produce - no operation index, no field name, no
+        // hint of what was wrong or where.
+        Assert.NotEqual("An error occurred invoking 'scene_apply'.", text);
+        Assert.Contains("operations[0]", text);
+        Assert.Contains("position", text);
+    }
+
+    [Fact]
+    public async Task SceneApply_RotationSentAsAStringInsteadOfAnArray_SurfacesAClearError_NotTheBareSdkMessage()
+    {
+        var envelope = await McpTestClient.CallTool(Factory, "scene_apply", new
+        {
+            operations = new[]
+            {
+                new Dictionary<string, object> { ["op"] = "create", ["name"] = "Enemy", ["rotation"] = "not-an-array" },
+            },
+        });
+
+        var text = McpTestClient.ErrorText(envelope);
+        Assert.NotEqual("An error occurred invoking 'scene_apply'.", text);
+        Assert.Contains("operations[0]", text);
+        Assert.Contains("rotation", text);
+    }
+
+    [Fact]
+    public async Task SceneApply_ScaleArrayWithANonNumericElement_SurfacesAClearError_NotTheBareSdkMessage()
+    {
+        var envelope = await McpTestClient.CallTool(Factory, "scene_apply", new
+        {
+            operations = new[]
+            {
+                new Dictionary<string, object> { ["op"] = "create", ["name"] = "Enemy", ["scale"] = new object[] { 1, "two", 3 } },
+            },
+        });
+
+        var text = McpTestClient.ErrorText(envelope);
+        Assert.NotEqual("An error occurred invoking 'scene_apply'.", text);
+        Assert.Contains("operations[0]", text);
+        Assert.Contains("scale", text);
+    }
 }

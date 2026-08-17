@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json.Serialization;
 using Hades.Core;
 using Hades.Core.Migration;
@@ -43,6 +44,16 @@ public sealed record MigrationClaudeMdInfo
 public sealed record MigrationDetectionResult
 {
     [JsonPropertyName("projectRoot")] public required string ProjectRoot { get; init; }
+
+    /// <summary>Mirrors <see cref="V12DetectionResult.ProjectRootExists"/> - false means the
+    /// project's folder could not even be looked at (moved, deleted, or its volume is unmounted),
+    /// which every OTHER field below cannot tell apart from "looked, found nothing" on its own. A
+    /// caller must check this FIRST and, when false, not present the rest of this payload as a
+    /// confident "nothing to migrate" answer - see that property's own doc comment for the shape
+    /// this closes: a known, previously-adopted project whose path has since gone missing used to
+    /// report the exact same "every item absent" answer as a genuine, freshly-scanned, v1.2-free
+    /// project.</summary>
+    [JsonPropertyName("projectRootExists")] public required bool ProjectRootExists { get; init; }
 
     /// <summary>Mirrors <see cref="V12DetectionResult.IsV12Project"/> - the one condition spec #4
     /// §5 defines for offering migration at all. Resolved here, not re-derived client-side: Swift
@@ -109,6 +120,7 @@ public sealed record MigrationMcpConfigCleanupResult
 {
     [JsonPropertyName("removed")] public required bool Removed { get; init; }
     [JsonPropertyName("message")] public required string Message { get; init; }
+    [JsonPropertyName("occurrencesFound")] public required int OccurrencesFound { get; init; }
 }
 
 /// <summary>The response of <c>POST /control/migration/claudeDesktopConfig/clean</c> - a wire
@@ -201,6 +213,29 @@ public sealed record MigrationCleanupRequest
 /// Production always resolves <see cref="V12Cleanup.HadesHubDirectory"/> itself (see
 /// <see cref="CleanHadesHub"/>'s own <c>hadesHubDirectory</c> parameter doc comment for the
 /// test-only seam that lets this be proven without ever touching the developer's real directory).
+///
+/// <b>Every route's body runs through <see cref="TryRun"/>.</b> Before this fix, the only
+/// structured error response anywhere in this class was <see cref="UnknownProject"/>'s 404 - any
+/// OTHER failure (a JSON call throwing from underneath, two overlapping imports racing the same
+/// destination file - see the concurrency remarks below) surfaced as ASP.NET's own bare, possibly
+/// body-less default 500, a completely different shape than every deliberate error path here uses.
+/// <see cref="TryRun"/> closes that gap uniformly, the same role <see cref="MemoryEndpoint.TryRun"/>
+/// already plays for that endpoint (narrower there - just <see cref="ArgumentException"/> - because
+/// unsafe filenames are that endpoint's one anticipated failure mode; broader here, matching
+/// <see cref="OperationRegistry.Start"/>'s own top-level catch-all for a long action, because a
+/// migration route's underlying call can fail for reasons this class does not fully control - e.g.
+/// <see cref="Memory.MemoryStore.ImportFromArcforge"/> propagating an exception for one unreadable
+/// source file mid-import; the FULL fix for that skip-and-continue behaviour lives in that method
+/// itself, in <c>Hades.Core/Memory/MemoryStore.cs</c>, outside every file this endpoint owns, but no
+/// caller of THIS route should see an unexplained 500 either way).
+///
+/// <b>At most one import in flight per project.</b> <see cref="ImportMemory"/>'s and
+/// <see cref="ImportTraces"/>' own destination checks ("does this file already exist") are each a
+/// check-then-act pair, not atomic - two callers racing the SAME project can both pass that check
+/// before either has written, and the loser's own file copy then throws, which used to surface as
+/// exactly the bare 500 <see cref="TryRun"/> now heads off. <see cref="TryClaimImportGate"/>/
+/// <see cref="ReleaseImportGate"/> serialise per project instead: a second import for a project
+/// already mid-import gets a clean 409 rather than racing the first one's writes at all.
 /// </summary>
 public static class MigrationEndpoint
 {
@@ -214,36 +249,61 @@ public static class MigrationEndpoint
         var project = projects.Get(productGuid);
         if (project is null) return UnknownProject(productGuid);
 
-        return Results.Json(ToWire(V12Detector.Detect(project.Path)));
+        return TryRun(() => Results.Json(ToWire(V12Detector.Detect(project.Path))));
     }
 
     // --------------------------------------------------------------------------------- import
 
     /// <summary><c>POST /control/migration/{productGuid}/importMemory</c>. No request body: see
-    /// this class's own doc comment for why memory import needs no <c>proceed</c> gate.</summary>
+    /// this class's own doc comment for why memory import needs no <c>proceed</c> gate. 409 when an
+    /// import for this project is already in flight - see this class's own doc comment on
+    /// <see cref="TryClaimImportGate"/>.</summary>
     public static IResult ImportMemory(ProjectService projects, string productGuid)
     {
         var project = projects.Get(productGuid);
         if (project is null) return UnknownProject(productGuid);
 
-        var result = new V12Importer(projects.Paths).ImportMemory(productGuid, project.Path);
-        return Results.Json(new MigrationMemoryImportResult
+        if (!TryClaimImportGate(productGuid)) return ImportAlreadyInProgress(productGuid);
+        try
         {
-            Imported = result.Imported,
-            Skipped = result.Skipped.Select(s => new MigrationMemorySkip { Source = s.Source, Reason = s.Reason }).ToList(),
-        });
+            return TryRun(() =>
+            {
+                var result = new V12Importer(projects.Paths).ImportMemory(productGuid, project.Path);
+                return Results.Json(new MigrationMemoryImportResult
+                {
+                    Imported = result.Imported,
+                    Skipped = result.Skipped.Select(s => new MigrationMemorySkip { Source = s.Source, Reason = s.Reason }).ToList(),
+                });
+            });
+        }
+        finally
+        {
+            ReleaseImportGate(productGuid);
+        }
     }
 
     /// <summary><c>POST /control/migration/{productGuid}/importTraces</c>. No request body - see
     /// <see cref="ImportMemory"/>'s own doc comment; the same reasoning applies (never overwrites,
-    /// so there is nothing to confirm).</summary>
+    /// so there is nothing to confirm; 409 when an import for this project is already in
+    /// flight).</summary>
     public static IResult ImportTraces(ProjectService projects, string productGuid)
     {
         var project = projects.Get(productGuid);
         if (project is null) return UnknownProject(productGuid);
 
-        var result = new V12Importer(projects.Paths).ImportTraces(productGuid, project.Path);
-        return Results.Json(new MigrationTracesImportResult { Imported = result.Imported, SkippedReason = result.SkippedReason });
+        if (!TryClaimImportGate(productGuid)) return ImportAlreadyInProgress(productGuid);
+        try
+        {
+            return TryRun(() =>
+            {
+                var result = new V12Importer(projects.Paths).ImportTraces(productGuid, project.Path);
+                return Results.Json(new MigrationTracesImportResult { Imported = result.Imported, SkippedReason = result.SkippedReason });
+            });
+        }
+        finally
+        {
+            ReleaseImportGate(productGuid);
+        }
     }
 
     // -------------------------------------------------------------------------------- cleanup
@@ -256,14 +316,17 @@ public static class MigrationEndpoint
         var project = projects.Get(productGuid);
         if (project is null) return UnknownProject(productGuid);
 
-        var state = V12Detector.Detect(project.Path).ClaudeMd;
-        var result = V12Cleanup.CleanClaudeMd(project.Path, state, request.Proceed);
-
-        return Results.Json(new MigrationClaudeMdCleanupResult
+        return TryRun(() =>
         {
-            Removed = result.Removed,
-            Message = result.Message,
-            RemainingContentOutsideBlock = result.RemainingContentOutsideBlock,
+            var state = V12Detector.Detect(project.Path).ClaudeMd;
+            var result = V12Cleanup.CleanClaudeMd(project.Path, state, request.Proceed);
+
+            return Results.Json(new MigrationClaudeMdCleanupResult
+            {
+                Removed = result.Removed,
+                Message = result.Message,
+                RemainingContentOutsideBlock = result.RemainingContentOutsideBlock,
+            });
         });
     }
 
@@ -273,13 +336,16 @@ public static class MigrationEndpoint
         var project = projects.Get(productGuid);
         if (project is null) return UnknownProject(productGuid);
 
-        var result = V12Cleanup.CleanManifest(project.Path, request.Proceed);
-        return Results.Json(new MigrationManifestCleanupResult
+        return TryRun(() =>
         {
-            Removed = result.Removed,
-            Message = result.Message,
-            OccurrencesFound = result.OccurrencesFound,
-            PortConflictWarning = result.PortConflictWarning,
+            var result = V12Cleanup.CleanManifest(project.Path, request.Proceed);
+            return Results.Json(new MigrationManifestCleanupResult
+            {
+                Removed = result.Removed,
+                Message = result.Message,
+                OccurrencesFound = result.OccurrencesFound,
+                PortConflictWarning = result.PortConflictWarning,
+            });
         });
     }
 
@@ -289,8 +355,16 @@ public static class MigrationEndpoint
         var project = projects.Get(productGuid);
         if (project is null) return UnknownProject(productGuid);
 
-        var result = V12Cleanup.CleanMcpConfig(project.Path, request.Proceed);
-        return Results.Json(new MigrationMcpConfigCleanupResult { Removed = result.Removed, Message = result.Message });
+        return TryRun(() =>
+        {
+            var result = V12Cleanup.CleanMcpConfig(project.Path, request.Proceed);
+            return Results.Json(new MigrationMcpConfigCleanupResult
+            {
+                Removed = result.Removed,
+                Message = result.Message,
+                OccurrencesFound = result.OccurrencesFound,
+            });
+        });
     }
 
     /// <summary><c>POST /control/migration/claudeDesktopConfig/clean</c> - see this class's own doc
@@ -304,13 +378,16 @@ public static class MigrationEndpoint
     /// real HTTP without any risk to the developer's own Claude Desktop configuration.</param>
     public static IResult CleanClaudeDesktopConfig(MigrationCleanupRequest request, string? configPath = null)
     {
-        var result = V12Cleanup.CleanClaudeDesktopConfig(configPath ?? V12Cleanup.ClaudeDesktopConfigPath, request.Proceed);
-        return Results.Json(new MigrationClaudeDesktopConfigCleanupResult
+        return TryRun(() =>
         {
-            Removed = result.Removed,
-            Message = result.Message,
-            ScopeWarning = result.ScopeWarning,
-            OccurrencesFound = result.OccurrencesFound,
+            var result = V12Cleanup.CleanClaudeDesktopConfig(configPath ?? V12Cleanup.ClaudeDesktopConfigPath, request.Proceed);
+            return Results.Json(new MigrationClaudeDesktopConfigCleanupResult
+            {
+                Removed = result.Removed,
+                Message = result.Message,
+                ScopeWarning = result.ScopeWarning,
+                OccurrencesFound = result.OccurrencesFound,
+            });
         });
     }
 
@@ -325,16 +402,77 @@ public static class MigrationEndpoint
     /// end over real HTTP without any risk to the developer's own <c>~/.arcforge/hades-hub/</c>.</param>
     public static IResult CleanHadesHub(MigrationCleanupRequest request, string? hadesHubDirectory = null)
     {
-        var result = V12Cleanup.CleanHadesHub(hadesHubDirectory ?? V12Cleanup.HadesHubDirectory, request.Proceed);
-        return Results.Json(new MigrationHadesHubCleanupResult
+        return TryRun(() =>
         {
-            Removed = result.Removed,
-            Message = result.Message,
-            Found = result.Found,
+            var result = V12Cleanup.CleanHadesHub(hadesHubDirectory ?? V12Cleanup.HadesHubDirectory, request.Proceed);
+            return Results.Json(new MigrationHadesHubCleanupResult
+            {
+                Removed = result.Removed,
+                Message = result.Message,
+                Found = result.Found,
+            });
         });
     }
 
+    // ------------------------------------------------------------------------- import concurrency
+
+    /// <summary>
+    /// Tracks which projects currently have an import in flight - see this class's own doc comment
+    /// ("at most one import in flight per project") for why. A single gate shared by
+    /// <see cref="ImportMemory"/> and <see cref="ImportTraces"/> rather than one per route: the two
+    /// never touch the same destination file (see <see cref="V12Importer"/>'s own remarks on why
+    /// memory and traces are independent), so sharing the gate is a deliberately conservative
+    /// simplification - at worst a memory import and a traces import for the SAME project cannot run
+    /// concurrently either, which costs nothing real (both are fast, local, one-shot copies) in
+    /// exchange for one gate instead of two to reason about.
+    ///
+    /// <para>Exposed as its own testable primitive (<see cref="TryClaimImportGate"/>/
+    /// <see cref="ReleaseImportGate"/>) rather than folded invisibly into <see cref="ImportMemory"/>/
+    /// <see cref="ImportTraces"/>, so a test can prove the 409 path deterministically - claim the
+    /// gate directly, make the HTTP call, assert 409, release, assert the next call succeeds -
+    /// instead of racing real threads against file copies too fast to reliably overlap.</para>
+    /// </summary>
+    static readonly ConcurrentDictionary<string, byte> ImportsInProgress = new();
+
+    /// <summary>Claims the per-project import gate. True on success - the caller MUST release it via
+    /// <see cref="ReleaseImportGate"/>, in a <c>finally</c> block; false when another import for the
+    /// same project is already in flight.</summary>
+    public static bool TryClaimImportGate(string productGuid) => ImportsInProgress.TryAdd(productGuid, 0);
+
+    /// <summary>Releases the per-project import gate. Safe to call even if the gate was never
+    /// claimed (or was already released) - never throws.</summary>
+    public static void ReleaseImportGate(string productGuid) => ImportsInProgress.TryRemove(productGuid, out _);
+
+    static IResult ImportAlreadyInProgress(string productGuid) =>
+        Results.Json(
+            new { error = $"An import is already running for project '{productGuid}'. Wait for it to finish and try again." },
+            statusCode: StatusCodes.Status409Conflict);
+
     // ------------------------------------------------------------------------------------ helpers
+
+    /// <summary>
+    /// Runs <paramref name="action"/>, turning ANY otherwise-unhandled exception into the same
+    /// resolved <c>{ "error": "..." }</c> JSON shape every other failure path in this class already
+    /// uses (see <see cref="UnknownProject"/>) - never a bare, framework-default, possibly body-less
+    /// 500. See this class's own doc comment ("every route's body runs through TryRun") for why a
+    /// broad <c>catch (Exception)</c> is deliberate here, the same as
+    /// <see cref="OperationRegistry.Start"/>'s own top-level catch for a long-running action: this is
+    /// the outermost boundary of a migration request, so every failure mode collapses to the same
+    /// "report it, do not crash the request" answer, with the triggering exception's own message
+    /// surfaced verbatim - the same "specific and actionable" standard <see cref="OperationRegistry"/>
+    /// already holds itself to.
+    /// </summary>
+    static IResult TryRun(Func<IResult> action)
+    {
+        try
+        {
+            return action();
+        }
+        catch (Exception ex)
+        {
+            return Results.Json(new { error = $"Migration operation failed: {ex.Message}" }, statusCode: StatusCodes.Status500InternalServerError);
+        }
+    }
 
     static IResult UnknownProject(string productGuid) =>
         Results.Json(new { error = $"Unknown project '{productGuid}'." }, statusCode: StatusCodes.Status404NotFound);
@@ -342,6 +480,7 @@ public static class MigrationEndpoint
     static MigrationDetectionResult ToWire(V12DetectionResult r) => new()
     {
         ProjectRoot = r.ProjectRoot,
+        ProjectRootExists = r.ProjectRootExists,
         IsV12Project = r.IsV12Project,
         ManifestEntry = new MigrationManifestEntryInfo
         {

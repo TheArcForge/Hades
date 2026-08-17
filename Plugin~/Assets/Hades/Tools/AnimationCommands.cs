@@ -114,8 +114,7 @@ namespace Hades.Tools
             if (!path.EndsWith(".controller", StringComparison.Ordinal))
                 throw new ArgumentException("Path must end with '.controller'. Got: '" + path + "'.");
 
-            if (AssetDatabase.LoadAssetAtPath<AnimatorController>(path) != null)
-                throw new ArgumentException("AnimatorController already exists at '" + path + "'. Use animation_edit_controller to modify it.");
+            path = AssetPathGuard.RequireNewAssetPath(path, "animation.create_controller", "AnimatorController", "animation_edit_controller");
 
             AssetFolders.EnsureExists(AssetFolders.DirectoryName(path));
 

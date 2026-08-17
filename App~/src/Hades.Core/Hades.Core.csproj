@@ -80,6 +80,9 @@
     <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\ComponentCommands.cs">
       <LogicalName>Hades.Plugin.Tools.ComponentCommands.cs</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\AssetPathGuard.cs">
+      <LogicalName>Hades.Plugin.Tools.AssetPathGuard.cs</LogicalName>
+    </EmbeddedResource>
     <EmbeddedResource Include="..\..\..\Plugin~\Assets\Hades\Tools\MaterialCommands.cs">
       <LogicalName>Hades.Plugin.Tools.MaterialCommands.cs</LogicalName>
     </EmbeddedResource>
