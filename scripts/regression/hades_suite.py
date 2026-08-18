@@ -2,10 +2,13 @@
 """Hades regression suite — executable form of FINDINGS.md.
 
 Adopted from an internal tester's findings bundle into this repo. Round 2 (2026-08-14 bundle: 22
-Part B cases, up from 17). Anchors are re-pointed at Hades-Unity-Client, as in round 1; layered on
-top of the tester's round-2 cases and harness are our own additions carried forward from round 1
-— the --url flag / HADES_URL env var, and HADES_HOME awareness in case A1. See README.md in this
-directory for how to run it and how to read the output.
+Part B cases, up from 17) landed as P1-G7/A1/E1-E11; on top of it we added two of our own F21
+cycle-refusal guards (now E13-E14). Round 3 (2026-08-15 bundle) added one new open finding, F22,
+as E12 — the tester's own numbering, kept authoritative here — and refined E2's setup so it no
+longer overlaps F22 (see E2's docstring). Anchors are re-pointed at Hades-Unity-Client, as in
+round 1; layered on top of the tester's cases and harness are our own additions carried forward
+from round 1 — the --url flag / HADES_URL env var, and HADES_HOME awareness in case A1. See
+README.md in this directory for how to run it and how to read the output.
 
 Two parts:
 
@@ -28,11 +31,15 @@ Every case declares what it should do TODAY:
 Exit code is 0 when every case matched its expectation, 1 otherwise. Read the table, not just the
 exit code.
 
-STATE AS OF THIS ADOPTION (2026-08-15, building on 2.0.0-beta.2): Part B is 24 cases, every one
-declaring expect="pass" — fixed findings held as regression guards (including E7-E13, the
-F16/F19/F20/F21 stress-round cases), plus the pre-existing structural guards E5/E6. F12, F17 and
-F18 are excluded by design — reproducing any of them writes to a tracked scene, wedges the Editor
-on a modal dialog, or dumps 1,000+ files (see README.md).
+STATE AS OF THIS MERGE (2026-08-15, tester's round 3 / 2.0.0-beta.3): Part B is 25 cases. 24
+declare expect="pass" — fixed findings held as regression guards (including E7-E11 and E13-E14,
+the F16/F19/F20/F21 stress-round cases), plus the pre-existing structural guards E5/E6. The 25th,
+E12 (F22, found this round), declares expect="fail": open when the tester shipped it, it flips to
+expect="pass" the moment the fix lands, turning it into a guard like the rest. F17 and F18 are not
+covered by a case, deliberately: F18 dumps 1,000+ files, and F17's fix is confirmed but left
+unautomated because it is upstream of the Editor and a length check is cheap to eyeball. F12 is
+fixed (the scene save was our code, not Unity's, and hit every testMode) and is guarded in the
+plugin EditMode suite instead. See README.md.
 
 Usage:
     python3 hades_suite.py                 # everything (needs a live Unity Editor for D/E cases)
@@ -207,7 +214,7 @@ def c_f5_server_version():
     v = (r.get("serverInfo") or {}).get("version")
     if v and v != "1.0.0.0":
         return True, f"serverInfo.version={v}"
-    return False, f"serverInfo.version={v!r} (expected the product version, e.g. 2.0.0-beta.2)"
+    return False, f"serverInfo.version={v!r} (expected the product version, e.g. 2.0.0)"
 
 
 def c_f6_trace_material():
@@ -343,12 +350,16 @@ def c_f14_new_asset_indexed():
 
 
 def c_f14_move_not_stale():
-    """F14: after a move, the graph must not answer about the old path and deny the new one."""
+    """F14: after a move, the graph must not answer about the old path and deny the new one.
+    Deliberately does NOT call hades_rebuild_graph between create and move — that intervening
+    rebuild is exactly what E12/F22 isolates as its own, separate bug (a one-variable
+    differential against this case). Adding it back here would make this case fail for F22's
+    reason instead of testing what it says it tests."""
     _clean_tmp()
     call("scene_apply", {"operations": [{"op": "create", "name": "RegTmpSrc2"}]})
     call("prefab_apply", {"operations": [
         {"op": "create", "gameObjectPath": "RegTmpSrc2", "prefabPath": f"{TMP}/Before.prefab"}]})
-    call("hades_rebuild_graph", timeout=600)          # ensure Before.prefab IS indexed
+    time.sleep(3)                                     # incremental indexing, no rebuild (see E12)
     call("asset_manage", {"operations": [
         {"op": "move", "sourcePath": f"{TMP}/Before.prefab",
          "destPath": f"{TMP}/After.prefab"}]})
@@ -542,6 +553,36 @@ def c_f21_self_reparent_refused():
     return (refused, "refused" if refused else "accepted a self-parent")
 
 
+def c_f22_move_after_rebuild():
+    """F22: after a full hades_rebuild_graph, a subsequent move must still retire the old path.
+    Without an intervening rebuild the move is handled correctly (that is E2); with one, both the
+    old and the new path keep answering, so the graph holds two paths for one asset. Verified with
+    a one-variable differential and stable at t+40s. Open as of this merge (2026-08-15,
+    2.0.0-beta.3) — expect="fail" until the fix lands, then flips to "pass" to guard it like E2."""
+    _clean_tmp()
+    call("scene_apply", {"operations": [{"op": "create", "name": "F22Src"}]})
+    mk = call("prefab_apply", {"operations": [
+        {"op": "create", "gameObjectPath": "F22Src", "prefabPath": f"{TMP}/Before.prefab"}]})
+    if mk.get("failed"):
+        call("scene_apply", {"operations": [{"op": "delete", "target": "F22Src"}]})
+        return False, f"SETUP FAILED: {json.dumps(mk)[:140]}"
+    time.sleep(2)
+    call("hades_rebuild_graph", timeout=600)
+    call("asset_manage", {"operations": [
+        {"op": "move", "sourcePath": f"{TMP}/Before.prefab",
+         "destPath": f"{TMP}/After.prefab"}]})
+    time.sleep(12)
+    old = call("find_references_to", {"assetPath": f"{TMP}/Before.prefab"})
+    new = call("find_references_to", {"assetPath": f"{TMP}/After.prefab"})
+    call("scene_apply", {"operations": [{"op": "delete", "target": "F22Src"}]})
+    old_gone, new_ok = not_in_graph(old), not not_in_graph(new)
+    if old_gone and new_ok:
+        return True, "old path retired after a rebuild+move"
+    return False, (f"old path {'retired' if old_gone else 'STILL ANSWERS'}, "
+                   f"new path {'resolves' if new_ok else 'not in graph'} "
+                   f"— the graph holds both paths for one asset")
+
+
 def c_f21_scene_duplicate_self_refused():
     """F21-sibling: scene_manage duplicate with sourcePath==destPath must refuse. Unlike
     createVariant's own explicit basePrefabPath==variantPath check (see the createVariant sibling
@@ -644,9 +685,13 @@ CASES = [
      "a repeated create refuses, or distinguishes created from replaced"),
     ("E11", "F21", True, "pass", c_f21_self_reparent_refused,
      "reparenting a GameObject under itself is refused"),
-    ("E12", "F21", True, "pass", c_f21_scene_duplicate_self_refused,
+    # E12 is an open finding as of this merge (2026-08-15): expect="fail" until the fix lands,
+    # then flip it to "pass" — it becomes a regression guard like every other case here.
+    ("E12", "F22", True, "fail", c_f22_move_after_rebuild,
+     "after a rebuild, a move still retires the old path (without a rebuild it does — see E2)"),
+    ("E13", "F21", True, "pass", c_f21_scene_duplicate_self_refused,
      "scene_manage duplicate with sourcePath==destPath is refused, not silently self-overwritten"),
-    ("E13", "F21", True, "pass", c_f21_prefab_createvariant_self_refused,
+    ("E14", "F21", True, "pass", c_f21_prefab_createvariant_self_refused,
      "prefab_apply createVariant with basePrefabPath==variantPath is refused, base left byte-identical"),
 ]
 

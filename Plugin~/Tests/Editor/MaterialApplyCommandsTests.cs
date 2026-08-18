@@ -206,6 +206,18 @@ namespace Hades.Tests.Editor
                 Assert.AreEqual(1, failed.Items.Count);
                 Assert.AreEqual(1L, failed.Items[0].TryGetProperty("index", out var idx) ? idx!.AsInteger() : -1);
                 StringAssert.Contains("_NoSuchProperty", Str(failed.Items[0], "error"));
+
+                // The unified partial-batch shape: 'results' carries an entry for every APPLIED op
+                // (by the same index 'applied' reports), never for the failed one - a caller can
+                // learn which operations landed, which did not, and why from ONE response.
+                var results = ResultsItems(result);
+                Assert.AreEqual(2, results.Items.Count);
+                Assert.AreEqual(0L, results.Items[0].TryGetProperty("index", out var rIdx0) ? rIdx0!.AsInteger() : -1);
+                Assert.AreEqual("create", Str(results.Items[0], "op"));
+                Assert.AreEqual(2L, results.Items[1].TryGetProperty("index", out var rIdx1) ? rIdx1!.AsInteger() : -1);
+                Assert.AreEqual("duplicate", Str(results.Items[1], "op"));
+                Assert.IsTrue(results.Items[0].TryGetProperty("result", out var r0) && r0 != null,
+                    "each results entry must carry the op's own result payload, not just index/op");
             }
         }
 

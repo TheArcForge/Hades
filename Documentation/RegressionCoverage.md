@@ -12,18 +12,18 @@ not fixed; the decision is the artifact (location given). No issue below is unma
 ## How to verify everything
 
 ```
-# .NET unit + integration (Contract 99, Cli 10, Core 861, Server 844)
+# .NET unit + integration (Contract, Cli, Core, Server suites; ~1863 total)
 cd App~ && HADES_HOME=$(mktemp -d) dotnet test
 
-# Swift shell packages (HadesControl 70, HadesSupervision 13, HadesApp 208)
+# Swift shell packages (HadesControl 70, HadesSupervision 14, HadesApp 211)
 cd Shell~/HadesControl && swift test
 cd Shell~/HadesSupervision && swift test
 cd Shell~/HadesApp && swift test
 
-# Unity plugin EditMode suite (371 tests) in a throwaway batchmode project
+# Unity plugin EditMode suite (384 tests) in a throwaway batchmode project
 scripts/regression/run-plugin-editmode.sh
 
-# End-to-end tester suite (24 cases; editor-dependent cases need an attached Editor)
+# End-to-end tester suite (25 cases; editor-dependent cases need an attached Editor)
 python3 scripts/regression/hades_suite.py --url http://127.0.0.1:7823/mcp
 ```
 
@@ -46,7 +46,7 @@ predate every round below and pin none of these issues exclusively.
 | F9 | Persisted project record froze UnityVersion/LastSeen | `ProjectServiceTests.RecordEditorAttached_*` (3), `EditorListenerTests.ValidHello_*` (2) | A1 | COVERED |
 | F10 | Tag creation never flushed to disk | Plugin `ProjectSettingsApplyCommandsTests.CreateTag_FlushesTagManagerToDisk…`, `DeleteTag_…` | E3 | COVERED |
 | F11 | Directory path produced the misleading "no longer on disk" error | `ReadThroughTests`, `ReferenceReadingTests`, `InspectToolTests` `…DirectoryError…` trio | — | COVERED |
-| F12 | PlayMode tests silently save open scenes | `EditorProjectToolsTests.ProjectRunTests_DescriptionDisclosesBothEditModeReloadAndPlayModeSceneSave` | excluded (destructive) | DISPOSITIONED (inherent Unity behavior; disclosure pinned) |
+| F12 | `project_run_tests` silently saved open scenes | Plugin `ProjectCommandsTests.RunTests_{EditMode,PlayMode}_NeverSavesDirtyOpenScene` (2), `EditorProjectToolsTests.ProjectRunTests_DescriptionDisclosesEditModeReloadAndDeniesSceneSave` | — | COVERED (fixed: the save was ours, not Unity's, and ran for EditMode too) |
 | F13 | Unknown parameters silently dropped → unfiltered results that looked filtered | `ToolCallTests.UnknownParameter_*` (5) | G7 | COVERED |
 | F14 | Asset mutations never re-indexed (stale/denied answers) | `ObservationServiceTests.*` (6), `IncrementalIndexTests.*`, `BinaryAssetIndexerTests.RenamingAFileMovesItsNode…` | E1, E2 | COVERED |
 | F15 | Regression recorder captured only Editor-routed calls | `EditorProjectToolsTests.HadesRegression_*` (4) | — | COVERED |
@@ -60,7 +60,7 @@ predate every round below and pin none of these issues exclusively.
 | F18 | Interrupted batch: partial writes unreported, execution continued after "failed" | Timeout honesty pinned: `EditorProxyTests.CommandTimesOut_MessageIsHonest…`, `…ReportsHowManyWereInFlight`; a partial-progress store was deliberately not built (design note) | excluded | DISPOSITIONED |
 | F19 | Forward trace ignored prefab-nesting edges the reverse query saw | `RelationshipQueryTests.TraceDependencies_WalksAnInstanceOfEdge…` family (5), `PrefabInstanceIndexingTests.TraceDependenciesWalksForwardThroughAnIndexedNestedPrefab` | E9 | COVERED |
 | F20 | Repeated create silently replaced the existing file | Plugin `*_ExistingFile_Refused_*` / `*_ExistingDestFile_Refused*` set, `CreateController_AlreadyExists_ThrowsActionableError` | E10 | COVERED |
-| F21 | Cycle-shaped inputs accepted (reparent under self/descendant; scene onto itself; variant base==target destroyed the base) | Plugin `SceneCommandsTests.ReparentGameObject_UnderItself/_UnderOwnDescendant_Refused`, `SceneManagementCommandsTests.DuplicateScene_OntoItself_Refused`, `PrefabCommandsTests.CreateVariant_BaseEqualsVariant_Refused…` | E11, **E12, E13** | COVERED |
+| F21 | Cycle-shaped inputs accepted (reparent under self/descendant; scene onto itself; variant base==target destroyed the base) | Plugin `SceneCommandsTests.ReparentGameObject_UnderItself/_UnderOwnDescendant_Refused`, `SceneManagementCommandsTests.DuplicateScene_OntoItself_Refused`, `PrefabCommandsTests.CreateVariant_BaseEqualsVariant_Refused…` | E11, **E13, E14** | COVERED |
 
 ## Committed hardening rounds (pre-round-1 sweep through pre-DMG)
 
@@ -168,9 +168,23 @@ Round-3 residuals (no code change; recorded for a future decision):
 - **F18 partial-progress store** — design note; timeout honesty pinned instead.
 - **F3 residual** — v1.2 cleanup does not touch the global plugin-enable list or plugin cache (backlog).
 
-## e2e suite case map (`scripts/regression/hades_suite.py`, 24 cases)
+## Tester feedback, round 3 — final round (F22, F23)
+
+The tester's round-3 bundle closed all six round-2 findings and opened two new ones. Their suite is
+the authoritative copy; ours is now reconciled with it (25 cases, no ID collisions).
+
+| ID | Issue | Pinning tests | Suite | Status |
+|---|---|---|---|---|
+| F22 | After a full rebuild, a move left the old path resolvable. Root cause was broader than the symptom: `DeleteNodesForPath` cleared nodes + edges + **file_state**, and 7 per-file re-indexing call sites reused it merely to clear old nodes — so every second-or-later full rebuild silently emptied `file_state` project-wide, after which no sweep could ever detect a deletion again. Split into `DeleteNodesAndEdgesForPath` (re-indexing) vs `DeleteNodesForPath` (genuine deletion). | `ProjectServiceTests.MovingAReferencedPrefab_RetiresTheOldPathAndPreservesItsInboundReference` (Theory: with/without intermediate rebuild), `…PureIncrementalHistory_NeverRebuilt_…`, `IncrementalAndRebuildBasedMoves_AgreeOnTheSurvivingReferenceCount`, `GraphDatabaseTests.DeleteNodesForPath_AlsoRemovesTheFilesFileStateRow`, `…DeleteNodesAndEdgesForPath_…LeavesFileStateUntouched` | E12 (flips to guard) | COVERED |
+| F22-B | Tester also observed the incremental route reporting 0 inbound references where the rebuild route reported 2. | Investigated with a strict Unity-free construction (`Adopt` + `SyncChanges` only); **did not reproduce** — the incremental path preserves the count. Recorded as evidenced non-reproduction, not disproof; likely live-Editor save/FSEvents timing. | — | NOT REPRODUCED |
+| F23 | The recommended install path pointed at a marketplace still serving the retired v1.2 plugin, and three docs disagreed about whether it existed. | Docs reconciled to one story (local `--plugin-dir` today, marketplace explicitly warned as not-yet-republished); in-app onboarding screen corrected. No automated pin — this is packaging/documentation. | — | FIXED (doc/packaging) |
+| Undo | Release blocker: "batch is one undo group" was claimed by every mutation tool and never verified. | `CommandTableUndoGroupingTests.SceneApplyBatch_ThreeGameObjects_OnePerformUndo_ZeroOfThreeSurvive`, `TwoConsecutiveSceneApplyBatches_OnePerformUndo_OnlySecondBatchReverts` (control), `MaterialApplyBatch_CreatesAndPropertySet_OnePerformUndo_WholeBatchReverted`, plus the pre-existing `Apply_RegistersUndoAsOneGroup_…` test per family | — | **CONFIRMED** for scene/material/animation/prefab apply. `asset_manage`, `scene_manage`, `project_settings_apply` disclaim the property in their own docs and are correctly out of scope. |
+
+## e2e suite case map (`scripts/regression/hades_suite.py`, 25 cases)
 
 P1–P3 transport/handshake (F1, F5) · A1 project record (F9) · B-series read/query guards ·
 G1–G7 graph guards (F6, F7, F13) · E1–E3 live-editor index/settings (F14, F10) · E4 prefab
 nesting (F8) · E5/E6 identity guards · E7/E8 path safety (F16) · E9 nesting trace (F19) ·
-E10 create refusal (F20) · E11–E13 cycle refusals (F21).
+E10 create refusal (F20) · E11, E13, E14 cycle refusals (F21) · **E12 move-after-rebuild (F22)** —
+the one case declared `expect="fail"` when the tester shipped it; it flips to a guard now that F22
+is fixed, and E2 (move without an intervening rebuild) is its control.

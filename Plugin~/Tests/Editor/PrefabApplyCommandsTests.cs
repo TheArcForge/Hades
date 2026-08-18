@@ -262,6 +262,52 @@ namespace Hades.Tests.Editor
                 Assert.AreEqual("instantiate", Str(failed.Items[0], "op"));
                 StringAssert.Contains("Ghost.prefab", Str(failed.Items[0], "error"));
 
+                // The unified partial-batch shape: 'results' carries an entry for every APPLIED op
+                // (by the same index 'applied' reports), never for the failed one - a caller can
+                // learn which operations landed, which did not, and why from ONE response.
+                var results = ResultsItems(result);
+                Assert.AreEqual(2, results.Items.Count);
+                Assert.AreEqual(0L, results.Items[0].TryGetProperty("index", out var rIdx0) ? rIdx0!.AsInteger() : -1);
+                Assert.AreEqual("create", Str(results.Items[0], "op"));
+                Assert.AreEqual(2L, results.Items[1].TryGetProperty("index", out var rIdx1) ? rIdx1!.AsInteger() : -1);
+                Assert.AreEqual("createVariant", Str(results.Items[1], "op"));
+                Assert.IsTrue(results.Items[0].TryGetProperty("result", out var r0) && r0 != null,
+                    "each results entry must carry the op's own result payload, not just index/op");
+
+                AssertExactlyOneLeaseWindow(fake, gate);
+            }
+        }
+
+        // ---------------------------------------------------------------- createVariant op - self-reference guard (F21)
+
+        /// <summary>Uneven-validation audit: pins that prefab_apply's 'createVariant' op inherits
+        /// PrefabCommands.DoCreateVariant's own base==variant refusal (F21) by DELEGATING to it (see
+        /// PrefabApplyCommands.DispatchOne) rather than reimplementing variant creation - already
+        /// closed by construction, but until this test existed nothing pinned it AT the batch-tool
+        /// layer, only PrefabCommandsTests did, one level down.</summary>
+        [Test]
+        public void CreateVariantOp_BaseEqualsVariant_RecordedAsOperationFailure_BasePrefabUntouched()
+        {
+            var source = new GameObject("SelfVariantSource");
+            var assetPath = ScratchDir + "/SelfVariant.prefab";
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var result = CommandTable.Dispatch(gate, Request("prefab.apply", Params(
+                    Op("create", ("gameObjectPath", JsonValue.String("SelfVariantSource")), ("assetPath", JsonValue.String(assetPath))),
+                    Op("createVariant", ("basePrefabPath", JsonValue.String(assetPath)), ("variantPath", JsonValue.String(assetPath))))));
+
+                CollectionAssert.AreEqual(new[] { 0 }, AppliedIndices(result));
+                var failed = FailedItems(result);
+                Assert.AreEqual(1, failed.Items.Count);
+                Assert.AreEqual("createVariant", Str(failed.Items[0], "op"));
+                StringAssert.Contains("must differ", Str(failed.Items[0], "error"));
+
+                // The base prefab created by op 0 must survive untouched - not overwritten by the
+                // refused self-variant attempt.
+                Assert.IsNotNull(AssetDatabase.LoadAssetAtPath<GameObject>(assetPath));
+
                 AssertExactlyOneLeaseWindow(fake, gate);
             }
         }

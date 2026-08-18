@@ -327,6 +327,75 @@ namespace Hades.Tests.Editor
             }
         }
 
+        // ---------------------------------------------------------------- reparent op - cycle guard (F21)
+
+        /// <summary>Uneven-validation audit: pins that scene_apply's 'reparent' op inherits
+        /// SceneCommands.ReparentGameObject's own self/descendant cycle guard (F21) by DELEGATING to
+        /// it (see SceneApplyCommands.DoReparent) rather than reimplementing reparent logic - this is
+        /// the exact scenario the external tester's release-blocker report described ("scene_apply
+        /// accepted a self-parent"), already closed by construction, but until this test existed
+        /// nothing in this file pinned it AT the batch-tool layer - only SceneCommandsTests did, one
+        /// level down, against scene.reparent_gameobject directly.</summary>
+        [Test]
+        public void ReparentOp_UnderItself_RecordedAsOperationFailure_NotSilentlyAccepted()
+        {
+            var go = new GameObject("SelfParent");
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var result = CommandTable.Dispatch(gate, Request("scene.apply", Params(
+                    Op("reparent", ("target", JsonValue.String("SelfParent")), ("newParent", JsonValue.String("SelfParent"))))));
+
+                Assert.AreEqual(0, AppliedIndices(result).Length);
+                var failed = FailedItems(result);
+                Assert.AreEqual(1, failed.Items.Count);
+                StringAssert.Contains("SelfParent", Str(failed.Items[0], "error"));
+                Assert.IsNull(go.transform.parent);
+
+                AssertNeverTouchedLease(fake, gate);
+            }
+        }
+
+        // ---------------------------------------------------------------- 'results': deliberately NOT added yet
+
+        /// <summary>Pins a DELIBERATE non-convergence, not an overlooked one - see
+        /// Documentation/MutationToolValidation.md gap #4. scene.apply is the only one of the seven
+        /// apply/manage batch families that still has no 'results' array alongside 'applied'/
+        /// 'failed'/'summary': material.apply/animation.apply/prefab.apply/asset.manage/scene.manage/
+        /// projectSettings.apply all echo each successful operation's own result payload in 'results'
+        /// (index/op/result - see e.g. MaterialApplyCommandsTests' own ResultsItems-based
+        /// assertions), and scene.apply does not.
+        ///
+        /// Investigated and left this way rather than converged: scripts/regression/fixtures/
+        /// editor-routed.json has four already-recorded scene.apply replay entries whose 'expected'
+        /// value has exactly three top-level members (applied/failed/summary). hades_regression's
+        /// legacy replay path (ProjectCommands.RegressionReplay, Plugin~) compares the actual
+        /// dispatch result against that recorded 'expected' with ProjectCommands.JsonValueEquals,
+        /// whose Object case starts "if (a.Members.Count != b.Members.Count) return false" - an
+        /// EXACT member-count match, not a subset/tolerant one. Adding a 'results' member here would
+        /// make every one of those four recorded entries stop matching on replay: all four have at
+        /// least one applied op, so all four would gain a non-empty 'results' array and a member
+        /// count of 4 where the recorded 'expected' has 3. Fixing the comparator to tolerate
+        /// additive members, or re-recording the fixture with the new shape, both require editing
+        /// ProjectCommands.cs and/or scripts/regression/fixtures/editor-routed.json - files outside
+        /// this task's ownership boundary (a sibling owns ProjectCommands.cs/EditorProjectTools.cs;
+        /// scripts/ is off-limits entirely). This test exists so a future change that adds 'results'
+        /// here is a deliberate, coordinated one (paired with that fixture/comparator work), not an
+        /// accidental extra key that silently breaks fixture replay.</summary>
+        [Test]
+        public void Apply_ResponseHasNoResultsKey_DeliberatelyUnconvergedPendingFixtureCoordination()
+        {
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var result = CommandTable.Dispatch(gate, Request("scene.apply", Params(
+                Op("create", ("name", JsonValue.String("ResultsKeyCheck"))))));
+
+            Assert.IsFalse(result.TryGetProperty("results", out _),
+                "scene.apply intentionally has no 'results' key yet - see this test's own doc comment for why");
+        }
+
         /// <summary>Listener-method host for the addListener/removeListener ops - needs at least one
         /// public void, zero-arg method a persistent UnityEvent call can bind to. Deliberately a
         /// second, private copy rather than promoting ComponentCommandsTests' own identical

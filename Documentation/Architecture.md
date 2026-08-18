@@ -14,8 +14,8 @@ and the shipped code disagree, that is called out explicitly rather than smoothe
 project corrects itself in writing (see the "Corrected 2026-08-0x" notes throughout the specs
 themselves), and this document follows that habit.
 
-Current version: `0.1.0` (`Shell~/HadesApp/scripts/build-app.sh`'s `Info.plist`). Pre-1.0, moving
-fast. Treat anything here as "true when written," not "true forever."
+Current version: `2.0.0` (`Shell~/HadesApp/scripts/build-app.sh`'s `Info.plist`). Treat
+anything here as "true when written," not "true forever."
 
 ---
 

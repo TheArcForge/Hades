@@ -351,6 +351,57 @@ namespace Hades.Tests.Editor
             }
         }
 
+        [Test]
+        public void RunTests_EditMode_NeverSavesDirtyOpenScene()
+        {
+            AssertRunTestsNeverSavesDirtyScene("EditMode");
+        }
+
+        [Test]
+        public void RunTests_PlayMode_NeverSavesDirtyOpenScene()
+        {
+            AssertRunTestsNeverSavesDirtyScene("PlayMode");
+        }
+
+        /// <summary>F12: project.run_tests used to call a private SaveDirtyScenesWithPath() helper
+        /// here, UNCONDITIONALLY for every testMode, before starting the run - see RunTests' own
+        /// doc comment (Tools/ProjectCommands.cs) for why that call is gone now rather than merely
+        /// disclosed: its premise (domain reload discards unsaved scene changes) does not hold, so
+        /// the save was never protecting anything - only an unrequested write to a tracked file.
+        /// Both EditMode and PlayMode are pinned explicitly (via the two callers above) because the
+        /// ORIGINAL bug - and its own disclosure, before this fix - named PlayMode only, even though
+        /// the unconditional call ran identically for EditMode.</summary>
+        static void AssertRunTestsNeverSavesDirtyScene(string testMode)
+        {
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                // MarkSceneDirty, not "new GameObject(...) and assume it dirties synchronously" -
+                // Unity's own change-tracking that would otherwise flip isDirty runs deferred (off
+                // this same call frame), so an immediate read right after creating an object is not
+                // reliable here. MarkSceneDirty sets the bit directly and synchronously instead.
+                var scene = EditorSceneManager.GetSceneAt(0);
+                EditorSceneManager.MarkSceneDirty(scene);
+                Assert.IsTrue(EditorSceneManager.GetSceneAt(0).isDirty, "fixture must start dirty for this test to prove anything");
+
+                var original = ProjectCommands.StartTestRun;
+                ProjectCommands.StartTestRun = (runId, mode, filter) => (true, null);
+                try
+                {
+                    var @params = JsonValue.NewObject().SetProperty("testMode", JsonValue.String(testMode));
+                    CommandTable.Dispatch(gate, Request("project.run_tests", @params));
+                }
+                finally
+                {
+                    ProjectCommands.StartTestRun = original;
+                }
+
+                Assert.IsTrue(EditorSceneManager.GetSceneAt(0).isDirty,
+                    "project.run_tests must never silently save the open scene - F12");
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
         // ---------------------------------------------------------------- project.run_tests <-> project.get_test_results reconciliation
 
         [Test]

@@ -4,10 +4,10 @@
 
 Only the latest release is supported with security updates.
 
-| Version | Supported |
-|---------|-----------|
-| 0.9.x   | Yes       |
-| < 0.9   | No        |
+| Version     | Supported |
+|-------------|-----------|
+| 2.0.0       | Yes       |
+| Earlier     | No        |
 
 ## Reporting a Vulnerability
 
@@ -22,7 +22,7 @@ Only the latest release is supported with security updates.
 
 ### What qualifies
 
-- Vulnerabilities in the MCP server, Hub, Launcher, or Scanner
+- Vulnerabilities in the .NET core, the app, or the control API
 - Path traversal or unauthorized file access via MCP tools
 - Credential or sensitive data exposure
 - Process injection or code execution via crafted tool inputs
@@ -35,4 +35,4 @@ Only the latest release is supported with security updates.
 
 ## Architecture Note
 
-Hades runs entirely locally. All MCP communication is over localhost (`127.0.0.1`). There are no cloud services, no telemetry, and no remote connections. The Hub binds to localhost only and is not accessible from other machines.
+Hades runs entirely locally. All MCP communication is over localhost (`127.0.0.1`). There are no cloud services, no telemetry, and no remote connections. The app's MCP server binds to `127.0.0.1:7823` (localhost only) and is not accessible from other machines.

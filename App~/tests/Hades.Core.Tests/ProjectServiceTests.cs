@@ -520,6 +520,167 @@ public class ProjectServiceTests : IDisposable
         Assert.Contains(sweep!.Warnings, w => w.Contains("Assets/Poison.prefab"));
     }
 
+    // ---------------------------------------------------------------- F22: a move surviving a rebuild
+    //
+    // External-tester finding: create a prefab that a scene genuinely references, run
+    // hades_rebuild_graph (a full Reindex), then move the prefab on disk (same GUID — Unity's own
+    // contract for a rename/move) and let the incremental path (SyncChanges) pick it up. Two
+    // symptoms were reported against find_references_to: (A) the OLD path keeps answering after
+    // the move, even though nothing on disk owns it any more, and (B) — in a control run that
+    // never called RebuildGraph at all — the incremental path was seen to drop the moved asset's
+    // inbound reference entirely (a confident zero, the same class of defect F6/F14 were about).
+    // Both are proven or disproven here against a REAL referencing edge (a PrefabInstance's own
+    // instance_of link — see PrefabInstanceIndexingTests' identical WriteSceneWithInstance idiom),
+    // never a bare node count, because a node count alone cannot distinguish "the reference
+    // survived the move" from "the reference never existed".
+
+    const string MovablePrefabGuid = "11112222333344445555666677778888";
+    const string ReferencingSceneGuid = "99998888777766665555444433332222";
+
+    /// <summary>A prefab at Assets/Before.prefab plus a scene that genuinely references it (one
+    /// PrefabInstance -&gt; instance_of edge) — the fixture every test below moves and re-syncs.
+    /// Takes an explicit <paramref name="projectRoot"/> rather than closing over the instance
+    /// field so <see cref="IncrementalAndRebuildBasedMoves_AgreeOnTheSurvivingReferenceCount"/>
+    /// can build two independent copies side by side.</summary>
+    static void WriteMovableReferencedPrefab(string projectRoot)
+    {
+        void WriteAsset(string relativePath, string body, string guid)
+        {
+            var full = Path.Combine(projectRoot, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            File.WriteAllText(full, PoisonPrefabHeader + body);
+            File.WriteAllText(full + ".meta", $"fileFormatVersion: 2\nguid: {guid}\n");
+        }
+
+        WriteAsset("Assets/Before.prefab", "--- !u!1 &111\nGameObject:\n  m_Name: Piece\n", MovablePrefabGuid);
+        WriteAsset("Assets/Main.unity", $$"""
+            --- !u!1001 &100
+            PrefabInstance:
+              serializedVersion: 2
+              m_Modification:
+                m_TransformParent: {fileID: 0}
+                m_Modifications: []
+                m_RemovedComponents: []
+              m_SourcePrefab: {fileID: 100100000, guid: {{MovablePrefabGuid}}, type: 3}
+            """, ReferencingSceneGuid);
+    }
+
+    /// <summary>Renames both halves of an asset — content and .meta — exactly as Unity's own
+    /// move/rename does: the GUID inside the .meta is untouched, only the file names change.</summary>
+    static void MoveAsset(string projectRoot, string fromRelativePath, string toRelativePath)
+    {
+        File.Move(Path.Combine(projectRoot, fromRelativePath), Path.Combine(projectRoot, toRelativePath));
+        File.Move(Path.Combine(projectRoot, fromRelativePath + ".meta"), Path.Combine(projectRoot, toRelativePath + ".meta"));
+    }
+
+    [Theory]
+    [InlineData(true)]  // the tester's headline repro: hades_rebuild_graph runs between creation and the move
+    [InlineData(false)] // the tester's own control: no intervening rebuild, incremental only throughout
+    public void MovingAReferencedPrefab_RetiresTheOldPathAndPreservesItsInboundReference(bool intermediateRebuild)
+    {
+        MakeUnityProject();
+        WriteMovableReferencedPrefab(_projectRoot);
+        var service = NewService();
+        var project = service.AdoptAndIndex(_projectRoot)!;
+
+        var before = service.FindReferencesTo(project.ProductGuid, "Assets/Before.prefab");
+        Assert.NotNull(before);
+        Assert.True(before!.TotalReferences > 0,
+            "fixture sanity: the scene must genuinely reference the prefab before anything moves");
+
+        if (intermediateRebuild) Assert.NotNull(service.RebuildGraph(project.ProductGuid));
+
+        MoveAsset(_projectRoot, "Assets/Before.prefab", "Assets/After.prefab");
+        Assert.NotNull(service.SyncChanges(project.ProductGuid));
+
+        // (A) nothing on disk owns "Before.prefab" any more — it must stop resolving.
+        Assert.Null(service.FindReferencesTo(project.ProductGuid, "Assets/Before.prefab"));
+
+        // (B) the reference the scene held must survive onto the NEW path, unchanged in count.
+        var after = service.FindReferencesTo(project.ProductGuid, "Assets/After.prefab");
+        Assert.NotNull(after);
+        Assert.Equal(before.TotalReferences, after!.TotalReferences);
+        Assert.Equal("Assets/Main.unity", Assert.Single(after.Files).Path);
+    }
+
+    [Fact]
+    public void MovingAReferencedPrefab_PureIncrementalHistory_NeverRebuilt_PreservesTheInboundReference()
+    {
+        // The most literal reading of the tester's "WITHOUT the rebuild" control case: Reindex —
+        // whether via AdoptAndIndex or RebuildGraph — never runs even ONCE. Every bit of graph
+        // state, from the prefab and scene's own creation through the move, arrives only via
+        // SyncChanges, exactly as a project that only ever has a live watcher/periodic sweep would
+        // build it. (B) — "the incremental path drops the referencing edge on a move, reporting a
+        // confident zero" — does not depend on any prior Reindex to test, so this is the strictest
+        // version of that claim available in this harness.
+        Directory.CreateDirectory(Path.Combine(_projectRoot, "ProjectSettings"));
+        File.WriteAllText(Path.Combine(_projectRoot, "ProjectSettings", "ProjectSettings.asset"),
+            "  productGUID: aaaabbbbccccddddeeeeffff00001111\n");
+        var service = NewService();
+        var project = service.Adopt(_projectRoot)!; // registers only — Reindex never runs
+
+        WriteMovableReferencedPrefab(_projectRoot);
+        Assert.NotNull(service.SyncChanges(project.ProductGuid)); // first-ever index, incremental
+
+        var before = service.FindReferencesTo(project.ProductGuid, "Assets/Before.prefab");
+        Assert.NotNull(before);
+        Assert.True(before!.TotalReferences > 0,
+            "fixture sanity: the scene must genuinely reference the prefab before anything moves");
+
+        MoveAsset(_projectRoot, "Assets/Before.prefab", "Assets/After.prefab");
+        Assert.NotNull(service.SyncChanges(project.ProductGuid));
+
+        Assert.Null(service.FindReferencesTo(project.ProductGuid, "Assets/Before.prefab"));
+
+        var after = service.FindReferencesTo(project.ProductGuid, "Assets/After.prefab");
+        Assert.NotNull(after);
+        Assert.Equal(before.TotalReferences, after!.TotalReferences);
+    }
+
+    [Fact]
+    public void IncrementalAndRebuildBasedMoves_AgreeOnTheSurvivingReferenceCount()
+    {
+        // The tester's own framing of the bug: "the reference counts differ between the two
+        // routes (0 vs 2)" is itself the defect, independent of which absolute number is
+        // "correct". Two fully independent copies of the same fixture — one routed through an
+        // intermediate RebuildGraph, one not — must still agree once both have synced past the
+        // move.
+        static int? RunRoute(bool intermediateRebuild)
+        {
+            var appRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            var projectRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            try
+            {
+                Directory.CreateDirectory(Path.Combine(projectRoot, "ProjectSettings"));
+                File.WriteAllText(Path.Combine(projectRoot, "ProjectSettings", "ProjectSettings.asset"),
+                    "  productGUID: aaaabbbbccccddddeeeeffff00001111\n");
+                WriteMovableReferencedPrefab(projectRoot);
+
+                var service = new ProjectService(new AppPaths(appRoot));
+                var project = service.AdoptAndIndex(projectRoot)!;
+
+                if (intermediateRebuild) service.RebuildGraph(project.ProductGuid);
+
+                MoveAsset(projectRoot, "Assets/Before.prefab", "Assets/After.prefab");
+                service.SyncChanges(project.ProductGuid);
+
+                return service.FindReferencesTo(project.ProductGuid, "Assets/After.prefab")?.TotalReferences;
+            }
+            finally
+            {
+                if (Directory.Exists(appRoot)) Directory.Delete(appRoot, recursive: true);
+                if (Directory.Exists(projectRoot)) Directory.Delete(projectRoot, recursive: true);
+            }
+        }
+
+        var withRebuild = RunRoute(intermediateRebuild: true);
+        var withoutRebuild = RunRoute(intermediateRebuild: false);
+
+        Assert.NotNull(withRebuild);
+        Assert.NotNull(withoutRebuild);
+        Assert.Equal(withoutRebuild, withRebuild);
+    }
+
     public void Dispose()
     {
         foreach (var dir in new[] { _appRoot, _projectRoot }.Concat(_adoptedProjectRoots))

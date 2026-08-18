@@ -153,11 +153,13 @@ public static class AssetIndexer
         // friends as binary regardless. I3: this path must not just skip quietly when the file
         // WAS previously a parseable asset — its old nodes have to go too, or a file rewritten
         // into something Hades can no longer understand keeps answering confidently from stale
-        // content forever. DeleteNodesForPath is a no-op for a path with nothing recorded, so
-        // this costs nothing extra for the ordinary "never was Unity YAML" case.
+        // content forever. DeleteNodesAndEdgesForPath (F22: never the file-state-clearing
+        // DeleteNodesForPath — this file still exists, it is simply unparseable) is a no-op for a
+        // path with nothing recorded, so this costs nothing extra for the ordinary "never was
+        // Unity YAML" case.
         if (!UnityYamlPreprocessor.LooksLikeUnityYaml(content))
         {
-            database.DeleteNodesForPath(relativePath);
+            database.DeleteNodesAndEdgesForPath(relativePath);
             return 0;
         }
 
@@ -171,7 +173,7 @@ public static class AssetIndexer
             // I1: the caller (IndexFiles/IndexProject) turns this into a per-file warning and
             // moves on to the next file. I3: same "gone, not stale" treatment as above — a file
             // Hades cannot parse must not keep answering from whatever it parsed last time.
-            database.DeleteNodesForPath(relativePath);
+            database.DeleteNodesAndEdgesForPath(relativePath);
             throw;
         }
 
@@ -179,7 +181,7 @@ public static class AssetIndexer
         {
             // Genuinely nothing recognizable in an otherwise YAML-shaped file — same I3 reasoning
             // as both branches above.
-            database.DeleteNodesForPath(relativePath);
+            database.DeleteNodesAndEdgesForPath(relativePath);
             return 0;
         }
 
@@ -266,9 +268,11 @@ public static class AssetIndexer
         }
 
         // Delete-then-insert per file, exactly as ScriptIndexer does: a component or reference
-        // removed from an asset must disappear rather than linger. DeleteNodesForPath drops this
-        // path's edges in the same transaction.
-        database.DeleteNodesForPath(relativePath);
+        // removed from an asset must disappear rather than linger. DeleteNodesAndEdgesForPath
+        // drops this path's edges in the same transaction — F22: never the file-state-clearing
+        // DeleteNodesForPath, which is reserved for a path a sweep has confirmed gone from disk,
+        // not one simply being re-indexed here (see that method's own doc comment).
+        database.DeleteNodesAndEdgesForPath(relativePath);
         database.UpsertNodes(nodes);
         database.UpsertEdges(edges);
 

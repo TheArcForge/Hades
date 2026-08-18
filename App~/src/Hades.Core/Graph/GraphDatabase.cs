@@ -107,22 +107,75 @@ public sealed class GraphDatabase : IDisposable
     }
 
     /// <summary>
-    /// Removes a file's nodes AND its outgoing edges, in one transaction. Edges must go with the
-    /// nodes: a reference deleted from an asset has to disappear from the graph, and leaving
-    /// edges behind would accumulate stale relationships exactly as orphaned nodes did before
-    /// the sweep existed.
+    /// Removes a file's nodes, its outgoing edges, AND its file_state row, all in one transaction
+    /// — the full retirement of a path Hades believes no longer exists on disk. Edges must go
+    /// with the nodes: a reference deleted from an asset has to disappear from the graph, and
+    /// leaving edges behind would accumulate stale relationships exactly as orphaned nodes did
+    /// before the sweep existed. State must die with the nodes too: left behind, a file deleted
+    /// and later re-added would still match its old record and never be reindexed.
+    ///
+    /// Reserved for a path a sweep has CONFIRMED deleted — <see
+    /// cref="Observation.ProjectSweeper.Sweep"/>'s own <c>Deleted</c> list, consumed by <see
+    /// cref="ProjectService.Reindex"/>'s I8 loop and <see cref="ProjectService.SyncChanges"/>'s
+    /// own deletion loop — never for a file that is simply being RE-indexed. <see
+    /// cref="DeleteNodesAndEdgesForPath"/> is what every per-file indexer call uses instead; see
+    /// its own doc comment (F22) for why conflating the two silently emptied file_state on every
+    /// repeated full rebuild that found nothing changed.
     /// </summary>
     public void DeleteNodesForPath(string path)
     {
         using var transaction = _connection.BeginTransaction();
 
+        DeleteNodeAndEdgeRows(path, transaction);
+
+        using (var command = _connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = "DELETE FROM file_state WHERE path = $path;";
+            command.Parameters.AddWithValue("$path", path);
+            command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
+    /// <summary>
+    /// Removes a file's nodes AND its outgoing edges, in one transaction — but leaves file_state
+    /// untouched. This is the delete-then-insert half of every per-file indexing call (<see
+    /// cref="Indexing.AssetIndexer"/>, <see cref="Indexing.ScriptIndexer"/>, and <see
+    /// cref="Indexing.BinaryAssetIndexer"/> all call this, never <see cref="DeleteNodesForPath"/>)
+    /// — a file being RE-indexed is not a file being retired, so its file_state row must survive:
+    /// either a caller is about to write a fresh one for it (<see cref="UpsertFileState"/>, scoped
+    /// to exactly the files just indexed), or — the case that matters here — the file did not
+    /// change at all and nothing is going to touch its file_state row this pass, so it must be
+    /// left exactly as accurate as it already was.
+    ///
+    /// F22: before this split existed, every per-file indexer call used the FILE-STATE-CLEARING
+    /// <see cref="DeleteNodesForPath"/> instead — including, during a full <see
+    /// cref="ProjectService.RebuildGraph"/>, every file UNCHANGED since the previous index, which
+    /// <see cref="ProjectService.Reindex"/>'s own <c>freshState</c> deliberately never re-writes
+    /// (I6: computed only for the sweep's own Added/Changed set, BEFORE indexing runs — see that
+    /// method's own doc comment). The result: file_state was silently wiped for the ENTIRE
+    /// project on every second (or later) hades_rebuild_graph call that found nothing changed, so
+    /// the next incremental sync's <see cref="Observation.ProjectSweeper.Sweep"/> — which detects
+    /// a deletion purely as "was recorded, now gone missing" — could never again recognise ANY
+    /// path's disappearance, because nothing was left recorded for it to go missing FROM. A moved
+    /// asset's OLD path lingered in the graph forever after, still confidently resolvable, even
+    /// with no file on disk at that path at all.
+    /// </summary>
+    public void DeleteNodesAndEdgesForPath(string path)
+    {
+        using var transaction = _connection.BeginTransaction();
+        DeleteNodeAndEdgeRows(path, transaction);
+        transaction.Commit();
+    }
+
+    void DeleteNodeAndEdgeRows(string path, SqliteTransaction transaction)
+    {
         foreach (var sql in new[]
         {
             "DELETE FROM nodes WHERE path = $path;",
             "DELETE FROM edges WHERE from_path = $path;",
-            // State must die with the nodes. Left behind, a file deleted and later re-added would
-            // still match its old record and never be reindexed.
-            "DELETE FROM file_state WHERE path = $path;",
         })
         {
             using var command = _connection.CreateCommand();
@@ -131,8 +184,6 @@ public sealed class GraphDatabase : IDisposable
             command.Parameters.AddWithValue("$path", path);
             command.ExecuteNonQuery();
         }
-
-        transaction.Commit();
     }
 
     public void UpsertEdges(IReadOnlyList<GraphEdge> edges)

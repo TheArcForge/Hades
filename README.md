@@ -8,7 +8,7 @@ Hades is a standalone macOS menu-bar app. Its .NET core builds a queryable knowl
 
 ## Status
 
-Pre-release, internal testing. Apple Silicon (arm64) only — there is no universal build. The app is unsigned and un-notarized.
+Requires Apple Silicon and macOS 14+ — the embedded .NET core is arm64-only. On Intel Macs the app shows a clear alert and quits instead of failing to launch silently. Unsigned and un-notarized; distributed via Homebrew, which doesn't set the quarantine flag, so there's no Gatekeeper prompt on that path.
 
 ## Pieces
 

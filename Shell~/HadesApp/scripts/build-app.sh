@@ -16,8 +16,9 @@
 # This script is the "bundle step" the plan's other option names explicitly.
 #
 # What it does:
-#   1. Builds the HadesApp product via `xcodebuild` (non-interactive, no signing identity needed
-#      for local use - see the ad-hoc codesign step below).
+#   1. Builds the HadesApp product via `xcodebuild`, universal (arm64 + x86_64 - release blocker #3,
+#      see the `ARCHS` comment below), non-interactive, no signing identity needed for local use
+#      (see the ad-hoc codesign step below).
 #   2. Builds HadesCoreReaper (from the sibling HadesSupervision package) via `swift build`.
 #   3. Release configuration ONLY: publishes Hades.Server self-contained for osx-arm64 (`dotnet
 #      publish -r osx-arm64 --self-contained true`) - see this script's own "Publishing" section
@@ -67,6 +68,29 @@ DERIVED_DATA="$HADES_APP_DIR/DerivedData"
 PRODUCTS_DIR="$DERIVED_DATA/Build/Products/$CONFIGURATION"
 APP_BUNDLE="$PRODUCTS_DIR/HadesApp.app"
 
+# Universal (arm64 + x86_64), unlike the embedded .NET core below: release blocker #3 (external
+# tester report) is "arm64-only, and the current failure mode is the worst available" - a
+# drag-installed Hades.app that silently fails to launch on an Intel Mac, because macOS cannot start
+# an arm64-only Mach-O there at all. Product's fix is not a universal core (still real work this
+# project cannot verify without an Intel Mac or CI runner for it - see the CORE_RID section below,
+# unchanged) - it is a universal SHELL that CAN start on Intel, far enough to show a clear "Hades
+# requires Apple Silicon" alert and quit cleanly instead of the OS refusing silently. Swift/Xcode
+# builds both slices cheaply (unlike the self-contained .NET publish), so this costs real but modest
+# DMG size, not a second expensive artifact. `ARCHS` overrides whatever the SwiftPM-auto-generated
+# scheme would otherwise resolve to for a bare `-destination 'platform=macOS'` build - verified
+# empirically, not assumed: `lipo -archs` on both Debug and Release builds of this exact script
+# before this change reported arm64-only.
+# `ONLY_ACTIVE_ARCH=NO` is required alongside `ARCHS` - left at its default (YES for Debug), Xcode
+# builds only the active/host architecture regardless of what `ARCHS` lists, which would silently
+# defeat this entirely for `build-app.sh` with no argument (Debug). See
+# Sources/HadesApp/ShellFacts/ArchitectureGate.swift for the early-startup gate this universal shell
+# now enables: on a genuine Intel Mac, that gate is the first thing HadesApp's own `main()` does, and
+# it always exits before anything below would spawn or attempt to spawn a core.
+#
+# HadesCoreReaper (built by `swift build` further below) and the embedded .NET core (published just
+# below, CORE_RID) are DELIBERATELY UNCHANGED - both stay arm64-only. Neither needs to run on Intel:
+# the gate above always exits first, before either is ever touched, so there is nothing for a
+# universal HadesCoreReaper or a universal core to do on Intel that this app would ever reach.
 echo "== Building HadesApp ($CONFIGURATION) via xcodebuild =="
 xcodebuild build \
     -scheme HadesApp \
@@ -74,6 +98,8 @@ xcodebuild build \
     -destination 'platform=macOS' \
     -derivedDataPath "$DERIVED_DATA" \
     CODE_SIGNING_ALLOWED=NO \
+    ARCHS="x86_64 arm64" \
+    ONLY_ACTIVE_ARCH=NO \
     | { grep -Ev '^\s*$' || true; }
 
 HADES_APP_BINARY="$PRODUCTS_DIR/HadesApp"
@@ -175,6 +201,32 @@ if [[ "$CONFIGURATION" == "Release" ]]; then
     cp -R "$CORE_PUBLISH_DIR/." "$APP_BUNDLE/Contents/Resources/HadesServer/"
 fi
 
+# App icon: generated here from the single 1024x1024 master in Resources/ rather than checking a
+# binary .icns into the repo - one source of truth, and replacing the icon is dropping in a new PNG.
+# `sips` and `iconutil` both ship with macOS and this build already requires Xcode, so this depends
+# on nothing new. The ten entries below are exactly the set a macOS .iconset must contain; Finder,
+# Get Info, the DMG window, and Spotlight each pick a different one, so a partial set silently
+# degrades to a blurry upscale in whichever surface is missing.
+ICON_MASTER="$HADES_APP_DIR/Resources/AppIcon-1024.png"
+if [[ -f "$ICON_MASTER" ]]; then
+    echo "== Generating AppIcon.icns from $(basename "$ICON_MASTER") =="
+    ICONSET_PARENT="$(mktemp -d)"
+    ICONSET_DIR="$ICONSET_PARENT/AppIcon.iconset"
+    mkdir -p "$ICONSET_DIR"
+    for spec in "16:icon_16x16" "32:icon_16x16@2x" "32:icon_32x32" "64:icon_32x32@2x" \
+                "128:icon_128x128" "256:icon_128x128@2x" "256:icon_256x256" \
+                "512:icon_256x256@2x" "512:icon_512x512" "1024:icon_512x512@2x"; do
+        sips -z "${spec%%:*}" "${spec%%:*}" "$ICON_MASTER" \
+            --out "$ICONSET_DIR/${spec##*:}.png" >/dev/null
+    done
+    iconutil --convert icns "$ICONSET_DIR" --output "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+    rm -rf "$ICONSET_PARENT"
+else
+    # Loud, not silent: a missing master means the shipped app falls back to the generic
+    # blank-document icon, which looks like a packaging bug to anyone who installs it.
+    echo "build-app.sh: no icon master at $ICON_MASTER - bundling with the generic app icon" >&2
+fi
+
 cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -190,12 +242,19 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
     <string>Hades</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <!-- Names Contents/Resources/AppIcon.icns, generated above from Resources/AppIcon-1024.png.
+         CFBundleIconFile (not CFBundleIconName) is the correct key here: IconName resolves through
+         an asset catalog, and this bundle is assembled by hand with no catalog to resolve against.
+         Menu-bar-only (LSUIElement) means this icon never appears in the Dock - it is what Finder,
+         Get Info, Spotlight, and the DMG window show. -->
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.0.0-beta.3</string>
+    <string>2.0.0</string>
     <key>CFBundleVersion</key>
-    <string>3</string>
+    <string>4</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <!-- No Dock icon, no Cmd+Tab entry - see this script's own header and

@@ -23,28 +23,46 @@ This is the Claude Code plugin half of [**Hades**](https://github.com/TheArcForg
 
 ## Installation
 
-### Option A: Persistent install (recommended)
+### Option A: Per-session (current recommended path)
 
-Register the Hades marketplace and install the plugin:
+```bash
+claude --plugin-dir /path/to/hades-plugin
+```
+
+This loads the plugin for a single session only — pass it every time you start `claude`. It
+won't appear in `/plugin list`; that's expected for a `--plugin-dir` install, not a bug.
+
+### Option B: Persistent install via marketplace
+
+> **Not usable right now.** The Hades marketplace (`TheArcForge/hades-plugin`) has not yet been
+> republished to match this plugin — it currently still serves the retired v1.2 plugin (a Node
+> stdio launcher, closer to 90 tools than 32). Registering it today installs the wrong, retired
+> generation of Hades. Use Option A until this notice is removed.
 
 ```
 /plugin marketplace add TheArcForge/hades-plugin
 /plugin install hades
 ```
 
-This persists across sessions — you only do it once.
-
-### Option B: Per-session
-
-```bash
-claude --plugin-dir /path/to/hades-plugin
-```
-
-This loads the plugin for a single session only.
+Once the marketplace is republished with the current plugin, this will persist across sessions
+— you only do it once.
 
 ### Verify
 
 Run `claude plugin validate /path/to/hades-plugin` — you should see "Validation passed".
+
+### Already have the old plugin?
+
+If Claude Code was ever pointed at Hades v1.2 (the in-Editor Unity package + Node bridge), it
+may still be registered globally, independent of any one project. Symptoms: `/mcp` shows a
+`node` command instead of the HTTP URL above, or a tool count closer to 90 than 32.
+
+Fix it in Claude Code itself — `/plugin` lists installed plugins; disable or uninstall the old
+`hades` entry there, then start a fresh session. If a project also has a stray `.mcp.json` still
+pointing at the old hub, Hades.app's own migration cleanup (in its Settings, once it detects a
+v1.2 project) removes it — see the [main repo](https://github.com/TheArcForge/Hades)'s
+`Documentation/InternalTesting-Install.md`, "Migrating from v1.2" section, for the full
+walkthrough.
 
 ## Usage
 
@@ -71,6 +89,7 @@ All communication is local. No cloud services, no telemetry.
 |---|---|
 | No tools appear | Is Hades.app running? Has this project been added in the app? |
 | `/hades:status` not recognized | Plugin not installed. Re-run the install command. |
+| `/mcp` shows a `node` command instead of the HTTP URL above, or a tool count closer to 90 than 32 | You're connected to the retired v1.2 plugin, not this one — see [Already have the old plugin?](#already-have-the-old-plugin) below. |
 | Live-Editor tools (scene/prefab edits, console, tests) don't respond | Is the Unity Editor open, with the Unity-side integration installed for this project? |
 | Tools stop responding after a Unity recompile | Bring Unity to the foreground briefly to let it re-register — see this plugin's `CLAUDE.md`. |
 

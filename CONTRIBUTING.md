@@ -2,8 +2,10 @@
 
 ## Prerequisites
 
-- Unity 6000.0+
-- Node.js 20+
+- .NET 10 SDK
+- Xcode + Swift toolchain (macOS)
+- Unity 6000.x (only for the Unity plugin)
+- Python 3 (only for the e2e regression suite)
 - Claude Code (latest)
 
 ## Setup
@@ -12,29 +14,29 @@
 git clone https://github.com/TheArcForge/Hades.git
 cd Hades
 
-# Build the Bridge (Hub + Launcher)
-cd Bridge~ && npm ci && npm run build && cd ..
+# Build the .NET core
+dotnet build App~
 
-# Install Scanner dependencies
-cd Scanner~ && npm ci && cd ..
+# Build the macOS app (builds the Swift shell and embeds the published .NET server)
+Shell~/HadesApp/scripts/build-app.sh
 ```
 
-Open your Unity project and add the package via **Package Manager → Add package from disk**, selecting `package.json` at the repo root.
+The Unity plugin is optional (only needed for live-Editor features) and isn't added via Package Manager anymore — install it from the running app via **Projects → Install Plugin**.
 
 ## Project Structure
 
 | Path | Contents |
 |---|---|
-| `Editor/` | Unity C# code — Graph, Charon, Asphodel, MCP server |
-| `Bridge~/` | Node.js Hub + Launcher (TypeScript → compiled JS) |
-| `Scanner~/` | Node.js C# parser (tree-sitter based) |
+| `Shell~/` | SwiftUI macOS app (`HadesApp`) + Swift packages `HadesControl`, `HadesSupervision` |
+| `App~/` | .NET 10 core — `Hades.Server`, `Hades.Core`, `Hades.Contract`, `Hades.Cli` (tests under `App~/tests`) |
+| `Plugin~/` | Unity Editor plugin (C#, v1.4.0) — optional, dials out to the app over a local socket |
 | `skills/` | 22 Claude Code skills (Markdown) |
 | `commands/` | 6 slash commands (Markdown) |
 | `Plugin-ClaudeCode~/` | The Claude Code plugin — manifest, `.mcp.json`, and copies of the skills and commands above |
 | `Legacy~/` | Retired v1.2 delivery files, kept for reference only (see its README) |
 | `Documentation/` | Architecture docs, install guides, release pipeline. `Retired/` holds retired v1.2 docs (see its README) |
 
-Directories with a tilde suffix (`Bridge~/`, `Scanner~/`, `Plugin-ClaudeCode~/`, `Legacy~/`) are invisible to Unity's asset pipeline by design.
+Directories with a tilde suffix (`Shell~/`, `App~/`, `Plugin~/`, `Plugin-ClaudeCode~/`, `Legacy~/`) are invisible to Unity's asset pipeline by design.
 
 **The repository root is deliberately not an installable Claude Code plugin.** Its manifest and
 `.mcp.json` used to live here and pointed at the retired in-Editor server, so pointing Claude Code
@@ -46,14 +48,20 @@ instead; a test enforces that the root stays un-installable.
 All tests must pass before submitting a PR.
 
 ```bash
-# Bridge tests
-cd Bridge~ && npm test
+# .NET core (~1863 tests; isolate with HADES_HOME=$(mktemp -d))
+dotnet test App~
 
-# Scanner tests
-cd Scanner~ && npm test
+# Swift — run in each of Shell~/HadesControl, Shell~/HadesSupervision, Shell~/HadesApp (70 / 14 / 211 tests)
+swift test
+
+# Unity plugin EditMode, batchmode (384 tests)
+scripts/regression/run-plugin-editmode.sh
+
+# End-to-end (25 cases; needs the app running with a project registered)
+python3 scripts/regression/hades_suite.py --url http://127.0.0.1:7823/mcp
 ```
 
-For Unity tests: open **Window → General → Test Runner** and run both EditMode and PlayMode suites.
+See `Documentation/RegressionCoverage.md` for the per-issue regression coverage map.
 
 ## How to Contribute
 
@@ -69,7 +77,6 @@ For Unity tests: open **Window → General → Test Runner** and run both EditMo
 - **Never edit the plugin repo** (`TheArcForge/hades-plugin`) directly — it is auto-synced from this repo and any changes will be overwritten
 - **Never generate `.meta` files or GUIDs** — Unity manages these automatically
 - **Never commit `node_modules/`**
-- **Don't add new npm runtime dependencies to Bridge** — it is zero-dependencies by design
 
 ## Contributing Skills
 
@@ -80,6 +87,6 @@ Skills live in `skills/<name>/SKILL.md`. Each file must have YAML frontmatter wi
 Open a [GitHub Issue](https://github.com/TheArcForge/Hades/issues) and include:
 
 - Unity version
-- Node.js version
+- Hades app version (`2.0.0`, from `hades_status`)
 - OS and version
 - Steps to reproduce

@@ -41,15 +41,17 @@ A reference that exists *only* through one of these will not appear in the graph
 - **Precompiled DLL types** can't be turned into graph nodes from source, so edges *to* a base class/interface/type that lives in a compiled package or DLL may stay unresolved. Hades reports these as external/unindexed rather than pretending they don't exist.
 - **Generics** are resolved best-effort; deeply nested or open generic relationships may be incomplete.
 - **Binary/imported assets (textures, models, audio, fonts, shaders, animation clips) are meta-only nodes** — path, name, kind, and GUID, so references into them resolve, but their own content (a texture's pixels, a clip's curves) is never read. Any remaining unindexed asset kind, or a reference resolving outside every scanned root entirely (most commonly a registry package's own copy under `Library/PackageCache` — a built-in shader or texture bundled with a Unity package, for example), still has no node; references into those are reported as unresolvable, not missing user code.
+- **Addressables are indexed only as generic ScriptableObjects** — there is no dedicated reader for Addressables groups, entries, or addresses.
 
 ## Operational notes
 
 - **First build is a one-time cost** — a few seconds on a typical project, up to a few minutes on a very large one, behind a progress bar. Updates after that are incremental and near-instant.
-- **The graph is a cache.** If it ever looks stale or wrong, `/hades:rebuild-graph` (or **Hades → Rebuild Graph**) regenerates it from scratch.
+- **The graph is a cache.** If it ever looks stale or wrong, `/hades:rebuild-graph` (or **Rebuild** in the app's Projects view) regenerates it from scratch.
+- **A very deep GameObject hierarchy (~65–512 levels) can surface a raw serializer error instead of a clean message** — .NET's default `System.Text.Json` `MaxDepth` (64) is hit during serialization before `inspect_asset`'s own 512-level depth guard gets a chance to emit its friendly "nested more than 512 levels deep" message.
 
 ## Maturity
 
-Hades v1 has been field-tested on a large production Unity project, but **not yet across many projects, Unity versions, or platforms.** Treat surprising results on your project as a chance to help — file an issue with a concrete repro.
+Hades 2.0.0 has been field-tested on a large production Unity project, but **not yet across many projects, Unity versions, or platforms.** Treat surprising results on your project as a chance to help — file an issue with a concrete repro.
 
 ## How limitations surface at runtime
 
@@ -61,4 +63,4 @@ You don't have to remember this page — the tools tell you. Watch for these in 
 - `package_scan: degraded` / `supertypes_external_unresolved` — package/external types may be unindexed
 - `scan_health` (`csharp` / `meta` / `addressables` / `packages`) — per-scanner status
 
-See [Interpreting results](Documentation/Retired/interpreting-results.md) for what each one means and how to act on it.
+See [Interpreting results](Documentation/Retired/interpreting-results.md) (an archived v1.2 doc, kept for reference) for what each one means and how to act on it.

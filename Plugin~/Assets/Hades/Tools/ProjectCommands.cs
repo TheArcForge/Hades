@@ -282,11 +282,19 @@ namespace Hades.Tools
             var testMode = JsonParams.OptionalString(@params, "testMode") ?? "EditMode";
             var runId = Guid.NewGuid().ToString("N");
 
-            var result = LeaseScope.Run(gate, "project.run_tests", () =>
-            {
-                SaveDirtyScenesWithPath();
-                return JsonValue.NewObject();
-            });
+            // F12 fix: this used to call an explicit SaveDirtyScenesWithPath() here, UNCONDITIONALLY
+            // for every testMode (not just PlayMode) - ported all the way back from the old
+            // package's own RunTests, whose comment claimed "tests may trigger domain reload which
+            // discards unsaved scene changes". That premise does not hold: Unity backs up in-memory
+            // scene state across both a domain reload and a PlayMode enter/exit and restores it
+            // afterward, without ever needing a disk write to protect it - the same guarantee that
+            // lets you edit a scene and recompile scripts without losing scene work. So the save was
+            // never protecting anything; it was only an unrequested, silent write to a tracked file
+            // every time an agent asked to run tests. Fixed by removing the call outright rather
+            // than disclosing it more loudly - see AssertRunTestsNeverSavesDirtyScene
+            // (ProjectCommandsTests) for the pin, and EditorProjectTools' project_run_tests
+            // description for the caller-facing side of this same fix.
+            var result = LeaseScope.Run(gate, "project.run_tests", () => JsonValue.NewObject());
 
             // As with project.recompile_scripts, starting the run happens AFTER this handler's own
             // lease is released - EditMode runs trigger a domain reload, which this handler's own
@@ -314,20 +322,6 @@ namespace Hades.Tools
             result.SetProperty("filter", filter != null ? JsonValue.String(filter) : JsonValue.Null);
             if (startError != null) result.SetProperty("error", JsonValue.String(startError));
             return result;
-        }
-
-        /// <summary>Persists only scenes that are dirty AND already saved to disk - port of the old
-        /// package's ProjectTools.SaveDirtyScenesWithPath. Deliberately NOT
-        /// EditorSceneManager.SaveOpenScenes(), which pops a blocking Save-As modal for an untitled
-        /// (never-saved) scene and would freeze this call on a modal dialog nothing in an
-        /// automated session can dismiss.</summary>
-        static void SaveDirtyScenesWithPath()
-        {
-            for (var i = 0; i < EditorSceneManager.sceneCount; i++)
-            {
-                var scene = EditorSceneManager.GetSceneAt(i);
-                if (scene.isDirty && !string.IsNullOrEmpty(scene.path)) EditorSceneManager.SaveScene(scene);
-            }
         }
 
         // ---------------------------------------------------------------- hades.regression_replay

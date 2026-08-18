@@ -279,6 +279,14 @@ public sealed class MaterialApplyTests(WebApplicationFactory<Program> factory) :
         Assert.Equal(1, failed[0].GetProperty("index").GetInt32());
         Assert.Equal("setProperty", failed[0].GetProperty("op").GetString());
         Assert.Contains("_Bogus", failed[0].GetProperty("error").GetString());
+
+        // The unified partial-batch shape: 'results' surfaces an entry (with the op's own result
+        // payload) for the APPLIED op, faithfully mapped from the wire - not just a bare index.
+        var results = structured.GetProperty("results");
+        Assert.Equal(1, results.GetArrayLength());
+        Assert.Equal(0, results[0].GetProperty("index").GetInt32());
+        Assert.Equal("create", results[0].GetProperty("op").GetString());
+        Assert.Equal("Assets/Foo.mat", results[0].GetProperty("result").GetProperty("path").GetString());
     }
 
     // ---------------------------------------------------------------- whole-call (plugin-level) failure still propagates

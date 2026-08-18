@@ -101,8 +101,8 @@ public sealed class ProjectSettingsApplyTests(WebApplicationFactory<Program> fac
                     ("failed", JsonValue.NewArray())))))
             .Add(Obj(("index", JsonValue.Integer(5)), ("op", JsonValue.String("setClipImportSettings")),
                 ("result", Obj(("path", JsonValue.String("Assets/Character.fbx")),
-                    ("updatedClips", JsonValue.NewArray().Add(JsonValue.String("Walk"))),
-                    ("errors", JsonValue.NewArray())))));
+                    ("applied", JsonValue.NewArray().Add(JsonValue.String("Walk"))),
+                    ("failed", JsonValue.NewArray())))));
 
         var appliedAll = JsonValue.NewArray();
         for (var i = 0; i < 6; i++) appliedAll.Add(JsonValue.Integer(i));
@@ -228,6 +228,14 @@ public sealed class ProjectSettingsApplyTests(WebApplicationFactory<Program> fac
         Assert.Equal(1, failed[0].GetProperty("index").GetInt32());
         Assert.Equal("createLayer", failed[0].GetProperty("op").GetString());
         Assert.Contains("8-31", failed[0].GetProperty("error").GetString());
+
+        // The unified partial-batch shape: 'results' surfaces an entry (with the op's own result
+        // payload) for the APPLIED op, faithfully mapped from the wire - not just a bare index.
+        var results = structured.GetProperty("results");
+        Assert.Equal(1, results.GetArrayLength());
+        Assert.Equal(0, results[0].GetProperty("index").GetInt32());
+        Assert.Equal("createTag", results[0].GetProperty("op").GetString());
+        Assert.Equal("Friendly", results[0].GetProperty("result").GetProperty("created").GetString());
     }
 
     // ---------------------------------------------------------------- whole-call (plugin-level) failure still propagates

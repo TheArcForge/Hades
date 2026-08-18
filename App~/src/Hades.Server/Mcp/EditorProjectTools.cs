@@ -210,6 +210,20 @@ public sealed record TestResultsResult
 /// <c>hades.regression_replay</c> exactly as before, so an already-recorded fixture keeps replaying
 /// unmodified. hades_regression's OWN calls are excluded from capture by Program.cs's filter (never
 /// by this class), so a session recording other tools never records itself.</para>
+///
+/// <para><b>F12.</b> project_run_tests's own description used to say PlayMode runs make "Unity"
+/// save every open scene to disk before entering Play Mode - framed as inherent, unavoidable Editor
+/// behavior. That was wrong on two counts: the write was traced to Plugin~'s own RunTests, which
+/// called an explicit, UNCONDITIONAL scene-save (ported from the old package, running for every
+/// testMode, not just PlayMode) before starting any run at all - never something Unity itself did.
+/// The old package's own comment justified that call as guarding against "domain reload discards
+/// unsaved scene changes", but Unity backs up and restores in-memory scene state across both a
+/// domain reload and a PlayMode enter/exit without ever needing a disk write - see
+/// ProjectCommands.RunTests' own doc comment (Plugin~) for the full account. The save was removed
+/// outright rather than disclosed more loudly or gated behind a dirty-scene refusal: project_run_tests
+/// now never touches a scene file, in any testMode, full stop - see
+/// ProjectRunTests_DescriptionDisclosesEditModeReloadAndDeniesSceneSave below and
+/// ProjectCommandsTests' own AssertRunTestsNeverSavesDirtyScene (Plugin~) for the pins.</para>
 /// </summary>
 [McpServerToolType]
 public sealed class EditorProjectTools(EditorProxy editor, ProjectService projects, LeaseRegistry leases, RegressionRecorder recorder)
@@ -232,10 +246,10 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
     [Description("Starts a Unity Test Runner run on the attached Editor and returns immediately "
                + "with a runId and status='started' - it does NOT wait for the run to finish "
                + "(EditMode runs trigger a domain reload, which can take far longer than a single "
-               + "tool call should block for). PlayMode runs enter Play Mode, and Unity saves every "
-               + "open scene to disk before doing so - unsaved scene edits reach disk as a side "
-               + "effect of running PlayMode tests, not just EditMode's domain reload. Needs a live "
-               + "Editor - call hades_charon_status first if unsure.")]
+               + "tool call should block for). Never saves or otherwise writes any open scene to "
+               + "disk, regardless of testMode - unsaved scene edits stay exactly as dirty as they "
+               + "were before the call. Needs a live Editor - call hades_charon_status first if "
+               + "unsure.")]
     public async Task<RunTestsResult> ProjectRunTests(
         [Description("Regex filter matched against full test names - a class or namespace name selects everything beneath it. Omit to run all tests.")] string? filter = null,
         [Description("EditMode, PlayMode, or All (default EditMode)")] string? testMode = null,

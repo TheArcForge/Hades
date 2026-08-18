@@ -154,7 +154,10 @@ public static class BinaryAssetIndexer
         var guid = MetaFileReader.TryReadGuid(absolutePath);
         var name = Path.GetFileNameWithoutExtension(relativePath);
 
-        database.DeleteNodesForPath(relativePath);
+        // F22: DeleteNodesAndEdgesForPath, never the file-state-clearing DeleteNodesForPath —
+        // this file is being re-indexed, not retired (see that method's own doc comment for why
+        // conflating the two silently emptied file_state on every repeated full rebuild).
+        database.DeleteNodesAndEdgesForPath(relativePath);
         database.UpsertNodes([new GraphNode { Kind = kind, Name = name, Path = relativePath, Guid = guid }]);
     }
 }

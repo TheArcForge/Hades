@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.0] — Standalone macOS App — 2026-08-17
+
+Hades is now a **standalone macOS menu-bar app** rather than an in-Unity-Editor package. A .NET 10 core builds and serves the knowledge graph over MCP; the Unity plugin is optional and dials out to the app only for live-Editor features. The v1.x architecture (in-Editor MCP server, Node.js Bridge/Scanner, browser dashboard, Charon/Asphodel) is **retired** — its code and docs live under `Legacy~/` and `Documentation/Retired/`.
+
+This entry covers the whole standalone-app rewrite, released as `2.0.0`; the internal beta.1–beta.3 builds were not separately logged.
+
+### Added
+
+- **Standalone macOS app.** A SwiftUI menu-bar shell supervises a .NET 10 core through `HadesCoreReaper` (which guarantees the core dies with the app, even on SIGKILL); a local control API drives a Projects / Traces / Memory / Settings window. The core serves MCP at `http://127.0.0.1:7823/mcp`.
+- **32 consolidated MCP tools.** The ~90 granular in-Editor tools folded into 32 family tools (`graph_query`, `search_by_name`, `find_references_to`, `trace_dependencies`, `inspect_asset`, `scene_apply`, `prefab_apply`, `material_apply`, `animation_apply`, the memory/settings tools, and the editor-proxy tools).
+- **Binary/imported assets as graph nodes.** Textures, models, audio, fonts, shaders, and animation clips are indexed meta-only (path/name/kind/GUID), so reference and dependency queries answer for them. Targets resolved outside every scanned root (e.g. a registry package's own copy under `Library/PackageCache`) remain honestly dangling.
+- **MCP roots auto-adoption.** A Unity project opened as a session root registers automatically, with a one-line announcement in the first tool result.
+- **Server-side regression capture/replay** (`hades_regression`) covering the whole tool surface, not just editor-routed calls.
+- **Guided migration from v1.2** — detection and cleanup of the retired hub/config/plugin state, preserving authored `.arcforge/memory/` byte-for-byte.
+- **Regression-coverage matrix** ([`Documentation/RegressionCoverage.md`](Documentation/RegressionCoverage.md)) mapping every fixed issue to its pinning test, and a batchmode Unity plugin test runner (`scripts/regression/run-plugin-editmode.sh`).
+
+### Changed
+
+- The Unity plugin (`Plugin~`, version **1.4.0**) dials out to the app over a local socket instead of hosting the MCP server in-Editor; a plugin-version skew warning surfaces when the installed plugin lags the app.
+- Memory conventions and proposals surface through the app's Memory window and the `/hades:*` commands rather than a browser dashboard.
+
+### Fixed
+
+Two rounds of internal-tester feedback and three proactive hardening passes, each landing with a regression test (traceable in [`Documentation/RegressionCoverage.md`](Documentation/RegressionCoverage.md)). Highlights:
+
+- **A deeply-nested prefab/scene no longer crashes the server.** `inspect_asset` bounds hierarchy and node recursion (512 levels) and returns a clean error instead of an uncatchable stack overflow that took down every project.
+- **Asset-path writes cannot escape the assets root or overwrite unrelated files**; over-long paths and cycle-shaped inputs (reparent-under-self, scene-onto-itself, variant whose base equals its target) are refused before any write.
+- **Running tests never writes your open scene.** `project_run_tests` used to save every dirty open scene before running — for EditMode as well as PlayMode — silently modifying version-controlled files. That save is gone; a dirty scene stays dirty.
+- **A corrupt asset file no longer aborts a rebuild or wedges background sync** — an unparseable file drops from the graph cleanly and is named in a warning.
+- **Concurrent memory-proposal writes can't clobber each other**, and migration cleanup removes only Hades's own MCP entry, never other configured servers.
+- Full 32-tool handshake acceptance, live re-indexing without a manual rebuild, honest result-truncation flags, and correct trace attribution on multi-project servers.
+
 ## [1.2.0] — Graph-Grounded Convention Inference
 
 Hades now reads a project's *conventions* directly off the knowledge graph and offers each one as a promotable memory entry — so a fresh session, or a teammate after `git pull`, starts already knowing how the project does things without anyone having written it down.

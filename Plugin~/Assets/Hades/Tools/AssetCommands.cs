@@ -45,13 +45,27 @@ namespace Hades.Tools
             var sourcePath = JsonParams.RequireString(@params, "sourcePath", "asset.move");
             var destPath = JsonParams.RequireString(@params, "destPath", "asset.move");
             // Structural check only (traversal/absolute/whitespace/length) - no existence check, so
-            // the self-move and missing-parent-directory refusals AssetDatabase.MoveAsset already
-            // gives below are unchanged; this just makes the traversal/length failure modes uniform
-            // with every other write-path tool instead of relying on MoveAsset's own incidental checks.
+            // the missing-parent-directory refusal AssetDatabase.MoveAsset already gives below is
+            // unchanged; this just makes the traversal/length failure modes uniform with every other
+            // write-path tool instead of relying on MoveAsset's own incidental checks.
             destPath = AssetPathGuard.RequireWellFormedProjectPath(destPath, "asset.move");
 
             if (AssetDatabase.GetMainAssetTypeAtPath(sourcePath) == null)
                 throw new ArgumentException("Source asset not found at path: '" + sourcePath + "'.");
+
+            // Uneven-validation audit: the same cycle hazard SceneCommands.ReparentGameObject's own
+            // self/descendant check (F21) closes for the scene hierarchy, here for the AssetDatabase
+            // path hierarchy - moving a folder to a path inside itself (or a no-op "move" onto its own
+            // exact path) has no sensible outcome. Checked explicitly, before anything on disk is
+            // touched or any folder created below, rather than trusting whatever AssetDatabase.MoveAsset
+            // happens to do with it - the same "checked here because the underlying API has no such
+            // guard promised" reasoning as every other explicit guard in this file.
+            if (destPath == sourcePath || destPath.StartsWith(sourcePath + "/", StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    "Cannot move '" + sourcePath + "' to '" + destPath + "' - the destination is the source itself "
+                    + "or a descendant of it, which would create a cycle.");
+            }
 
             AssetFolders.EnsureExists(AssetFolders.DirectoryName(destPath));
 
@@ -84,6 +98,14 @@ namespace Hades.Tools
         internal static JsonValue DoImportAsset(JsonValue @params)
         {
             var path = JsonParams.RequireString(@params, "path", "asset.import");
+            // Uneven-validation audit: this method's own existence check below (File.Exists/
+            // Directory.Exists against ToAbsolutePath) is a RAW filesystem check, not confined to
+            // 'Assets/' the way AssetDatabase's own path space is - unlike asset.move's sourcePath
+            // (an AssetDatabase lookup, safe by construction), a traversal path here reaches real
+            // File.Exists/Directory.Exists calls before anything refuses it. Structural check only
+            // (traversal/absolute/whitespace/length) - existence is still this method's own concern
+            // immediately below, since asset.import legitimately requires the target to ALREADY exist.
+            path = AssetPathGuard.RequireWellFormedProjectPath(path, "asset.import");
             var forceUpdate = JsonParams.OptionalBool(@params, "forceUpdate", false);
             var recursive = JsonParams.OptionalBool(@params, "recursive", false);
 
@@ -137,6 +159,11 @@ namespace Hades.Tools
         internal static JsonValue DoSetImportSettings(JsonValue @params)
         {
             var path = JsonParams.RequireString(@params, "path", "asset.set_import_settings");
+            // Uneven-validation audit: same structural guard asset.import's own path now gets - see
+            // DoImportAsset's own doc comment. AssetImporter.GetAtPath below likely already fails
+            // closed (returns null) for a traversal path, but this makes the failure mode a uniform,
+            // actionable AssetPathGuard message instead of depending on that incidentally.
+            path = AssetPathGuard.RequireWellFormedProjectPath(path, "asset.set_import_settings");
             var properties = JsonParams.OptionalValue(@params, "properties");
             if (properties == null || properties.Kind != JsonValueKind.Object || properties.Members.Count == 0)
                 throw new ArgumentException("asset.set_import_settings requires a non-empty 'properties' object parameter.");
@@ -188,12 +215,28 @@ namespace Hades.Tools
         /// <summary>Lease-free core - see this class's own "Plan 10 Task 4" note on
         /// <see cref="DoSetImportSettings"/>. Configures loopTime/loopPose/cycleOffset/first-last
         /// frame on named clips inside an FBX/model's ModelImporter.clipAnimations - port of the old
-        /// package's AssetImportTools.SetClipImportSettings, re-targeted onto JsonValue. A per-clip
-        /// name that does not match is recorded in 'errors' and processing continues, same
-        /// partial-failure shape as scene.setup/component.set_properties.</summary>
+        /// package's AssetImportTools.SetClipImportSettings, re-targeted onto JsonValue.
+        ///
+        /// <para><b>MutationToolValidation.md Table 6/Table 8 gap #4 residue, closed.</b> A per-clip
+        /// name that fails to resolve (or is missing) used to be recorded as a bare string in an
+        /// 'errors' array, with a clip that DID apply named in 'updatedClips' - two key names found
+        /// nowhere else in this codebase, diverging for no reason from <see cref="DoSetImportSettings"/>'s
+        /// own per-property 'applied'/'failed' pair one method up, for the IDENTICAL shape of problem
+        /// (one op's own list of named sub-outcomes - property names there, clip names here). Now
+        /// converged onto that same applied/failed vocabulary: 'failed' entries are structured
+        /// <c>{clip, error}</c> objects (matching <see cref="DoSetImportSettings"/>'s own
+        /// <c>{property, error}</c> and <see cref="ComponentCommands"/>'s per-property applied/failed
+        /// pair), not a bare string a caller had to parse to learn which clip. <c>clip</c> is JSON
+        /// null (never omitted) when an entry has no name to report - the same "identifier present
+        /// but null, never dropped" convention <see cref="ProjectSettingsApplyCommands"/>'s own
+        /// per-op 'failed' entries and <see cref="ComponentCommands.TopLevelError"/> already use.
+        /// </para></summary>
         internal static JsonValue DoSetClipImportSettings(JsonValue @params)
         {
             var path = JsonParams.RequireString(@params, "path", "asset.set_clip_import_settings");
+            // Uneven-validation audit: same structural guard as DoImportAsset/DoSetImportSettings -
+            // see DoImportAsset's own doc comment.
+            path = AssetPathGuard.RequireWellFormedProjectPath(path, "asset.set_clip_import_settings");
             var clipsParam = JsonParams.OptionalValue(@params, "clips");
             if (clipsParam == null || clipsParam.Kind != JsonValueKind.Array || clipsParam.Items.Count == 0)
                 throw new ArgumentException("asset.set_clip_import_settings requires a non-empty 'clips' array parameter.");
@@ -216,30 +259,34 @@ namespace Hades.Tools
             }
 
             var clipNames = existingClips.Select(c => c.name).ToArray();
-            var updated = JsonValue.NewArray();
-            var errors = JsonValue.NewArray();
+            var applied = JsonValue.NewArray();
+            var failed = JsonValue.NewArray();
 
             foreach (var config in clipsParam.Items)
             {
                 var name = config != null ? JsonParams.OptionalString(config, "name") : null;
                 if (string.IsNullOrEmpty(name))
                 {
-                    errors.Add(JsonValue.String("A clip entry is missing its 'name'."));
+                    failed.Add(JsonValue.NewObject()
+                        .SetProperty("clip", JsonValue.Null)
+                        .SetProperty("error", JsonValue.String("A clip entry is missing its 'name'.")));
                     continue;
                 }
 
                 var index = Array.FindIndex(existingClips, c => c.name == name);
                 if (index < 0)
                 {
-                    errors.Add(JsonValue.String("Clip '" + name + "' not found. Available clips: " + string.Join(", ", clipNames) + "."));
+                    failed.Add(JsonValue.NewObject()
+                        .SetProperty("clip", JsonValue.String(name))
+                        .SetProperty("error", JsonValue.String("Clip '" + name + "' not found. Available clips: " + string.Join(", ", clipNames) + ".")));
                     continue;
                 }
 
                 ApplyClipConfig(existingClips[index], config);
-                updated.Add(JsonValue.String(name));
+                applied.Add(JsonValue.String(name));
             }
 
-            if (updated.Items.Count > 0)
+            if (applied.Items.Count > 0)
             {
                 importer.clipAnimations = existingClips;
                 importer.SaveAndReimport();
@@ -247,8 +294,8 @@ namespace Hades.Tools
 
             return JsonValue.NewObject()
                 .SetProperty("path", JsonValue.String(path))
-                .SetProperty("updatedClips", updated)
-                .SetProperty("errors", errors);
+                .SetProperty("applied", applied)
+                .SetProperty("failed", failed);
         }
 
         static void ApplyClipConfig(ModelImporterClipAnimation clip, JsonValue config)

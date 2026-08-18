@@ -250,6 +250,14 @@ public sealed class AnimationApplyTests(WebApplicationFactory<Program> factory) 
         Assert.Equal(1, failed[0].GetProperty("index").GetInt32());
         Assert.Equal("assignClip", failed[0].GetProperty("op").GetString());
         Assert.Contains("Ghost", failed[0].GetProperty("error").GetString());
+
+        // The unified partial-batch shape: 'results' surfaces an entry (with the op's own result
+        // payload) for the APPLIED op, faithfully mapped from the wire - not just a bare index.
+        var results = structured.GetProperty("results");
+        Assert.Equal(1, results.GetArrayLength());
+        Assert.Equal(0, results[0].GetProperty("index").GetInt32());
+        Assert.Equal("assignController", results[0].GetProperty("op").GetString());
+        Assert.Equal("Player", results[0].GetProperty("result").GetProperty("gameObject").GetString());
     }
 
     // ---------------------------------------------------------------- whole-call (plugin-level) failure still propagates

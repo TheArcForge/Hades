@@ -1,12 +1,30 @@
 import SwiftUI
 
-/// Step 3 - spec #4 §4: "show `/plugin marketplace add TheArcForge/hades` and
-/// `/plugin install hades`, then verify the server is reachable and reporting tools." The two
-/// commands are fixed, literal CLI invocations - not control-API data, so printing them verbatim as
-/// Swift string literals is not a spec #3 §1 violation (there is no DTO for a plugin-install command;
-/// this is the guidance half spec #4 §2 asks for - "the app's onboarding SHOWS the install command").
-/// The verification half is `viewModel.verifyClaudeCode()` - see `ClaudeCodeVerifying`'s own doc
-/// comment for exactly what a `.reachable` result proves, and note that `reachableExplanation`
+/// Step 3 - spec #4 §4 originally called for showing `/plugin marketplace add TheArcForge/hades`
+/// and `/plugin install hades`, then verifying the server is reachable and reporting tools. This
+/// view no longer shows that marketplace command. Two problems, found this round: the slug itself
+/// was wrong (`TheArcForge/hades` - every other reference in this repo, e.g.
+/// `.github/workflows/release.yml`, `scripts/plugin-README.md`, `Documentation/ReleasePipeline.md`
+/// §1/§4, uses `TheArcForge/hades-plugin`), and even with the slug fixed, that marketplace still
+/// serves the retired v1.2 plugin (~89 tools, Node stdio launcher) as of this internal testing
+/// round - see `Documentation/ReleasePipeline.md` §4 "Current install paths" and the same warning
+/// in `Documentation/InternalTesting-Install.md` / `scripts/plugin-README.md`. Onboarding is the
+/// first thing a new user sees, so handing them a command that silently installs the wrong,
+/// retired plugin generation here is worse than the same mistake sitting in a doc a user might
+/// never open.
+///
+/// Shown instead: `claude --plugin-dir <checkout>/Plugin-ClaudeCode~` - the path both of those
+/// docs already point testers at today. Still a fixed, literal CLI invocation, so printing it
+/// verbatim as a Swift string literal is not a spec #3 §1 violation for the same reason the
+/// marketplace commands weren't (there is no DTO for a plugin-install command; this is the
+/// guidance half spec #4 §2 asks for - "the app's onboarding SHOWS the install command"). The
+/// marketplace path is named in passing, not offered as a command to run, until
+/// `Documentation/ReleasePipeline.md` §5/§8 confirms `TheArcForge/hades-plugin` has actually been
+/// resynced to this plugin at release - flip the command shown below back to the marketplace form
+/// then, not before.
+///
+/// The verification half is unchanged: `viewModel.verifyClaudeCode()` - see `ClaudeCodeVerifying`'s
+/// own doc comment for exactly what a `.reachable` result proves, and note that `reachableExplanation`
 /// below states the "proves vs. assumes" distinction directly in the UI, not just in code comments.
 ///
 /// **The launch-at-login toggle lives here, not on some later step.** Claude Code does not retry
@@ -29,20 +47,21 @@ struct OnboardingClaudeCodeStepView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Connect Claude Code")
                 .font(.largeTitle.bold())
-            Text("Run these two commands in Claude Code:")
+            Text("Run this in Terminal to start Claude Code with the Hades plugin loaded:")
                 .foregroundStyle(.secondary)
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("/plugin marketplace add TheArcForge/hades")
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                Text("/plugin install hades")
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+            Text("claude --plugin-dir <path-to-your-Hades-checkout>/Plugin-ClaudeCode~")
+                .font(.system(.body, design: .monospaced))
+                .textSelection(.enabled)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+
+            Text(
+                "Replace the path with wherever you checked out the Hades repo. This loads the plugin for that session only — pass the flag every time you start claude. A persistent marketplace install is coming once TheArcForge/hades-plugin is republished for this release."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
             Button("Verify") {
                 Task { await viewModel.verifyClaudeCode() }

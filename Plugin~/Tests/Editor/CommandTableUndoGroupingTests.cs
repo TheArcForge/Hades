@@ -207,6 +207,39 @@ namespace Hades.Tests.Editor
             }
         }
 
+        /// <summary>The external tester's own release-blocker repro, verbatim: "create three objects
+        /// in one batch, press Cmd+Z once, count survivors - 0 confirms the claim, 1 refutes it."
+        /// SceneApplyBatch_MultipleOperations_StillOneUndoStep_ForWholeBatch above already proves the
+        /// same property with two objects; this is a deliberately literal three-object reproduction
+        /// of the exact recipe the release-blocker report described, as its own individually-named,
+        /// permanent regression guard - so a reader auditing that report can find the exact scenario
+        /// it asked for by name, rather than having to trust that a two-object test generalises.</summary>
+        [Test]
+        public void SceneApplyBatch_ThreeGameObjects_OnePerformUndo_ZeroOfThreeSurvive()
+        {
+            var (gate, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var ops = JsonValue.NewArray()
+                    .Add(JsonValue.NewObject().SetProperty("op", JsonValue.String("create")).SetProperty("name", JsonValue.String("TesterOne")))
+                    .Add(JsonValue.NewObject().SetProperty("op", JsonValue.String("create")).SetProperty("name", JsonValue.String("TesterTwo")))
+                    .Add(JsonValue.NewObject().SetProperty("op", JsonValue.String("create")).SetProperty("name", JsonValue.String("TesterThree")));
+
+                CommandTable.Dispatch(gate, Request("scene.apply", JsonValue.NewObject().SetProperty("operations", ops)));
+
+                // sanity: the batch really did create all three before we undo it
+                Assert.IsNotNull(GameObject.Find("TesterOne"));
+                Assert.IsNotNull(GameObject.Find("TesterTwo"));
+                Assert.IsNotNull(GameObject.Find("TesterThree"));
+
+                Undo.PerformUndo(); // press Cmd+Z once
+
+                Assert.IsNull(GameObject.Find("TesterOne"), "0 survivors confirms the claim; any survivor refutes it - the release-blocker's own recipe");
+                Assert.IsNull(GameObject.Find("TesterTwo"), "0 survivors confirms the claim; any survivor refutes it - the release-blocker's own recipe");
+                Assert.IsNull(GameObject.Find("TesterThree"), "0 survivors confirms the claim; any survivor refutes it - the release-blocker's own recipe");
+            }
+        }
+
         /// <summary>Mirrors MutationBeforeAndAfterABatch_BatchStillOneStep_NeighboursUnaffected above,
         /// with scene.apply as the batch: proves Dispatch's own pre-increment for scene.apply does not
         /// bleed into (merge with) the PRECEDING call's group, and the batch's internal increment does
@@ -240,6 +273,39 @@ namespace Hades.Tests.Editor
 
                 Undo.PerformUndo(); // reverts "Before" only
                 Assert.IsNull(GameObject.Find("Before"));
+            }
+        }
+
+        /// <summary>The explicit control the release-blocker review asked for: TWO SEPARATE
+        /// scene.apply calls (not two operations inside one batch) - proving Undo grouping for THIS
+        /// specific family is per-CALL, not global, and that this section's "whole batch reverts
+        /// together" tests above can actually detect a difference (a methodology that always found
+        /// "everything reverted" regardless of call boundaries would be worthless as a regression
+        /// guard). Mirrors TwoConsecutiveMutations_SameMethod_LandInDifferentUndoGroups_
+        /// OneUndoRevertsOnlyTheSecond above, but with scene.apply itself - a batch tool - on both
+        /// sides of the boundary, rather than the single-object scene.create_gameobject that test
+        /// uses.</summary>
+        [Test]
+        public void TwoConsecutiveSceneApplyBatches_OnePerformUndo_OnlySecondBatchReverts()
+        {
+            var (gate, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var firstOps = JsonValue.NewArray()
+                    .Add(JsonValue.NewObject().SetProperty("op", JsonValue.String("create")).SetProperty("name", JsonValue.String("FirstBatchObj")));
+                CommandTable.Dispatch(gate, Request("scene.apply", JsonValue.NewObject().SetProperty("operations", firstOps)));
+
+                var secondOps = JsonValue.NewArray()
+                    .Add(JsonValue.NewObject().SetProperty("op", JsonValue.String("create")).SetProperty("name", JsonValue.String("SecondBatchObj")));
+                CommandTable.Dispatch(gate, Request("scene.apply", JsonValue.NewObject().SetProperty("operations", secondOps)));
+
+                Assert.IsNotNull(GameObject.Find("FirstBatchObj"));
+                Assert.IsNotNull(GameObject.Find("SecondBatchObj"));
+
+                Undo.PerformUndo(); // a single Ctrl/Cmd+Z
+
+                Assert.IsNull(GameObject.Find("SecondBatchObj"), "a single undo must revert the SECOND scene.apply call");
+                Assert.IsNotNull(GameObject.Find("FirstBatchObj"), "a single undo must NOT also revert the FIRST scene.apply call - proves per-call grouping, not global");
             }
         }
 
@@ -277,6 +343,55 @@ namespace Hades.Tests.Editor
 
                     Assert.IsNull(AssetDatabase.LoadAssetAtPath<Material>(pathA), "the whole material.apply batch must revert together");
                     Assert.IsNull(AssetDatabase.LoadAssetAtPath<Material>(pathB), "the whole material.apply batch must revert together");
+                }
+            }
+            finally
+            {
+                if (AssetDatabase.IsValidFolder(scratchDir)) AssetDatabase.DeleteAsset(scratchDir);
+            }
+        }
+
+        /// <summary>The exact shape the release-blocker review additionally asked for on
+        /// material.apply specifically: "multiple property sets / creates in one call". TWO 'create'
+        /// ops plus a 'setProperty' op on one of the freshly-created materials, all in ONE
+        /// material.apply call - mixing Undo.RegisterCreatedObjectUndo (the two creates) and
+        /// Undo.RecordObject (the property set) in the SAME batch, which
+        /// MaterialApplyBatch_MultipleOperations_StillOneUndoStep_ForWholeBatch above (two creates
+        /// only) and MaterialApplyCommandsTests' own headline test (create+duplicate, also both
+        /// creates) never exercise together.</summary>
+        [Test]
+        public void MaterialApplyBatch_CreatesAndPropertySet_OnePerformUndo_WholeBatchReverted()
+        {
+            const string scratchDir = "Assets/Tests/_HadesUndoGroupingMaterialPropertyScratch";
+            if (AssetDatabase.IsValidFolder(scratchDir)) AssetDatabase.DeleteAsset(scratchDir);
+            AssetDatabase.CreateFolder("Assets/Tests", "_HadesUndoGroupingMaterialPropertyScratch");
+            try
+            {
+                var (gate, pump) = NoopGateParts();
+                using (pump) using (gate)
+                {
+                    var pathA = scratchDir + "/PropA.mat";
+                    var pathB = scratchDir + "/PropB.mat";
+                    var ops = JsonValue.NewArray()
+                        .Add(JsonValue.NewObject().SetProperty("op", JsonValue.String("create")).SetProperty("path", JsonValue.String(pathA)))
+                        .Add(JsonValue.NewObject().SetProperty("op", JsonValue.String("create")).SetProperty("path", JsonValue.String(pathB)))
+                        .Add(JsonValue.NewObject().SetProperty("op", JsonValue.String("setProperty"))
+                            .SetProperty("materialPath", JsonValue.String(pathA))
+                            .SetProperty("propertyName", JsonValue.String("_Metallic"))
+                            .SetProperty("value", JsonValue.Float(0.5)));
+
+                    CommandTable.Dispatch(gate, Request("material.apply", JsonValue.NewObject().SetProperty("operations", ops)));
+
+                    // sanity: the batch really did both creates AND the property set before we undo it
+                    var matA = AssetDatabase.LoadAssetAtPath<Material>(pathA);
+                    Assert.IsNotNull(matA);
+                    Assert.IsNotNull(AssetDatabase.LoadAssetAtPath<Material>(pathB));
+                    Assert.AreEqual(0.5f, matA.GetFloat("_Metallic"));
+
+                    Undo.PerformUndo(); // a single Ctrl/Cmd+Z
+
+                    Assert.IsNull(AssetDatabase.LoadAssetAtPath<Material>(pathA), "the whole batch - both creates AND the property set - must revert together");
+                    Assert.IsNull(AssetDatabase.LoadAssetAtPath<Material>(pathB), "the second create must revert too, not just the property set");
                 }
             }
             finally

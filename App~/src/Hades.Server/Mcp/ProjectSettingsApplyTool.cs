@@ -53,8 +53,12 @@ public sealed record ProjectSettingsApplyOperation : IBatchOperation
 /// <summary>One successful operation's own result, echoed verbatim - see MaterialApplyOpResult's
 /// own doc comment for why this is a loosely-typed passthrough rather than a dozen-mostly-null-field
 /// record: createLayer returns 'index' (the one piece of data a caller cannot know in advance),
-/// setImportSettings/setClipImportSettings return their own applied/failed-property or
-/// updatedClips/errors shape, and so on - each op's own shape, never invented or flattened here.
+/// setBuildScenes returns its own 'scenes'/'count', and setImportSettings/setClipImportSettings
+/// BOTH return {path, applied, failed} - a per-property/per-clip outcome list using the SAME
+/// applied/failed vocabulary this batch's own outer envelope uses, one level down (converged;
+/// setClipImportSettings used to answer with a 'updatedClips'/'errors' pair found nowhere else in
+/// this codebase - MutationToolValidation.md Table 6/Table 8 gap #4) - each op's own shape, never
+/// invented or flattened here.
 /// </summary>
 public sealed record ProjectSettingsApplyOpResult
 {

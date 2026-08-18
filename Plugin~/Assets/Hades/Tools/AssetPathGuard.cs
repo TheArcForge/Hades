@@ -9,8 +9,13 @@ namespace Hades.Tools
     /// <summary>
     /// Shared write-path validation for every command that creates or overwrites an asset at a
     /// caller-supplied path - material.create, scene.create/duplicate, prefab.create/create_variant,
-    /// animation.create_controller, and asset.move's destPath. One gate instead of one ad-hoc check
-    /// per tool, closing the 2026-08-14 internal test round's F16/F17/F20 findings:
+    /// animation.create_controller, and asset.move's destPath. Also covers, via
+    /// <see cref="RequireWellFormedProjectPath"/> alone (no existence requirement, since these
+    /// legitimately target something that must already exist), asset.import/asset.set_import_settings/
+    /// asset.set_clip_import_settings's own 'path' - added by the uneven-validation audit once reading
+    /// this class's own "which tools" list against the actual call sites showed those three had never
+    /// been routed through it, unlike every sibling class-2 write-path tool. One gate instead of one
+    /// ad-hoc check per tool, closing the 2026-08-14 internal test round's F16/F17/F20 findings:
     ///
     ///  - F16: a relative path containing '..' was never canonicalised, so e.g. material.create
     ///    could write outside 'Assets/' - even outside the project entirely - while a plain absolute

@@ -2,6 +2,8 @@
 
 How Hades is tested, validated, and shipped. This document covers CI, versioning, pre-release checklist, Anthropic plugin submission, and step-by-step instructions for AI agents preparing a release, plus (section 6) building and distributing the Hades.app menu-bar shell itself via DMG and Homebrew cask.
 
+**Start at section 8 to actually ship a release.** It is the current, concrete, top-to-bottom v2 checklist and supersedes the step-by-step mechanics in sections 2-5 (which describe the retired v1.2 flow - see the banner at the top of section 2). Section 6 holds the detailed build/signing/cask reasoning section 8 points back to rather than repeats.
+
 ---
 
 ## 1. CI overview
@@ -12,9 +14,15 @@ Three GitHub Actions workflows across two repositories.
 
 **`ci.yml`** — runs on every push and PR to `main`.
 
-Two parallel jobs:
+Three parallel jobs:
 - **Bridge tests** — installs dependencies and runs Vitest in `Bridge~/`, then builds TypeScript to verify compilation.
 - **Scanner tests** — installs dependencies and runs the split Jest suite in `Scanner~/` (unit tests first, integration tests second, separated due to tree-sitter native addon conflicts).
+- **`dotnet-tests`** ("App (.NET) Tests") — runs `dotnet test` against the .NET core in `App~/`.
+
+The Swift (`swift test` in `Shell~/HadesControl`, `Shell~/HadesSupervision`, `Shell~/HadesApp`),
+Unity plugin EditMode (`scripts/regression/run-plugin-editmode.sh`), and e2e
+(`scripts/regression/hades_suite.py`) suites all run outside `ci.yml` — see §5 for the current
+verification commands.
 
 Purpose: catch regressions before merging.
 
@@ -109,6 +117,16 @@ These track internal API changes independently of the product version. **Policy:
 
 **Build invariant — the launcher must stay a single bundled file.** `Bridge~/launcher` builds to one self-contained `dist/index.js` via esbuild (`--bundle`). `EnsureStableLauncher` (`Editor/Core/MCPClientConfig.cs`) copies only that one file to the per-machine stable location (`~/.arcforge/hades-hub/launcher.js`), so any relative sibling import would crash the launcher at startup with `ERR_MODULE_NOT_FOUND` (this was the v1.1.0 install regression — the launcher had been split into `tsc`-emitted modules without updating the copy routine). Guarded by `Bridge~/tests/launcher/bundle.test.ts`; do not switch the launcher back to a multi-file `tsc` emit without also updating the copy routine.
 
+**Current (v2) version-stamp sites — not covered by anything above.** The app core, shell, and
+Unity plugin do not use `package.json`, `Legacy~`, or any Bridge/Scanner file for their own
+versions; these are the sites that actually carry the shipped version today:
+
+| Location | Reports as | Notes |
+|---|---|---|
+| `App~/src/Hades.Server/Mcp/HadesTools.cs` → `ServerVersion` | MCP server version (`hades_status`, `initialize`) | plain constant — bump manually |
+| `Shell~/HadesApp/scripts/build-app.sh` → Info.plist `CFBundleShortVersionString` / `CFBundleVersion` | App bundle version | kept in lockstep with `ServerVersion` above; `build-dmg.sh` derives the DMG's filename from this plist |
+| `Plugin~/Assets/Hades/Runtime/HadesBoot.cs` → `PluginVersion` | Unity plugin version (sent in the `Hello` handshake) | independent version line from the app; two test mirrors (`CharonStatusTests.cs`, `Control/ProjectsTests.cs`) kept in sync with it |
+
 ---
 
 ## 3. Pre-release checklist
@@ -136,10 +154,13 @@ Complete all items before creating a release tag.
 - [ ] `Documentation/Retired/arcforge-hades-architecture.md` — any architectural changes reflected
 - [ ] `Documentation/Retired/arcforge-hades-plugin.md` — plugin structure, install flow, skill/command counts current
 - [ ] `docs/plugin-publish-pipeline.md` — expected counts still accurate
+- [ ] `Documentation/Architecture.md` — reflects current app/plugin versions and tool count
+- [ ] `Documentation/InternalTesting-Install.md` — install steps, version checks, and known issues current
+- [ ] `Documentation/RegressionCoverage.md` — issue → test traceability current with the latest round
 
 ### Plugin sync
 
-- [ ] Bridge is built (`cd Bridge~ && npm run build`)
+- [ ] `Plugin-ClaudeCode~/` content is current (static skills/commands — no build step)
 - [ ] Sync script runs cleanly: `bash scripts/sync-plugin.sh /path/to/hades-plugin`
 - [ ] Plugin repo validation passes (all checks from plugin-publish-pipeline.md §2)
 
@@ -182,14 +203,22 @@ Complete all items before creating a release tag.
 - `README.md` must document purpose, installation, and usage
 - `LICENSE` file required (Hades uses MIT)
 - No hardcoded secrets — use `userConfig` with `sensitive: true` for tokens
-- No orphan background processes — all processes must exit cleanly (Hub auto-exits after 60s idle)
-- No fixed port conflicts — use dynamic port allocation (Hub uses OS-assigned ports)
+- No orphan background processes — the plugin spawns none; its `.mcp.json` points at the already-running app
+- No fixed port conflicts — the plugin declares an HTTP endpoint to the app at `127.0.0.1:7823` and binds no port of its own
 - No writes to `~/.claude.json` or `~/.claude/settings.json`
 - No `hooks`, `mcpServers`, or `permissionMode` in plugin agents
 
 ### Current install paths
 
-Before marketplace acceptance, users install via self-hosted marketplace:
+> **Not current.** This subsection describes the intended shape of Anthropic marketplace
+> submission, not today's working install path. As of this internal testing round, the
+> self-hosted marketplace (`TheArcForge/hades-plugin`) has not been resynced to the current
+> plugin — it still serves the retired v1.2 plugin (Node stdio launcher, closer to 90 tools
+> than 32). Do not point testers or users at `/plugin marketplace add` today. The working path
+> is `claude --plugin-dir <path>/Plugin-ClaudeCode~` — see
+> `Documentation/InternalTesting-Install.md`.
+
+Before marketplace acceptance, the plan is for users to install via the self-hosted marketplace:
 ```
 /plugin marketplace add TheArcForge/hades-plugin
 /plugin install hades
@@ -200,7 +229,8 @@ After marketplace acceptance:
 /plugin install hades
 ```
 
-Both paths coexist — the self-hosted marketplace remains as an alternative.
+Both paths are intended to coexist — the self-hosted marketplace remaining as an alternative —
+once the self-hosted one is actually resynced to the current plugin (see warning above).
 
 ---
 
@@ -211,11 +241,22 @@ When asked to prepare a release, follow these steps exactly. Report each result 
 ### Step 1: Verify tests pass
 
 ```bash
-cd Bridge~ && npm ci && npm test && npm run build && cd ..
-cd Scanner~ && npm ci && npm test && cd ..
+# .NET (~1863 tests)
+cd App~ && HADES_HOME=$(mktemp -d) dotnet test
+
+# Swift (70 / 14 / 211 tests)
+cd Shell~/HadesControl && swift test
+cd Shell~/HadesSupervision && swift test
+cd Shell~/HadesApp && swift test
+
+# Unity plugin EditMode (384 tests, batchmode)
+scripts/regression/run-plugin-editmode.sh
+
+# e2e (25 cases)
+python3 scripts/regression/hades_suite.py --url http://127.0.0.1:7823/mcp
 ```
 
-Report: which tests passed, which failed, any warnings.
+Report: which suites passed, which failed, any warnings or deviations.
 
 ### Step 2: Check version consistency
 
@@ -290,6 +331,9 @@ Read and verify these files are up to date:
 4. `Documentation/Retired/arcforge-hades-roadmap.md` — phase statuses and version history reflect reality
 5. `Documentation/Retired/arcforge-hades-architecture.md` — no stale references
 6. `Documentation/Retired/arcforge-hades-plugin.md` — skill/command counts, install flow, compliance checklist
+7. `Documentation/Architecture.md` — current app/plugin versions and tool count
+8. `Documentation/InternalTesting-Install.md` — install steps, version checks, and known issues current
+9. `Documentation/RegressionCoverage.md` — issue → test traceability current with the latest round
 
 Report: which docs are current, which need updates, what specifically is stale.
 
@@ -678,7 +722,7 @@ and, symmetrically, when the bundled core is present and used:
 | `HadesApp.app`, Release, before embedding | ~3.4 MB |
 | `Contents/Resources/HadesServer/` (376 files) | ~134 MB |
 | `HadesApp.app`, Release, after embedding | **~137 MB** |
-| `Hades-0.1.0-unsigned.dmg` (UDZO-compressed) | **~58.7 MB** |
+| `Hades-2.0.0-beta.3-unsigned.dmg` (UDZO-compressed) | **~58.7 MB** |
 | Cold start: process launch -> discovery file written | 840 ms |
 | Cold start: process launch -> `/control/ping` answers 200 | 973 ms |
 
@@ -735,40 +779,151 @@ strongest test available without that risk, and directly shows the shipped path 
 dependency on the checkout: the fallback code that WOULD reference it is never even reached.
 
 **Test baselines - unchanged.** `swift test` in all three `Shell~` packages, run after every change
-above: HadesControl 66, HadesSupervision 10, HadesApp 198 - all passing, exactly matching the
+above: HadesControl 70, HadesSupervision 14, HadesApp 211 - all passing, exactly matching the
 pre-existing baseline.
 
 ---
 
 ## 7. Pre-release: deleting the v1.2 tree
 
-**Decided, not yet executed.** `Editor/`, `Tests/`, `ThirdParty/`, `Fixtures~/`, `package.json`, and
-`Editor/Core/AppNapGuard.cs` with them - the entire v1.2 Unity package - is being kept in the repo
-until **after the internal testing round, but before release**. It is the only working v1.2
-reference for testing migration (spec #4 §5) against a real install; deleting it earlier would mean
-testing that migration against nothing.
+**Executed 2026-08-18, as part of 2.0.0 release prep.** The entire v1.2 Unity package - `Editor/`
+(including `Editor/MCP/AppNapGuard.cs`; an earlier draft of this section said `Editor/Core/`, which
+was wrong), `Tests/`, `ThirdParty/`, `Fixtures~/`, and the root `package.json` - plus the retired
+Node stack (`Bridge~/`, `Scanner~/`) is gone: 560 tracked files. It had been kept as the only
+working v1.2 reference for testing migration (spec #4 §5) against a real install; the product owner
+chose to end that install rather than hold the release for it.
 
-**Two things break the moment it goes. Handle both in the same commit as the deletion, not after:**
+Every path was checked for live references first. The one that mattered: `ThirdParty/`'s
+`Gilzoide.SqliteNet` was referenced only by the two asmdefs deleted alongside it - `App~` uses the
+`Microsoft.Data.Sqlite` NuGet package, and `Plugin~` does not use SQLite at all.
 
-1. **`App~/tests/Hades.Core.Tests/Indexing/RealProjectIndexSmokeTest.cs` goes red.** It asserts
-   `150 < FilesScanned < 230` against a real Unity project on this machine
-   (`/Users/mike/Projects/Hades-Unity-Client`), a window measured 2026-08-01 as 107 `Editor/` + 65
-   `Tests/` + 10 `ThirdParty/` files pulled in through that project's local `file:` package
-   reference to this repo, plus 16 files in the project's own `Assets/`. Once `Editor/`, `Tests/`,
-   and `ThirdParty/` are gone, the scan drops to roughly that 16-file `Assets/`-only floor - which
-   the test's own comment already names as the *lower* regression bound today (`"below ~150 →
-   local-package resolution broke (Assets/ alone yields 16)"`). Post-deletion that floor is no
-   longer a regression signal; it is the new correct answer. Re-baseline the window and the
-   comment's file-count accounting in the same commit that deletes the tree, against whatever the
-   real project actually scans to once the package is gone - don't leave it red, and don't widen
-   the window blind without re-measuring.
-2. **The user's live v1.2 install stops working.** Their Unity Editor loads this repo as a local
-   `file:` package via `Packages/manifest.json`, so removing `package.json` breaks that resolution
-   the instant this commit lands. That is not a bug to fix - it is the intended end of the v1.2
-   install this tree exists to keep testable - but it means confirming migration testing is
-   actually done before this commit goes in, not after.
+**What broke, and how each was handled in the same change:**
 
-**`Editor/Core/AppNapGuard.cs` goes only as part of this same deletion, never separately or early.**
-`HadesBootstrap` acquires it in a static constructor; removing it alone breaks the legacy Editor's
-compile while the rest of `Editor/` - and the user's live v1.2 install - still depends on that
-Editor working.
+1. **`.github/workflows/ci.yml`** ran `bridge-tests` and `scanner-tests` against trees that no
+   longer exist. Both jobs removed; `dotnet-tests` untouched.
+2. **`RealProjectIndexSmokeTest.cs` was re-baselined by measurement, not prediction.** Its
+   `150 < FilesScanned < 230` window only held because `Editor/`+`Tests/`+`ThirdParty/` were pulled
+   into the fixture project through its local `file:` package reference. This section previously
+   predicted the scan would fall to "roughly that 16-file `Assets/`-only floor." **That prediction
+   was wrong**: measured after removal, the project scans to **45 files / 64 types**, because its own
+   `Assets/` grew in the weeks since the 2026-08-01 measurement. The window is now
+   `25 < FilesScanned < 120` with `TypesFound > 40`. This is the argument for re-measuring instead
+   of reasoning from a recorded number - the doc's arithmetic went stale before the code did.
+   `RealProjectBinaryAssetIndexSmokeTest.cs` needed no assertion change (already scoped to
+   `Assets/`), but its doc-comment described the package's second texture as a present fact and was
+   moved to past tense.
+3. **The user's live v1.2 install ended.** Their Unity project loaded this repo as a local `file:`
+   package, so the `com.arcforge.hades` entry was removed from that project's `Packages/manifest.json`
+   and `packages-lock.json` - and its orphaned `testables` entry with it - **before** this tree was
+   deleted, so the project was never left pointing at an unresolvable package.
+
+---
+
+## 8. Current release procedure (v2)
+
+The authoritative, current, top-to-bottom checklist for shipping a v2 release - run this section in
+order. It supersedes sections 2-5 above for *execution* (those describe the retired v1.2 flow, per
+the banner at the top of section 2); section 6 holds the detailed build/signing/cask reasoning this
+section points back to rather than repeats. Both open variables this document previously flagged
+are now resolved by product decision: **distribution is Homebrew, v1 ships unsigned** (no Apple
+Developer ID certificate / no notarization - signing is future work), and **the
+`TheArcForge/hades-plugin` marketplace will be republished with the current plugin at release** -
+step 5 below covers exactly what that republish requires and its one known blocker.
+
+### 8.1 Stamp the version - in lockstep
+
+Bump these together to the release version (`X.Y.Z`, e.g. `2.0.0`):
+
+| Site | Field |
+|---|---|
+| `App~/src/Hades.Server/Mcp/HadesTools.cs` | `ServerVersion` constant |
+| `Shell~/HadesApp/scripts/build-app.sh` | Info.plist `CFBundleShortVersionString` |
+| `Shell~/HadesApp/scripts/build-app.sh` | Info.plist `CFBundleVersion` (build number - bump too) |
+
+`build-dmg.sh` (8.3 below) reads `CFBundleShortVersionString` back out of the already-built `.app`
+to name the DMG - rebuild the app after bumping `build-app.sh`, before running `build-dmg.sh`, or
+the DMG filename carries the stale version.
+
+The Unity plugin carries its own, independent version line (section 2 above documents this - it is
+not the product version and is not expected to match it). Bump it only if `Plugin~` itself changed
+this release; if you do, its two test mirrors must move with it or their own pinning tests fail:
+
+| Site | Field |
+|---|---|
+| `Plugin~/Assets/Hades/Runtime/HadesBoot.cs` | `PluginVersion` constant |
+| `App~/tests/Hades.Server.Tests/CharonStatusTests.cs` | `RealAppPluginVersion` mirror constant |
+| `App~/tests/Hades.Server.Tests/Control/ProjectsTests.cs` | `RealAppPluginVersion` mirror constant |
+
+### 8.2 Full verification gate
+
+```bash
+cd App~ && HADES_HOME=$(mktemp -d) dotnet test
+cd Shell~/HadesControl && swift test
+cd Shell~/HadesSupervision && swift test
+cd Shell~/HadesApp && swift test
+scripts/regression/run-plugin-editmode.sh
+python3 scripts/regression/hades_suite.py --url http://127.0.0.1:7823/mcp
+```
+
+The last command needs Hades.app already running, a real Unity project already added and indexed
+in it (its assertions anchor against real graph content, not a fixture-only run), and a live Unity
+Editor attached for the editor-dependent cases (`--no-editor` restricts it to protocol+graph cases
+only and skips those). Expected counts per suite and what each one actually pins:
+`Documentation/RegressionCoverage.md`.
+
+### 8.3 Build
+
+```bash
+Shell~/HadesApp/scripts/build-dmg.sh Release --allow-unsigned
+```
+
+→ `Shell~/HadesApp/DerivedData/dmg/Hades-X.Y.Z-unsigned.dmg`. `--allow-unsigned` is deliberate, not
+a placeholder flag - v1 has no Apple Developer ID certificate, so this is the only build this repo
+can produce today (6.1, 6.4 above).
+
+### 8.4 Publish
+
+1. Create the GitHub Release on `TheArcForge/Hades` for tag `vX.Y.Z`; attach the DMG built in 8.3
+   as a release asset.
+2. Update `Casks/hades.rb`: `version` to match, and `sha256` to the real checksum
+   (`shasum -a 256 Hades-X.Y.Z-unsigned.dmg`), replacing `:no_check`.
+3. **Prerequisite, not yet done as of this writing:** `brew install --cask` refuses a loose `.rb`
+   file outright - "Homebrew requires casks to be in a tap" (measured, 6.7 above). This repo (or a
+   dedicated `homebrew-hades` tap) needs to actually be tapped somewhere reachable before this step
+   can run for real users. Publishing a tap is a separate, outward-facing decision that needs the
+   product owner's explicit go-ahead (6.6 above) - it is not an automatic part of this checklist.
+4. Once a tap exists: verify `brew install --cask` from it on a clean machine (or the closest
+   available substitute - 6.7 above records what was actually run under a no-network/no-git
+   constraint and why it stands in faithfully). Expect the install to complete and the app to
+   launch with **no Gatekeeper prompt** - that is the entire reason this release ships via Homebrew
+   rather than a bare DMG link: a DMG downloaded through a browser/Slack/Drive/AirDrop/Mail gets
+   `com.apple.quarantine` set and is blocked on first launch ("Apple could not verify..."), while
+   Homebrew (curl/git under the hood) never sets that flag. Full measurement: 6.2 above.
+
+### 8.5 Plugin / marketplace sync
+
+1. Pushing tag `vX.Y.Z` runs `.github/workflows/release.yml`, which runs `scripts/sync-plugin.sh`
+   and pushes the current `Plugin-ClaudeCode~/` content to `TheArcForge/hades-plugin` (section 1
+   above).
+2. **Known blocker - handle this as its own step, before or immediately after the push, not as a
+   footnote discovered later:** `TheArcForge/hades-plugin`'s own `.github/workflows/validate.yml`
+   still checks for the retired v1.2 shape (Bridge dist, Scanner source, a `.mcp.json` requiring
+   `${CLAUDE_PLUGIN_ROOT}`-relative paths) and will fail red on this sync, because the synced
+   content has none of that anymore. A drop-in replacement already exists in this repo at
+   `Documentation/hades-plugin-validate.yml` - someone with push access to `TheArcForge/hades-plugin`
+   must copy it over that repo's `.github/workflows/validate.yml`. This repo's own tooling cannot do
+   this step; it has no access to that repo beyond the sync push itself.
+3. Confirm the synced marketplace actually serves the current plugin, not the retired one - the
+   same check `Documentation/InternalTesting-Install.md`'s "Confirm you're testing the new Hades"
+   section already walks a tester through: tool count (32, not ~90) and `hades_status`'s `version`
+   field.
+
+### 8.6 Post-publish
+
+1. Once 8.5.3 confirms the marketplace is current, flip install guidance from "local `--plugin-dir`
+   only" back to the marketplace path everywhere it currently says otherwise: `scripts/plugin-README.md`,
+   `Documentation/InternalTesting-Install.md`, this file's own section 4 "Current install paths",
+   and `Shell~/HadesApp/Sources/HadesApp/Onboarding/Views/OnboardingClaudeCodeStepView.swift`.
+2. Re-verify the marketplace install end to end: `/plugin marketplace add TheArcForge/hades-plugin`
+   → `/plugin install hades` → `/mcp` reports `hades` at 32 tools over the HTTP URL, not a `node`
+   command.

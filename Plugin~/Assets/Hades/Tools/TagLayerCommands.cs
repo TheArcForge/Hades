@@ -100,6 +100,18 @@ namespace Hades.Tools
             var so = new SerializedObject(tagManager);
             var layers = so.FindProperty("layers");
 
+            // Uneven-validation audit: tag.create (above) already refuses a duplicate NAME; this
+            // sibling only ever checked its target SLOT for a collision, never the name itself - so
+            // two layers with the same name at different indices was silently accepted, leaving
+            // LayerMask.NameToLayer(name) to resolve ambiguously between them. Same duplicate-name
+            // refusal shape as CreateTag above, scanning every slot rather than just the requested one.
+            for (var i = 0; i < layers.arraySize; i++)
+            {
+                var existingName = layers.GetArrayElementAtIndex(i).stringValue;
+                if (!string.IsNullOrEmpty(existingName) && existingName == name)
+                    throw new ArgumentException("Layer '" + name + "' already exists at index " + i + ".");
+            }
+
             if (explicitIndex != null && explicitIndex.Kind != JsonValueKind.Null)
             {
                 if (explicitIndex.Kind != JsonValueKind.Integer && explicitIndex.Kind != JsonValueKind.Float)

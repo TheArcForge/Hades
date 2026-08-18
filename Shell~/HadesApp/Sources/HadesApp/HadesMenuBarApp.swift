@@ -9,6 +9,16 @@ import SwiftUI
 enum HadesMenuBarApp {
     static func main() {
         let app = NSApplication.shared
+
+        // Release blocker #3: the very first decision this process makes, before anything below
+        // assumes a working core or creates any window/menu-bar surface. See `ArchitectureGate`'s
+        // own doc comment for why this has to run this early, in Swift, with no .NET involved - on a
+        // genuine Intel Mac, this refusal (running in the x86_64 slice `build-app.sh` now also
+        // builds) is the ONLY code in this app that can ever execute at all.
+        if case .refuse(let message) = ArchitectureGate.decide(for: ArchitectureGate.currentSlice) {
+            presentUnsupportedArchitectureAlertAndExit(message: message)
+        }
+
         // No Dock icon, no Cmd+Tab entry - this is a menu-bar-only app. Also declared via
         // LSUIElement in the bundled Info.plist (see scripts/build-app.sh); setting it here too
         // means the app behaves correctly even when launched unbundled during development, when
@@ -32,6 +42,34 @@ enum HadesMenuBarApp {
         let delegate = AppDelegate(activationCoordinator: activationCoordinator)
         app.delegate = delegate
         app.run()
+    }
+
+    /// Shows the release-blocker-#3 refusal modally, then terminates - the one AppKit/process-exit
+    /// side effect `ArchitectureGate.decide(for:)` itself deliberately stays pure of (see that
+    /// method's own doc comment). Not unit tested, the same allowance this file's own
+    /// `SettingsWindowController` doc comment already claims for a direct AppKit call: there is
+    /// nothing for a test to assert against `NSAlert.runModal()` blocking on a real modal session or
+    /// `exit(0)` ending the process, and both are exactly the kind of thing this project's own
+    /// standard exempts from unit testing rather than contorting into something fake-able.
+    /// `runModal()` needs no open window and no running event loop - `NSApplication.shared` above is
+    /// the only AppKit setup a modal alert requires - which is exactly why this can run before
+    /// `setActivationPolicy`, before the main menu, and before `app.run()` starts the real event loop.
+    ///
+    /// `exit(0)`, not `NSApp.terminate(_:)`: `terminate(_:)` posts into the application's own run
+    /// loop and asks `AppDelegate.applicationShouldTerminate(_:)` first (see that method's own doc
+    /// comment) - machinery for shutting down a core this launch never started and a delegate that
+    /// does not exist yet. `exit(0)` ends the process immediately and cleanly, with no crash report
+    /// and no launchd relaunch - the direct opposite of the "silently fails to launch" failure mode
+    /// release blocker #3 reports, on purpose: this is a deliberate, informed stop, not a crash.
+    @MainActor
+    private static func presentUnsupportedArchitectureAlertAndExit(message: String) -> Never {
+        let alert = NSAlert()
+        alert.messageText = "Hades Can't Run on This Mac"
+        alert.informativeText = message
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: "Quit")
+        alert.runModal()
+        exit(0)
     }
 
     /// Establishes the Settings scene's entry point - Spec #3 §3.5: "a standard macOS Settings

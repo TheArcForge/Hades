@@ -7,50 +7,6 @@ on:
     branches: [main]
 
 jobs:
-  bridge-tests:
-    name: Bridge (Node.js) Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: "Bridge~/package-lock.json"
-
-      - name: Install dependencies
-        working-directory: Bridge~
-        run: npm ci
-
-      - name: Run tests
-        working-directory: Bridge~
-        run: npm test
-
-      - name: Build
-        working-directory: Bridge~
-        run: npm run build
-
-  scanner-tests:
-    name: Scanner (Node.js) Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: "Scanner~/package-lock.json"
-
-      - name: Install dependencies
-        working-directory: Scanner~
-        run: npm ci
-
-      - name: Run tests
-        working-directory: Scanner~
-        run: node --experimental-vm-modules node_modules/.bin/jest --testPathIgnorePatterns '/tests/integration\.test\.js$' && node --experimental-vm-modules node_modules/.bin/jest tests/integration.test.js
-
   dotnet-tests:
     name: App (.NET) Tests
     # macos-latest, not ubuntu: this suite has only ever run on macOS and Hades itself ships

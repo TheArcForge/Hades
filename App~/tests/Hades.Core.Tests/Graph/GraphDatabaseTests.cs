@@ -1,4 +1,5 @@
 using Hades.Core.Graph;
+using Hades.Core.Observation;
 using Microsoft.Data.Sqlite;
 
 namespace Hades.Core.Tests.Graph;
@@ -160,6 +161,45 @@ public class GraphDatabaseTests : IDisposable
 
         Assert.Empty(db.SearchByName("A"));
         Assert.Single(db.SearchByName("B"));
+    }
+
+    // ---------------------------------------------------------------- F22: nodes/edges vs. file_state
+    //
+    // DeleteNodesForPath and DeleteNodesAndEdgesForPath differ in exactly one respect — whether
+    // file_state dies with the nodes — and that one respect is precisely what F22 was about: a
+    // full rebuild used to call the file-state-clearing method for every file it revisited,
+    // including files unchanged since the previous index, silently emptying file_state
+    // project-wide. These two tests pin the contract each method now holds.
+
+    [Fact]
+    public void DeleteNodesForPath_AlsoRemovesTheFilesFileStateRow()
+    {
+        using var db = Open();
+        db.UpsertNodes([Node("A", path: "Assets/A.cs")]);
+        db.UpsertFileState([new FileState { Path = "Assets/A.cs", MTimeUtcMs = 1, Size = 1 }]);
+
+        db.DeleteNodesForPath("Assets/A.cs");
+
+        Assert.DoesNotContain("Assets/A.cs", db.AllFileState().Keys);
+    }
+
+    [Fact]
+    public void DeleteNodesAndEdgesForPath_RemovesNodesAndEdges_ButLeavesFileStateUntouched()
+    {
+        using var db = Open();
+        db.UpsertNodes([Node("A", path: "Assets/A.cs")]);
+        db.UpsertEdges([new GraphEdge
+        {
+            FromPath = "Assets/A.cs", FromFileId = 1, ToGuid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ToFileId = 0, Kind = "references", PropertyPath = "m_Script",
+        }]);
+        db.UpsertFileState([new FileState { Path = "Assets/A.cs", MTimeUtcMs = 1, Size = 1 }]);
+
+        db.DeleteNodesAndEdgesForPath("Assets/A.cs");
+
+        Assert.Empty(db.SearchByName("A"));
+        Assert.Empty(db.EdgesFrom("Assets/A.cs", 1));
+        Assert.Contains("Assets/A.cs", db.AllFileState().Keys);
     }
 
     [Fact]

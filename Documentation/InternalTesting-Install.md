@@ -11,8 +11,10 @@
 ## Before you do anything: three hard constraints
 
 1. **Apple Silicon (arm64) only.** The embedded core is published `-r osx-arm64
-   --self-contained`, and nothing produces a universal build today. **A Hades.app built now
-   will not run on an Intel Mac**, full stop. (`Documentation/ReleasePipeline.md` §6.9)
+   --self-contained`, so **Hades cannot function on an Intel Mac**. The SwiftUI shell itself
+   *is* built universal (`ARCHS="x86_64 arm64"`), but only so an Intel Mac gets a clear
+   "requires Apple Silicon" alert instead of a silent launch failure — it quits right after.
+   (`Shell~/HadesApp/scripts/build-app.sh`, `Documentation/ReleasePipeline.md` §6.9)
 2. **Unsigned and un-notarized.** Deliberate, not forgotten — there is no Apple Developer ID
    certificate for this project yet (`security find-identity -v -p codesigning` → 0 valid
    identities, measured). This is *why* installing takes a couple of extra steps below.
@@ -156,8 +158,13 @@ The plugin is `Plugin-ClaudeCode~/` in the repo — skills, commands, and a plug
 `.mcp.json` pointing straight at `http://127.0.0.1:7823/mcp` (the app itself; no separate Node
 hub process this time, unlike v1.2).
 
-It isn't published to a marketplace yet, so for this round install it from your local
-checkout:
+**Do not use `/plugin marketplace add TheArcForge/hades-plugin` / `/plugin install hades`.**
+That self-hosted marketplace exists, but it has not been resynced to this plugin shape yet — it
+currently still serves the retired v1.2 plugin (Node stdio launcher, closer to 90 tools than 32).
+Registering it today installs the wrong, retired generation of Hades, silently. A future resync
+will make it the right path again, but not yet.
+
+For this round, install from your local checkout instead:
 
 ```
 claude --plugin-dir <path-to-your-Hades-checkout>/Plugin-ClaudeCode~
@@ -187,8 +194,8 @@ Check both:
    count next to each server.
    - **New app: 32 tools.** (counted directly from `[McpServerTool]` attributes in
      `App~/src/Hades.Server/Mcp/*.cs` — also stated in `ReleasePipeline.md` §6.9 and the
-     103→32 consolidation noted in `docs/backlog/mutation-tool-defects.md`)
-   - **Old v1.2 package: 90 tools.** (counted directly from `[MCPTool]` attributes in
+     ~90→32 consolidation noted in `docs/backlog/mutation-tool-defects.md`)
+   - **Old v1.2 package: ~90 tools.** (counted directly from `[MCPTool]` attributes in
      `Editor/MCP/Tools/*.cs`; the old plugin manifest's own description also says "90 MCP
      tools")
    - **Connected, but 0 tools.** Neither of the above — and a real outcome, not a hypothetical
@@ -209,16 +216,16 @@ Check both:
        on the old surface, not the new one — see "If you're on the old server" below.
 
 2. **Server version.** Ask Claude to call the `hades_status` tool. Check the `version` field.
-   - **New app reports `2.0.0-beta.3`** — a fixed constant (`HadesTools.cs`, `ServerVersion`).
+   - **New app reports `2.0.0`** — a fixed constant (`HadesTools.cs`, `ServerVersion`).
    - **Old v1.2 package reports whatever Unity Package Manager has installed** —
      `Editor/MCP/Tools/GraphQueryTools.cs`'s `hades_status` reads it live via
      `PackageInfo.FindForAssembly(...).version`, not a hardcoded string. For the current old
      release that resolves to `1.2.0`.
 
-   **Do not** use the Unity-side plugin's own version number for this — confusingly, the
-   *new* plugin's `Assets/Hades/Runtime/HadesBoot.cs` also carries the literal string
-   `"1.2.0"` (`PluginVersion` constant, verified in source). That number tells you nothing
-   about old-vs-new; only the two checks above do.
+   **Do not** use the Unity-side plugin's own version number for this — the
+   *new* plugin's `Assets/Hades/Runtime/HadesBoot.cs` carries its own independent version line,
+   currently `"1.4.0"` (`PluginVersion` constant, verified in source, kept in sync with two test
+   mirrors). That number tells you nothing about old-vs-new; only the two checks above do.
 
 3. **Extra tell, if you want a third data point:** the new tool list includes `prefab_apply`.
    The old list has no tool by that exact name — it has `prefab_create`, `prefab_instantiate`,
@@ -302,16 +309,6 @@ Hades.app is running. Enabling launch-at-login for Hades — the Claude Code onb
 own toggle, or Settings → Login — prevents this class of failure entirely, since Hades is then
 already running before any Claude Code session starts.
 
-**A PlayMode `project_run_tests` run saves open scenes to disk, even unsaved scratch changes.**
-Entering play mode makes Unity's own Test Runner save whatever scenes are open; `project_run_tests`
-with `testMode: PlayMode` inherits that behavior and doesn't say so, so a tracked scene can change
-with no explicit `scene_apply`/`scene_manage save` in between — confirmed directly, across separate
-testing sessions. **EditMode runs are unaffected** — the tool's own description already notes
-that EditMode triggers a domain reload, and that path never saves scenes. If a PlayMode run leaves
-scratch content behind, the recovery is clean: remove it via `scene_apply`, then `scene_manage`
-`save` — the rest of the file round-trips byte-identical. Check `git status` on scenes you have
-open before and after a PlayMode run if this matters to you.
-
 Fixes for the findings raised during this testing round are in progress and not yet reflected
 here. If something you hit isn't described above, it's more likely new than already known —
 report it.
@@ -343,7 +340,7 @@ Roughly in priority order — this is where problems are most likely to be:
    (version-skew handling — should degrade, never hard-refuse).
 5. **The batch `_apply`/`_manage` tools with a live Editor attached** — `scene_apply`,
    `material_apply`, `animation_apply`, `prefab_apply`, `asset_manage`, `project_settings_apply`.
-   These are the newest and least-exercised surface (consolidated down from 103 older tools to
+   These are the newest and least-exercised surface (consolidated down from ~90 older tools to
    32). For anything that mutates a scene/prefab/material/asset, **check the actual saved YAML
    on disk, not just whether the tool call reported success** — that's exactly how a previously
    reported flattened-prefab bug was caught, and later confirmed fixed, in earlier rounds; a
@@ -361,7 +358,7 @@ Include:
 
 - What you did, what you expected, what actually happened.
 - Which install path (cask / DMG), and whether Gatekeeper fired.
-- `hades_status`'s output (gives the MCP server version — `2.0.0-beta.3` for the new app — and
+- `hades_status`'s output (gives the MCP server version — `2.0.0` for the new app — and
   which projects the app knows about). Paste it directly.
 - macOS version and confirmation you're on Apple Silicon.
 - For anything Unity-mutation-related: the actual `.unity`/`.prefab`/`.mat`/`.controller` YAML

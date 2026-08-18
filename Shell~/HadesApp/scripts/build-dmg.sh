@@ -211,9 +211,10 @@ else
     VOL_NAME="Hades $VERSION (Unsigned, Apple Silicon)"
     DMG_NAME="Hades-$VERSION-unsigned.dmg"
     cat > "$DMG_STAGING/README - Unsigned Build.txt" <<EOF
-Hades is built for Apple Silicon (arm64) only - it will not run on an Intel Mac. Its embedded
-.NET core is a self-contained osx-arm64 publish (see Documentation/ReleasePipeline.md section 6.9);
-a universal (arm64+x64) build is not produced yet.
+Hades requires an Apple Silicon Mac and will not function on an Intel Mac. Its embedded .NET core
+is a self-contained osx-arm64 publish (see Documentation/ReleasePipeline.md section 6.9); a
+universal core is not produced yet. On an Intel Mac, Hades opens just far enough to explain this,
+then quits on its own - it does not install itself or leave anything behind.
 
 Hades is not signed with an Apple Developer ID certificate.
 

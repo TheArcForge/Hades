@@ -157,6 +157,83 @@ namespace Hades.Tests.Editor
             }
         }
 
+        // ------------------------------------------------- asset.move - self/descendant cycle guard
+
+        /// <summary>Uneven-validation audit: the same cycle hazard
+        /// SceneCommandsTests.ReparentGameObject_UnderItself_Refused_NoLeaseTouched (F21) pins for the
+        /// scene hierarchy, here for a "move" onto the source's own exact path.</summary>
+        [Test]
+        public void MoveAsset_SourceEqualsDestination_RefusedBeforeAnyWrite_NoLeaseTouched()
+        {
+            var path = ScratchDir + "/SelfMove.mat";
+            AssetDatabase.CreateAsset(new Material(Shader.Find("Standard")), path);
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject().SetProperty("sourcePath", JsonValue.String(path)).SetProperty("destPath", JsonValue.String(path));
+
+                var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("asset.move", @params)));
+                StringAssert.Contains("cycle", ex.Message);
+
+                // A refused self-move must not have touched the asset at all.
+                Assert.IsNotNull(AssetDatabase.LoadAssetAtPath<Material>(path));
+
+                AssertNeverTouchedLease(fake, gate);
+            }
+        }
+
+        /// <summary>Uneven-validation audit: the folder-hierarchy analogue of
+        /// SceneCommandsTests.ReparentGameObject_UnderOwnDescendant_Refused_NoLeaseTouched (F21) -
+        /// moving a folder to a path INSIDE itself has no sensible outcome.</summary>
+        [Test]
+        public void MoveAsset_FolderIntoOwnDescendant_RefusedBeforeAnyWrite_OriginalFolderIntact()
+        {
+            var folderPath = ScratchDir + "/SelfNestFolder";
+            AssetDatabase.CreateFolder(ScratchDir, "SelfNestFolder");
+            var markerAssetPath = folderPath + "/Marker.mat";
+            AssetDatabase.CreateAsset(new Material(Shader.Find("Standard")), markerAssetPath);
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var destPath = folderPath + "/Nested/SelfNestFolder";
+                var @params = JsonValue.NewObject().SetProperty("sourcePath", JsonValue.String(folderPath)).SetProperty("destPath", JsonValue.String(destPath));
+
+                var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("asset.move", @params)));
+                StringAssert.Contains("cycle", ex.Message);
+
+                // The original folder and its contents must still be exactly where they were - no
+                // partial move, no orphaned intermediate folder created below it.
+                Assert.IsTrue(AssetDatabase.IsValidFolder(folderPath));
+                Assert.IsNotNull(AssetDatabase.LoadAssetAtPath<Material>(markerAssetPath));
+                Assert.IsFalse(AssetDatabase.IsValidFolder(folderPath + "/Nested"));
+
+                AssertNeverTouchedLease(fake, gate);
+            }
+        }
+
+        [Test]
+        public void MoveAsset_SiblingWithSimilarPrefix_NotTreatedAsDescendant_MovesNormally()
+        {
+            // Guards against an overly-broad string check: "Assets/.../FooBar" must not be mistaken
+            // for a descendant of "Assets/.../Foo" just because it shares a text prefix - this rename
+            // must succeed normally, exactly as it would have before the cycle guard was added.
+            var sourcePath = ScratchDir + "/Foo";
+            AssetDatabase.CreateFolder(ScratchDir, "Foo");
+
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var destPath = ScratchDir + "/FooBar";
+            var @params = JsonValue.NewObject().SetProperty("sourcePath", JsonValue.String(sourcePath)).SetProperty("destPath", JsonValue.String(destPath));
+
+            CommandTable.Dispatch(gate, Request("asset.move", @params));
+
+            Assert.IsTrue(AssetDatabase.IsValidFolder(destPath));
+            Assert.IsFalse(AssetDatabase.IsValidFolder(sourcePath));
+        }
+
         // -------------------------------------------------------------------------- asset.import
 
         [Test]
@@ -189,6 +266,30 @@ namespace Hades.Tests.Editor
 
                 var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("asset.import", @params)));
                 StringAssert.Contains("Ghost.txt", ex.Message);
+
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
+        /// <summary>Uneven-validation audit: unlike asset.move's destPath (guarded since the F16/F17
+        /// round), asset.import's own 'path' was never routed through AssetPathGuard - its existence
+        /// check is a RAW File.Exists/Directory.Exists against an unconfined ToAbsolutePath, reachable
+        /// before anything refuses a traversal path. Asserts the SAME AssetPathGuard message shape
+        /// every create-family tool already produces, not just "some ArgumentException" - a test
+        /// asserting only Ghost.txt's own path substring would pass even against the OLD unguarded
+        /// code (that path also appears inside the old "nothing exists on disk" message), so this
+        /// pins the actual guard, not merely "an error happened".</summary>
+        [Test]
+        public void ImportAsset_TraversalPath_RefusedBeforeAnyFilesystemCheck_StillReleasesLease()
+        {
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String("Assets/../EscapedImport.txt"));
+
+                var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("asset.import", @params)));
+                StringAssert.Contains("not a plain project-relative path", ex.Message);
+                Assert.IsFalse(File.Exists(AbsolutePath("EscapedImport.txt")));
 
                 AssertLeaseCleanlyReleased(fake, gate);
             }
@@ -271,6 +372,25 @@ namespace Hades.Tests.Editor
             }
         }
 
+        /// <summary>Uneven-validation audit: same gap as ImportAsset_TraversalPath's own doc comment
+        /// describes, for asset.set_import_settings' 'path' instead.</summary>
+        [Test]
+        public void SetImportSettings_TraversalPath_RefusedBeforeAnyWork_StillReleasesLease()
+        {
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject()
+                    .SetProperty("path", JsonValue.String("Assets/../EscapedSettings.png"))
+                    .SetProperty("properties", JsonValue.NewObject().SetProperty("m_IsReadable", JsonValue.Bool(true)));
+
+                var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("asset.set_import_settings", @params)));
+                StringAssert.Contains("not a plain project-relative path", ex.Message);
+
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
         // --------------------------------------------------------- asset.set_clip_import_settings
 
         [Test]
@@ -326,6 +446,25 @@ namespace Hades.Tests.Editor
 
                 var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("asset.set_clip_import_settings", @params)));
                 StringAssert.Contains("Ghost.fbx", ex.Message);
+
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
+        /// <summary>Uneven-validation audit: same gap as ImportAsset_TraversalPath's own doc comment
+        /// describes, for asset.set_clip_import_settings' 'path' instead.</summary>
+        [Test]
+        public void SetClipImportSettings_TraversalPath_RefusedBeforeAnyWork_StillReleasesLease()
+        {
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject()
+                    .SetProperty("path", JsonValue.String("Assets/../EscapedClipSettings.fbx"))
+                    .SetProperty("clips", JsonValue.NewArray().Add(JsonValue.NewObject().SetProperty("name", JsonValue.String("Take 001"))));
+
+                var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("asset.set_clip_import_settings", @params)));
+                StringAssert.Contains("not a plain project-relative path", ex.Message);
 
                 AssertLeaseCleanlyReleased(fake, gate);
             }

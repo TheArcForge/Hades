@@ -265,6 +265,14 @@ public sealed class PrefabApplyTests(WebApplicationFactory<Program> factory) : E
         Assert.Equal(1, failed[0].GetProperty("index").GetInt32());
         Assert.Equal("instantiate", failed[0].GetProperty("op").GetString());
         Assert.Contains("Ghost.prefab", failed[0].GetProperty("error").GetString());
+
+        // The unified partial-batch shape: 'results' surfaces an entry (with the op's own result
+        // payload) for the APPLIED op, faithfully mapped from the wire - not just a bare index.
+        var results = structured.GetProperty("results");
+        Assert.Equal(1, results.GetArrayLength());
+        Assert.Equal(0, results[0].GetProperty("index").GetInt32());
+        Assert.Equal("create", results[0].GetProperty("op").GetString());
+        Assert.Equal("Assets/Widget.prefab", results[0].GetProperty("result").GetProperty("createdAsset").GetString());
     }
 
     // ---------------------------------------------------------------- whole-call (plugin-level) failure still propagates

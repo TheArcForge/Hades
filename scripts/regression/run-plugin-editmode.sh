@@ -32,7 +32,7 @@
 #      on any failure (or if Unity never produced results.xml at all). The scratch directory is
 #      deleted on success; left in place (path printed) on failure, for inspection.
 #
-# Recorded baseline: 371/371 EditMode tests passing. The count may have grown since - a higher
+# Recorded baseline: 384/384 EditMode tests passing. The count may have grown since - a higher
 # total with 0 failed is still a pass; only a lower total or any failure is news.
 set -u
 

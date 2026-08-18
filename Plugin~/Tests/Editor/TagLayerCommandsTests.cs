@@ -268,6 +268,26 @@ namespace Hades.Tests.Editor
         }
 
         [Test]
+        public void CreateLayer_DuplicateNameAtDifferentIndex_ThrowsActionableError()
+        {
+            // Uneven-validation audit: tag.create already refuses a duplicate NAME
+            // (CreateTag_AlreadyExists_ThrowsActionableError above) - this is the same check's
+            // sibling for layer.create, which previously only ever checked its target SLOT for a
+            // collision, never the name itself.
+            DispatchSetup("layer.create", JsonValue.NewObject().SetProperty("name", JsonValue.String(TestLayerName)).SetProperty("layerIndex", JsonValue.Integer(30)));
+
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var @params = JsonValue.NewObject().SetProperty("name", JsonValue.String(TestLayerName)).SetProperty("layerIndex", JsonValue.Integer(31));
+
+            var ex = Assert.Throws<ArgumentException>(() => CommandTable.Dispatch(gate, Request("layer.create", @params)));
+
+            StringAssert.Contains("already exists", ex.Message);
+            Assert.AreEqual("", LayerNameAt(31), "the colliding-name create must not have written anything to the second slot");
+        }
+
+        [Test]
         public void CreateLayer_ExplicitIndexBelow8_ThrowsActionableError()
         {
             using var pump = new MainThreadPump();

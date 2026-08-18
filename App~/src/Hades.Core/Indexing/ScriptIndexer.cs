@@ -44,7 +44,11 @@ public static class ScriptIndexer
                 var types = RoslynScriptScanner.ScanFile(relativePath, absolute, defines);
                 var scriptGuid = Unity.MetaFileReader.TryReadGuid(absolute);
 
-                database.DeleteNodesForPath(relativePath);
+                // F22: DeleteNodesAndEdgesForPath, never the file-state-clearing
+                // DeleteNodesForPath — this file is being re-indexed, not retired, and its
+                // file_state row must survive so an unchanged file's next sweep still sees it as
+                // recorded (see DeleteNodesAndEdgesForPath's own doc comment for the mechanism).
+                database.DeleteNodesAndEdgesForPath(relativePath);
                 database.UpsertNodes(types.Select(t => ToNode(t, scriptGuid)).ToList());
                 typesFound += database.CountNodesForPath(relativePath);
             }
@@ -102,8 +106,13 @@ public static class ScriptIndexer
                     var scriptGuid = MetaFileReader.TryReadGuid(file);
 
                     // Delete-then-insert per file: a type removed from the source must
-                    // disappear from the graph, which an upsert alone would never do.
-                    database.DeleteNodesForPath(relativePath);
+                    // disappear from the graph, which an upsert alone would never do. F22:
+                    // DeleteNodesAndEdgesForPath, never DeleteNodesForPath — this file may well be
+                    // UNCHANGED since the last index (a full rebuild visits every file regardless),
+                    // and only DeleteNodesAndEdgesForPath leaves an unchanged file's file_state row
+                    // alone rather than silently erasing it with nothing to restore it (see that
+                    // method's own doc comment for the mechanism this once broke).
+                    database.DeleteNodesAndEdgesForPath(relativePath);
                     database.UpsertNodes(types.Select(t => ToNode(t, scriptGuid)).ToList());
 
                     // Counts rows actually recorded, not types parsed: two declarations that

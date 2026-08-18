@@ -93,19 +93,24 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
     }
 
     [Fact]
-    public async Task ProjectRunTests_DescriptionDisclosesBothEditModeReloadAndPlayModeSceneSave()
+    public async Task ProjectRunTests_DescriptionDisclosesEditModeReloadAndDeniesSceneSave()
     {
-        // F12: entering PlayMode saves every open scene to disk - a side effect worth disclosing
-        // up front the same way EditMode's own domain-reload trigger already is, so unsaved scene
-        // state reaching disk is never a surprise.
+        // F12 was "PlayMode runs silently save the open scene to disk" - traced to Plugin~'s own
+        // RunTests calling an explicit, UNCONDITIONAL scene-save before EVERY run (not just
+        // PlayMode), never to any inherent Unity behavior: Unity itself never needs a disk write to
+        // protect scene state across a domain reload or a PlayMode enter/exit (see
+        // ProjectCommands.RunTests' own doc comment, Plugin~, for the full account). Fixed by
+        // removing that call outright, so this now pins the description's new, TRUE shape: still
+        // calls out EditMode's own domain reload (unchanged, real), and now explicitly DENIES ever
+        // saving a scene, rather than warning that it does.
         var tools = (await McpTestClient.ListTools(Factory)).GetProperty("result").GetProperty("tools");
         var tool = Assert.Single(tools.EnumerateArray(), t => t.GetProperty("name").GetString() == "project_run_tests");
         var description = tool.GetProperty("description").GetString()!;
 
         Assert.Contains("domain reload", description, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("PlayMode", description);
-        Assert.Contains("saves", description, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("never saves", description, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("open scene", description, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Unity saves", description, StringComparison.OrdinalIgnoreCase);
     }
 
     // ---------------------------------------------------------------- project_get_console_log

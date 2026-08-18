@@ -16,14 +16,19 @@ namespace Hades.Core.Tests.Indexing;
 /// known to contain, and that its GUID is now reachable from a real referencing file — the actual
 /// capability this feature exists to deliver, proven without printing what either file is.
 ///
-/// Scoped to Assets/ specifically, not the whole scanned corpus: this project also has Hades
-/// itself installed as a local "file:" package (Packages/com.arcforge.hades), which carries its
-/// own documentation image outside Assets/ entirely — a second, legitimately-scanned texture (see
+/// Scoped to Assets/ specifically, not the whole scanned corpus, even though the two now
+/// coincide: until this same commit deleted this repo's own v1.2 tree and, with it,
+/// Hades-Unity-Client's Packages/manifest.json "file:" dependency on this repo (see
+/// ReleasePipeline.md §7), this project also had Hades itself installed as a local package
+/// (Packages/com.arcforge.hades), which carried its own documentation image outside Assets/
+/// entirely — a second, legitimately-scanned texture (see
 /// AssetIndexerTests.IndexesAssetsInsideLocalFilePackages for the same local-package scan-root
-/// behaviour proven on a synthetic fixture). That is a real, correct hit for this feature, not a
-/// bug, but it makes "exactly one texture in the whole corpus" untrue in general — while "exactly
-/// one texture under Assets/" remains a stable, independently-verified fact about this project's
-/// own authored content specifically.
+/// behaviour proven on a synthetic fixture). That was a real, correct hit for this feature, not a
+/// bug, but it made "exactly one texture in the whole corpus" untrue in general — while "exactly
+/// one texture under Assets/" was, and remains, a stable, independently-verified fact about this
+/// project's own authored content specifically. Keeping the assertion scoped there (rather than
+/// broadening it now that the two counts match) keeps it correct regardless of whether a future
+/// local package reappears.
 /// </summary>
 public class RealProjectBinaryAssetIndexSmokeTest
 {
