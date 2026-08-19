@@ -8,7 +8,7 @@ Hades is a standalone macOS menu-bar app. Its .NET core builds a queryable knowl
 
 ## Status
 
-Requires Apple Silicon and macOS 14+ — the embedded .NET core is arm64-only. On Intel Macs the app shows a clear alert and quits instead of failing to launch silently. Unsigned and un-notarized; distributed via Homebrew, which doesn't set the quarantine flag, so there's no Gatekeeper prompt on that path.
+Requires Apple Silicon and macOS 14+ — the embedded .NET core is arm64-only. On Intel Macs the app shows a clear alert and quits instead of failing to launch silently. Unsigned and un-notarized, which shapes how you install it — see [Signing and installation](#signing-and-installation).
 
 ## Pieces
 
@@ -39,7 +39,17 @@ You can also take the DMG straight from [Releases](https://github.com/TheArcForg
 and drag it to Applications. That works, but macOS will block it on first launch — see
 [Signing and installation](#signing-and-installation) for why, and for the one-time approval steps.
 
-Then connect Claude Code:
+Then connect Claude Code. In a `claude` session:
+
+```
+/plugin marketplace add TheArcForge/hades-plugin
+```
+
+followed by `/plugin install hades`. That installs the skills, commands, and the `.mcp.json` that
+points at the app on `127.0.0.1:7823`. Run `/mcp` afterwards and confirm `hades` reports **32 tools**.
+
+Working from a clone instead? Point Claude Code at the plugin directly — per-session, so pass it
+every time:
 
 ```sh
 claude --plugin-dir <your-Hades-checkout>/Plugin-ClaudeCode~
@@ -68,12 +78,10 @@ decides your install experience:
 |---|---|---|
 | [`install.sh`](install.sh) (uses `curl`) | No | Opens normally |
 | DMG downloaded in a browser, or via Slack/Drive/AirDrop/Mail | Yes | Blocked — *"Apple could not verify…"* |
-| Homebrew cask | Yes | Blocked — Homebrew stamps the attribute on its own downloads |
 
 So [`install.sh`](install.sh) is the recommended route today. It does not disable Gatekeeper,
 strip attributes, or ask for `sudo` — it simply fetches with a tool that does not mark downloads,
-which is the same mechanism every `curl | bash` developer installer relies on, Homebrew's own
-included.
+which is the same mechanism every `curl | bash` developer installer relies on.
 
 **If you did get the blocked dialog**, the app is fine and this is the recovery (macOS 15 removed
 the old right-click → Open shortcut, so this is now the only route):
@@ -85,7 +93,7 @@ the old right-click → Open shortcut, so this is now the only route):
 Once per installed version, not once per launch.
 
 **This is a stopgap, and it is meant to be temporary.** Signing and notarizing is the real fix:
-it removes the prompt on every channel, makes Homebrew viable, and lets this section be deleted.
+it removes the prompt on every channel and lets this section be deleted.
 It is waiting on the Developer ID account, not on a technical decision.
 
 ## License

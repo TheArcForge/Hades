@@ -28,7 +28,7 @@
 set -euo pipefail
 
 VERSION="2.0.0"
-SHA256="1777a93cf2025aad1e498ee8bd632ecb0130af5c6f52f12212941cfaf51bc8eb"
+SHA256="9d6fa06318bc99e6c2eb6458e3c7958fc50d2abb927d46654683b75f71753c27"
 
 REPO="TheArcForge/Hades"
 DMG_NAME="Hades-${VERSION}-unsigned.dmg"

@@ -33,16 +33,11 @@ measured directly on the machine that built this app (`ReleasePipeline.md` §6.2
 | Channel | `com.apple.quarantine` set? | Result |
 |---|---|---|
 | `install.sh` (curl) | **No** | Launches with **no Gatekeeper prompt at all** |
-| Homebrew cask | **Yes** | Blocked on first launch — *"Apple could not verify…"* |
 | DMG downloaded through a browser, Slack, Drive, AirDrop, Mail, etc. | **Yes** | Blocked on first launch — *"Apple could not verify…"* |
 
 `curl` and `git clone` do not mark files as quarantined; anything that "receives" a file on your
-behalf (browser, Mail, Messages, AirDrop, Slack downloads) does — **and so does Homebrew**, which
-stamps the attribute itself on top of the curl it uses internally. An earlier version of this
-table claimed otherwise; that was corrected on 2026-08-18 after an actual `brew install --cask`
-was run for the first time. This is why the
-same unsigned app behaves differently depending on how it arrived — it's about the channel,
-not the file.
+behalf (browser, Mail, Messages, AirDrop, Slack downloads) does. This is why the same unsigned app
+behaves differently depending on how it arrived — it's about the channel, not the file.
 
 ### Option A — install.sh (recommended: zero Gatekeeper friction)
 
@@ -58,11 +53,6 @@ Until a `v2.0.0` release is published with the DMG attached, the URL inside the 
 test it against a locally built DMG, copy the script and point `URL` at a `file://` path, redirect
 `INSTALL_DIR` to a scratch directory, and drop the `--proto '=https'` guard — the full recipe and
 what the run must show is in `ReleasePipeline.md` §6.7.
-
-**There is no Homebrew cask.** One existed and was removed: Homebrew quarantines its own downloads,
-so a cask install of an unsigned app is blocked exactly like a browser download, and
-`--no-quarantine` no longer exists. `ReleasePipeline.md` §6.6 records the full reasoning and what
-would change once the app is signed.
 
 ### Option B — DMG (works today, not frictionless)
 
@@ -106,13 +96,17 @@ The plugin is `Plugin-ClaudeCode~/` in the repo — skills, commands, and a plug
 `.mcp.json` pointing straight at `http://127.0.0.1:7823/mcp` (the app itself; no separate Node
 hub process this time, unlike v1.2).
 
-**Do not use `/plugin marketplace add TheArcForge/hades-plugin` / `/plugin install hades`.**
-That self-hosted marketplace exists, but it has not been resynced to this plugin shape yet — it
-currently still serves the retired v1.2 plugin (Node stdio launcher, closer to 90 tools than 32).
-Registering it today installs the wrong, retired generation of Hades, silently. A future resync
-will make it the right path again, but not yet.
+The normal way to install it, in a `claude` session:
 
-Until that resync happens, install from a local checkout instead:
+```
+/plugin marketplace add TheArcForge/hades-plugin
+```
+
+then `/plugin install hades`. Run `/mcp` afterwards and confirm `hades` reports **32 tools** — if
+it reports closer to 90, you have the retired v1.2 plugin; see "Confirm you're testing the new
+Hades" below.
+
+Working from a clone instead — contributors, or anyone wanting the exact tree they checked out:
 
 ```
 claude --plugin-dir <path-to-your-Hades-checkout>/Plugin-ClaudeCode~
