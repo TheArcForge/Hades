@@ -61,7 +61,7 @@ Fix it in Claude Code itself — `/plugin` lists installed plugins; disable or u
 `hades` entry there, then start a fresh session. If a project also has a stray `.mcp.json` still
 pointing at the old hub, Hades.app's own migration cleanup (in its Settings, once it detects a
 v1.2 project) removes it — see the [main repo](https://github.com/TheArcForge/Hades)'s
-`Documentation/InternalTesting-Install.md`, "Migrating from v1.2" section, for the full
+`Documentation/Installing.md`, "Migrating from v1.2" section, for the full
 walkthrough.
 
 ## Usage

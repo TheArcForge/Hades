@@ -21,7 +21,31 @@ Requires Apple Silicon and macOS 14+ — the embedded .NET core is arm64-only. O
 
 ## Install
 
-See [Documentation/InternalTesting-Install.md](Documentation/InternalTesting-Install.md).
+Apple Silicon Mac, macOS 14 or later.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/TheArcForge/Hades/main/install.sh | bash
+```
+
+That downloads the release DMG, verifies its SHA-256, and copies `Hades.app` to `/Applications`.
+It needs no `sudo`, changes no system settings, and disables nothing. If you would rather read a
+script before running it — a reasonable habit — the source is [`install.sh`](install.sh):
+
+```sh
+curl -fsSL -O https://raw.githubusercontent.com/TheArcForge/Hades/main/install.sh
+```
+
+You can also take the DMG straight from [Releases](https://github.com/TheArcForge/Hades/releases)
+and drag it to Applications. That works, but macOS will block it on first launch — see
+[Signing and installation](#signing-and-installation) for why, and for the one-time approval steps.
+
+Then connect Claude Code:
+
+```sh
+claude --plugin-dir <your-Hades-checkout>/Plugin-ClaudeCode~
+```
+
+Longer walkthrough, including troubleshooting: [Documentation/Installing.md](Documentation/Installing.md).
 
 ## Architecture
 
@@ -30,6 +54,39 @@ See [Documentation/Architecture.md](Documentation/Architecture.md).
 ## Migrating from v1.2
 
 The app detects an existing v1.2 install (Unity package + in-Editor MCP server + Node bridge) and offers to migrate its project memory and clean up the old install.
+
+## Signing and installation
+
+**Hades is not yet signed with an Apple Developer ID certificate.** There is no such certificate
+for this project yet; getting one is the plan, and this section disappears when it happens.
+
+macOS blocks unsigned apps on first launch — but only files carrying the `com.apple.quarantine`
+attribute, which is set by whatever fetched the file, not by the file itself. That single detail
+decides your install experience:
+
+| How you got it | Quarantined? | First launch |
+|---|---|---|
+| [`install.sh`](install.sh) (uses `curl`) | No | Opens normally |
+| DMG downloaded in a browser, or via Slack/Drive/AirDrop/Mail | Yes | Blocked — *"Apple could not verify…"* |
+| Homebrew cask | Yes | Blocked — Homebrew stamps the attribute on its own downloads |
+
+So [`install.sh`](install.sh) is the recommended route today. It does not disable Gatekeeper,
+strip attributes, or ask for `sudo` — it simply fetches with a tool that does not mark downloads,
+which is the same mechanism every `curl | bash` developer installer relies on, Homebrew's own
+included.
+
+**If you did get the blocked dialog**, the app is fine and this is the recovery (macOS 15 removed
+the old right-click → Open shortcut, so this is now the only route):
+
+1. **System Settings → Privacy & Security**, scroll to the Security section.
+2. A line naming Hades appears with an **Open Anyway** button. Click it and authenticate.
+3. Open Hades again; click **Open** in the second dialog.
+
+Once per installed version, not once per launch.
+
+**This is a stopgap, and it is meant to be temporary.** Signing and notarizing is the real fix:
+it removes the prompt on every channel, makes Homebrew viable, and lets this section be deleted.
+It is waiting on the Developer ID account, not on a technical decision.
 
 ## License
 

@@ -36,7 +36,7 @@ predate every round below and pin none of these issues exclusively.
 | ID | Issue (paraphrase) | Pinning tests | Suite | Status |
 |---|---|---|---|---|
 | F1 | A boolean-form JSON-Schema subschema made the client discard the whole tool list | `TransportConformanceTests.NoToolSchemaContainsABooleanSubschemaAnywhere` (recursive) | P1, P2 | COVERED |
-| F2 | Install-doc health check lacked the "connected, 0 tools" branch | doc-only (`InternalTesting-Install.md` now names all three outcomes) | — | PARTIAL (doc) |
+| F2 | Install-doc health check lacked the "connected, 0 tools" branch | doc-only (`Installing.md` now names all three outcomes) | — | PARTIAL (doc) |
 | F3 | Marketplace packaging absent; v1.2 plugin silently bindable | deferred packaging; draft CI in `Documentation/hades-plugin-validate.yml`. Residual backlog: v1.2 cleanup does not touch the global plugin-enable list / plugin cache | — | DISPOSITIONED |
 | F4 | v1.2 leftovers (hub state, configs) survived outside the project | `V12CleanupTests.*` (~50), `V12DetectorTests.*`, `Control.MigrationEndpointHttpTests.*` | — | COVERED |
 | F5 | Handshake advertised assembly version, not product version | `TransportConformanceTests.InitializeReportsTheProductVersionConstant_NeverTheAssemblyVersion` | P3 | COVERED |

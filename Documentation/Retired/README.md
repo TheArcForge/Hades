@@ -32,4 +32,4 @@ anything in this folder as current.
 ## Superseded by
 
 - Architecture: `Documentation/Architecture.md`
-- Install: `Documentation/InternalTesting-Install.md`
+- Install: `Documentation/Installing.md`

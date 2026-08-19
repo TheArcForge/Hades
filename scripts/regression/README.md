@@ -131,7 +131,7 @@ Part B:
 
 The guards matter as much as the failures. E4 pins a bug (F8, the `prefab_apply create` flattening
 issue) that's fixed and already correctly removed from
-`Documentation/InternalTesting-Install.md`'s Known Issues section — the guard is what stops that
+`Documentation/Installing.md`'s Known Issues section — the guard is what stops that
 regressing unnoticed. E5 pins the one thing that would silently break a whole project — a move
 that changed GUIDs — on an operation that documents itself as having no undo. E12 is the suite's
 one open case: it stays red until F22 is fixed, at which point its `expect` flips to `"pass"` and

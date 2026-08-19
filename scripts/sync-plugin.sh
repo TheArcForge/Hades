@@ -38,7 +38,7 @@ mkdir -p "$TARGET"
 # Plugin manifest, .mcp.json, skills, and commands — all sourced from Plugin-ClaudeCode~/, the
 # current Claude Code plugin. It is already a complete, tested, installable plugin in its own
 # right (internal testers point `claude --plugin-dir` straight at it — see
-# Documentation/InternalTesting-Install.md), so syncing it is just copying that same tree into
+# Documentation/Installing.md), so syncing it is just copying that same tree into
 # the separate hades-plugin repo checkout for marketplace distribution.
 #
 # This used to assemble from four different places instead: a manifest relocated to Legacy~/

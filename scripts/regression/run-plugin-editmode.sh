@@ -164,7 +164,7 @@ while kill -0 "$UNITY_PID" 2>/dev/null; do
     if [ "$SECONDS" -ge "$deadline" ]; then
         kill -9 "$UNITY_PID" >/dev/null 2>&1
         fail "Unity did not finish within ${RUN_TIMEOUT_SECS}s and was killed. A stuck modal dialog" \
-             "(see Documentation/InternalTesting-Install.md's F17 note) or a package resolution/" \
+             "(see Documentation/Installing.md's F17 note) or a package resolution/" \
              "compile failure are the usual causes - check unity.log above. Retry with a larger " \
              "HADES_PLUGIN_EDITMODE_TIMEOUT_SECS if this machine is just slow."
     fi

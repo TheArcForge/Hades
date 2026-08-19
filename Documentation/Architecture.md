@@ -634,10 +634,9 @@ no silent default either way. The unsigned path labels itself as such in the vol
 filename, and a README written into the DMG itself. A real Developer-ID-signed, notarized path is
 already implemented (hardened runtime, `notarytool submit --wait`, `stapler staple`, a `spctl`
 assessment) but unexercised — no Developer ID Application certificate exists yet on the machine this
-was built on. The Homebrew cask (`Casks/hades.rb`) will be the lower-friction path: Homebrew doesn't
-mark downloads quarantined, so Gatekeeper's "unidentified developer" prompt never fires for a cask
-install the way it does for the same DMG downloaded through a browser (measured, not assumed). But
-the cask is **not installable today** — its `url` points at a GitHub release asset that has never
-been published, so `brew install --cask hades` fails for anyone but the machine that built it;
-internal testing hands out the DMG directly instead. Notarization itself is deferred to that later,
-signed release — not blocking today's distribution.
+was built on. The lower-friction path is `install.sh` at the repo root: `curl` does not mark
+downloads quarantined, so Gatekeeper's "unidentified developer" prompt never fires for it, unlike
+the same DMG downloaded through a browser (measured, not assumed). Homebrew is **not** that path —
+a cask was evaluated and removed once measurement showed Homebrew quarantines its own downloads
+(`ReleasePipeline.md` §6.2 and §6.6). Notarization is deferred to a later signed release — not
+blocking today's distribution, but it is what makes every channel work without this explanation.

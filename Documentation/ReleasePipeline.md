@@ -155,7 +155,7 @@ Complete all items before creating a release tag.
 - [ ] `Documentation/Retired/arcforge-hades-plugin.md` — plugin structure, install flow, skill/command counts current
 - [ ] `docs/plugin-publish-pipeline.md` — expected counts still accurate
 - [ ] `Documentation/Architecture.md` — reflects current app/plugin versions and tool count
-- [ ] `Documentation/InternalTesting-Install.md` — install steps, version checks, and known issues current
+- [ ] `Documentation/Installing.md` — install steps, version checks, and known issues current
 - [ ] `Documentation/RegressionCoverage.md` — issue → test traceability current with the latest round
 
 ### Plugin sync
@@ -216,7 +216,7 @@ Complete all items before creating a release tag.
 > plugin — it still serves the retired v1.2 plugin (Node stdio launcher, closer to 90 tools
 > than 32). Do not point testers or users at `/plugin marketplace add` today. The working path
 > is `claude --plugin-dir <path>/Plugin-ClaudeCode~` — see
-> `Documentation/InternalTesting-Install.md`.
+> `Documentation/Installing.md`.
 
 Before marketplace acceptance, the plan is for users to install via the self-hosted marketplace:
 ```
@@ -332,7 +332,7 @@ Read and verify these files are up to date:
 5. `Documentation/Retired/arcforge-hades-architecture.md` — no stale references
 6. `Documentation/Retired/arcforge-hades-plugin.md` — skill/command counts, install flow, compliance checklist
 7. `Documentation/Architecture.md` — current app/plugin versions and tool count
-8. `Documentation/InternalTesting-Install.md` — install steps, version checks, and known issues current
+8. `Documentation/Installing.md` — install steps, version checks, and known issues current
 9. `Documentation/RegressionCoverage.md` — issue → test traceability current with the latest round
 
 Report: which docs are current, which need updates, what specifically is stale.
@@ -407,30 +407,53 @@ clone`, or Homebrew.
 | Channel | Result for today's unsigned app |
 |---|---|
 | DMG downloaded in a browser | Quarantined -> *"Apple could not verify..."* -> System Settings, see 6.3 |
-| **Homebrew cask** | Not quarantined -> **launches with no prompt** |
+| **Homebrew cask** | **Quarantined** -> same prompt. Corrected 2026-08-18, see below. |
+| **`install.sh` (curl)** | Not quarantined -> launches with no prompt |
 
-Measured directly (mount the DMG, copy `Hades.app` to `/Applications` the same way Homebrew Cask's
-`Artifact::Moved#move` does for a fresh install - a plain file copy, no quarantine attribute
-involved anywhere in that path - then launch via `open`, the same LaunchServices path a user's
-double-click takes): `xattr -l` on the installed app shows `com.apple.provenance` but no
-`com.apple.quarantine`, and the app launches with no Gatekeeper dialog, despite `spctl` itself
-still separately reporting `rejected` (a static policy check that runs regardless of quarantine
-state - not the same thing as what actually happens on launch). This is why **the Homebrew cask
-is the recommended install path** until a certificate exists, not a workaround.
+**Corrected 2026-08-18. The earlier version of this section was wrong about Homebrew**, and the
+error is worth recording because of how it happened. The original measurement never ran Homebrew:
+under a standing "never run git" constraint (see 6.7), a hand `cp -R` of `Hades.app` into
+`/Applications` was substituted as a faithful stand-in for Cask's `Artifact::Moved#move`. That
+substitution is faithful for the *copy* step and only the copy step - it skips Homebrew's
+**download** step, which is where the quarantine attribute is actually applied. Reading
+`Cask::Quarantine.check_quarantine_support` (which returns `:quarantine_unavailable`) reinforced
+the wrong conclusion. A source read is not a measurement.
 
-### 6.3 Installing Hades today: two paths, documented honestly
+What a real `brew tap-new` + `brew install --cask` actually produces, measured end to end:
 
-**Path A - Homebrew cask (recommended).** No Gatekeeper prompt, `brew upgrade` works once a tap is
-published (not done yet - see 6.6).
+| Artifact | `com.apple.quarantine` |
+|---|---|
+| Source DMG, built locally by `build-dmg.sh` | absent |
+| Homebrew's cached download of that same DMG | `0281;...;5DBE0458-...` |
+| `Hades.app` after `brew install --cask` | `0381;...;5DBE0458-...`, user-approved bit clear |
+| The same DMG fetched by plain `curl` over HTTPS | absent (only `com.apple.provenance`) |
+
+Homebrew stamps the attribute on its own download; the app then inherits it (same UUID) when
+copied out of the mounted image. `--no-quarantine` has been **removed** from Homebrew entirely
+(`brew install --cask --no-quarantine` -> `Error: invalid option`), so there is no supported
+opt-out. Homebrew also intends to drop Gatekeeper-failing casks from the official `homebrew/cask`
+tap on 2026-09-01, though maintainers explicitly point unsigned apps at self-hosted taps, so a
+third-party tap remains usable.
+
+The general principle in this section still holds - `curl` and `git clone` do not quarantine - it
+simply does not extend to Homebrew. **`install.sh` at the repo root is the frictionless path**
+until a certificate exists; Homebrew's value would be install/upgrade management, not avoiding
+Gatekeeper.
+
+### 6.3 Installing Hades today: three paths, documented honestly
+
+**Path A - `install.sh` (recommended).** The only route with no Gatekeeper prompt, because `curl`
+does not set `com.apple.quarantine` (6.2 above, measured).
 
 ```
-brew install --cask hades   # once a tap exists and is added; see 6.7 for how this was verified today
+curl -fsSL https://raw.githubusercontent.com/TheArcForge/Hades/main/install.sh | bash
 ```
 
-The cask's `caveats` block states plainly that Hades is unsigned. `brew uninstall hades` removes
-the app only; `brew uninstall --zap hades` (or `brew zap hades`) additionally removes
-`~/Library/Application Support/Hades` and `~/Library/Preferences/com.arcforge.hades.shell.plist` -
-see `Casks/hades.rb` for the exact list and section 6.6 for why it stops there.
+It pins the version and its SHA-256, verifies the download before installing, refuses on Intel or
+macOS < 14, refuses to run under `sudo`, and refuses to replace a running Hades. Its two
+maintenance points are the `VERSION` and `SHA256` constants at the top, bumped per release from
+the artifact actually attached to the release. It gives up what a package manager provides:
+no `upgrade`, no `uninstall` - the script prints the uninstall commands instead.
 
 **Path B - DMG (alternative). Not frictionless - do not present it as if it were.** A DMG
 downloaded through a browser is quarantined, so opening it hits Gatekeeper. macOS 15 removed the
@@ -537,106 +560,63 @@ now so it can be followed later without rediscovering any of it.
    ```
    Expect `accepted`, `source=Notarized Developer ID` on both - contrast with today's measured
    `rejected` for the unsigned build (section 6.1).
-7. Update `Casks/hades.rb`: replace `sha256 :no_check` with the real checksum
-   (`shasum -a 256 Hades-X.Y.Z.dmg`) once the DMG is actually uploaded to the `url` it names.
+7. Update `install.sh`'s `VERSION` and `SHA256` constants from the DMG actually uploaded
+   (`shasum -a 256 Hades-X.Y.Z.dmg`). Once signed, revisit Homebrew - see 6.6.
 
-### 6.6 The Homebrew cask (`Casks/hades.rb`)
+### 6.6 Homebrew - evaluated, not used
 
-**Layout**: `Casks/hades.rb` at the main repo's root, not a separate `homebrew-hades` tap repo -
-one source of truth versioned with the app (same reasoning section 2 above already applies to
-`package.json` / `plugin.json` / `marketplace.json`), and `Casks/<token>.rb` at a tap's root is the
-standard layout either way, so nothing structural changes if a dedicated `homebrew-hades` tap is
-ever published later for the shorter `brew tap TheArcForge/hades` form. That publication step -
-and tapping this repo directly under its real name - is deliberately not done as part of this
-work: it is outward-facing and needs the user's explicit go-ahead.
+**There is no cask in this repo.** `Casks/hades.rb` existed until 2026-08-18 and was deleted; the
+reasoning is preserved here so nobody rebuilds it without knowing what it costs. `git log --diff-filter=D
+-- Casks/` recovers the file if a signed release ever makes Homebrew worth revisiting.
 
-**`url` is not live yet.** There is no release workflow that uploads `Shell~/HadesApp`'s DMG as a
-GitHub Release asset (the existing `release.yml` in section 1 only covers Bridge/Scanner/the
-plugin repo). `Casks/hades.rb` names the intended eventual location and uses `sha256 :no_check`
-until a real artifact exists there - see step 7 in section 6.5 for replacing it.
+Why it was dropped:
 
-**`zap` removes exactly two things**: `~/Library/Application Support/Hades` (the app-data root -
-`Hades.Core.Storage.AppPaths` on the .NET side, `HadesControl.Discovery` on the Swift side, both
-default here) and `~/Library/Preferences/com.arcforge.hades.shell.plist` (the app's own
-`UserDefaults`, confirmed via `Shell~/HadesApp/Sources/HadesApp/Onboarding/
-OnboardingCompletionTracking.swift`). **It never touches a project's own `.arcforge/memory/`** -
-that directory lives inside the user's own Unity project repositories (e.g.
-`~/Projects/<their-project>/.arcforge/memory/`), never under `~/Library`, so it is structurally
-outside anything `zap` names; it is the user's authored work, not this app's, and the two zap
-entries above cannot reach it regardless of which project(s) the user has open.
+- **Homebrew quarantines its downloads** (6.2, measured end to end), so a cask install of an
+  unsigned app is blocked on first launch exactly like a browser download. `--no-quarantine` has
+  been removed from Homebrew, so there is no supported opt-out. Homebrew's remaining value is
+  install/upgrade/uninstall management - not avoiding Gatekeeper, which is what it was chosen for.
+- **The cask was unreachable.** No tap was ever published, so the only way to reach it was tapping
+  the main repo, which handed the user `sha256 :no_check` - an unverified install - against a
+  `url` that 404s. That is a trap, not a distribution channel.
+- **It was an untracked version location.** It carried its own `version` string that section 2's
+  lockstep list never named and no test pinned, so it was guaranteed to drift.
+- **61% of it was comments** explaining why it existed and why it could not be used yet. That prose
+  was wrong once already, in the worst possible place: `caveats` is printed to the user by Homebrew
+  during install.
 
-A plain `brew uninstall hades` (no `--zap`) removes only the app bundle - Homebrew Cask never runs
-`zap` stanzas unless the user explicitly asks for it (`--zap`, or a separate `brew zap`). Both
-paths above survive a plain uninstall by design; this is standard Homebrew behavior, not a Hades
-particularity.
+If Homebrew is revisited after signing, useful facts measured while evaluating it:
 
-**Known gap this cask does not (and cannot cleanly) address**: if the user ever enables Hades'
-"Launch at Login," that is registered via `SMAppService.mainApp` (`Shell~/HadesApp/Sources/
-HadesApp/ShellFacts/LaunchAtLoginService.swift`), which macOS manages outside any single
-discoverable file - there is nothing a `zap trash:` stanza can safely target for it without
-risking unrelated login items. Turning "Launch at Login" off in Hades itself before uninstalling
-is the clean way to clear that registration; this is called out here rather than silently ignored.
+- Tap naming: `brew tap owner/name` resolves to `github.com/owner/homebrew-name`. Naming the repo
+  `homebrew-tap` yields `brew install --cask thearcforge/tap/hades`; naming it `homebrew-hades`
+  yields the stuttering `thearcforge/hades/hades`.
+- `brew tap` does a **full clone** (no `--depth` anywhere in `tap.rb`), so putting a cask in the
+  main repo makes every user clone the whole history for one file.
+- Homebrew intends to drop Gatekeeper-failing casks from the official `homebrew/cask` tap on
+  2026-09-01, but maintainers explicitly point unsigned apps at self-hosted taps, so a third-party
+  tap stays viable either way.
 
-### 6.7 Testing the cask locally, today
+### 6.7 Verifying install.sh locally
 
-Verified on this machine, Homebrew 6.0.15: `brew install --cask` **refuses a loose local `.rb`
-file** ("Homebrew requires casks to be in a tap"), and `brew tap <user>/<repo> <path>` requires
-`<path>` to already be a git repository - it shells out to `git clone` directly. `brew tap-new`,
-Homebrew's own suggested fix, provisions that repository by running `git init` / `git add` / `git
-commit` itself (confirmed by reading `dev-cmd/tap-new.rb`).
+`install.sh` is the shipped install path (6.3 Path A). To exercise it without touching
+`/Applications` or requiring a published release, copy it and rewrite three things: `URL` to a
+`file://` path pointing at a locally built DMG, `INSTALL_DIR` to a scratch directory, and drop the
+`--proto '=https'` guard that (correctly) refuses `file://` in the real script.
 
-For most engineers this is a non-issue: run `brew tap-new local/hades-test`, copy `Casks/hades.rb`
-in with `url` pointed at a local `file:///.../Hades-X.Y.Z-unsigned.dmg` path and `sha256` set to
-that file's real checksum (`shasum -a 256`), `brew tap local/hades-test <path>`, `brew install
---cask local/hades-test/hades`, then `brew untap local/hades-test` and delete the scratch directory
-when done.
+What that run must show, all four confirmed on 2026-08-18 against `Hades-2.0.0-unsigned.dmg`:
 
-That path was not available while verifying this under a standing "never run git, even indirectly"
-constraint. What was actually run instead, and why it is a faithful substitute: Homebrew Cask's
-`app` stanza (`cask/artifact/moved.rb`, `Moved#move`) installs a fresh app with a plain
-`FileUtils.move`/copy into `/Applications` - no quarantine attribute is involved anywhere in that
-path, matching how the DMG itself was never quarantined (it was never downloaded through a
-browser). Mounting the DMG and `cp -R`-ing `Hades.app` into `/Applications` by hand exercises that
-exact mechanism. Launching the result via `open` (the same LaunchServices path a double-click or
-Spotlight launch takes - directly executing the binary inside `Contents/MacOS/` would *not* count,
-since that bypasses LaunchServices/Gatekeeper entirely) and confirming the process actually starts
-is the real measurement in section 6.2. `rm -rf /Applications/Hades.app` reproduces a plain `brew
-uninstall`; the `zap` paths were reasoned from source and demonstrated against an isolated copy
-rather than deleted for real, since the real `~/Library/Application Support/Hades` and
-`~/Library/Preferences/com.arcforge.hades.shell.plist` belong to whichever Hades instance is
-actually running on the machine doing the testing.
+1. `sha256 OK`, then a successful install into the scratch directory.
+2. **No quarantine attribute on the installed bundle** - the whole point of the curl path.
+3. `codesign -v` still valid on the installed app. This is why the script uses `ditto` rather than
+   `cp -R`: `cp -R` mangles bundle extended attributes and breaks the signature, producing launch
+   failures that are miserable to diagnose.
+4. A deliberately corrupted `SHA256` constant makes it refuse, printing both digests.
 
-One more thing worth knowing before repeating this - **historical as of section 6.9 below, still
-true for a Debug build or an unbundled `swift run`, no longer true for a Release build**:
-**`Shell~/HadesApp/Sources/HadesApp/AppDelegate.swift`'s `makeConfiguration()` resolves its own
-project path from `#filePath` - resolved at compile time, not at runtime.** A Hades.app built by
-`build-app.sh Debug` - installed anywhere, DMG or cask, back when the DMG/cask only ever packaged a
-Debug-shaped bundle - shelled out to `dotnet run --project <that checkout>/App~/src/Hades.Server
---no-launch-profile` on launch unconditionally (its own doc comment named this a deliberate,
-temporary placeholder: *"Spec #4 (distribution) replaces `dotnet run` against source with a
-self-contained published binary embedded in the app bundle"*). Concretely, this meant:
-- The app was **not self-contained** - a real recipient's Mac needed the .NET SDK and this exact
-  source checkout at this exact path to run it at all. Distributing a DMG/cask to anyone else did
-  not produce a working app; only the packaging and Gatekeeper-channel behavior this plan covers
-  were ready. **This is fixed for Release builds - see section 6.9.** `build-dmg.sh` always builds
-  Release, so every DMG/cask produced today is self-contained; only a local `build-app.sh Debug`
-  (day-to-day Swift-side iteration) still needs the SDK and this checkout, and says so loudly when
-  it falls back (section 6.9's own logging example).
-- Testing a second instance on the **same** machine a live instance is already running on
-  (assuming the same checkout - the case here) means both `dotnet run`-based processes ultimately
-  target the exact same `App~/src/Hades.Server` project. Verified empirically before relying on it:
-  running a second `dotnet run` against that project while the first stayed up did not rebuild
-  anything (nothing had changed - MSBuild's incremental check fast-paths straight to execution) and
-  did not disturb the live instance's port or process. Isolating **both** `ASPNETCORE_URLS` (away
-  from the live port and any other in-use port) and `HADES_HOME` (away from the live app-data root,
-  which also backs the control API's own discovery file - not just the MCP port) for any test
-  instance is still the right precaution regardless, and is what was actually done here - see
-  `open`'s own `--env` flag. Section 6.9's own standalone proof for the embedded core follows the
-  same discipline: an isolated port and an isolated `HADES_HOME`, never the live app's own.
+Also verify the refusals by inspection or by running on the relevant hardware: Intel, macOS < 14,
+`sudo`, and a running Hades each abort with an actionable message rather than a partial install.
 
 ### 6.8 A mistake made while verifying this, disclosed rather than hidden
 
-The first `brew tap` call issued while testing section 6.7 auto-updated Homebrew itself and
+The first `brew tap` call issued while evaluating Homebrew (6.6) auto-updated Homebrew itself and
 refreshed `homebrew/core`, `homebrew/cask`, and the user's own `steipete/tap` before failing on the
 git-clone step - `HOMEBREW_NO_AUTO_UPDATE=1` should have been set before the first `brew` call of
 the session, not after. This was not reverted (there is no clean "downgrade Homebrew" operation,
@@ -885,20 +865,12 @@ can produce today (6.1, 6.4 above).
 
 1. Create the GitHub Release on `TheArcForge/Hades` for tag `vX.Y.Z`; attach the DMG built in 8.3
    as a release asset.
-2. Update `Casks/hades.rb`: `version` to match, and `sha256` to the real checksum
-   (`shasum -a 256 Hades-X.Y.Z-unsigned.dmg`), replacing `:no_check`.
-3. **Prerequisite, not yet done as of this writing:** `brew install --cask` refuses a loose `.rb`
-   file outright - "Homebrew requires casks to be in a tap" (measured, 6.7 above). This repo (or a
-   dedicated `homebrew-hades` tap) needs to actually be tapped somewhere reachable before this step
-   can run for real users. Publishing a tap is a separate, outward-facing decision that needs the
-   product owner's explicit go-ahead (6.6 above) - it is not an automatic part of this checklist.
-4. Once a tap exists: verify `brew install --cask` from it on a clean machine (or the closest
-   available substitute - 6.7 above records what was actually run under a no-network/no-git
-   constraint and why it stands in faithfully). Expect the install to complete and the app to
-   launch with **no Gatekeeper prompt** - that is the entire reason this release ships via Homebrew
-   rather than a bare DMG link: a DMG downloaded through a browser/Slack/Drive/AirDrop/Mail gets
-   `com.apple.quarantine` set and is blocked on first launch ("Apple could not verify..."), while
-   Homebrew (curl/git under the hood) never sets that flag. Full measurement: 6.2 above.
+2. Update `install.sh`'s `VERSION` and `SHA256` constants from the uploaded DMG, and confirm the
+   URL it names resolves (`curl -fsSL -I` it). Until that release asset exists, the script 404s -
+   that is the one thing publishing has to get right for the documented install path to work.
+3. Verify `install.sh` end to end against the published release on a Mac that has never had Hades
+   installed. Expect no Gatekeeper prompt (curl does not quarantine - 6.2) and `codesign -v` valid
+   on the installed bundle. There is no cask to publish; Homebrew was evaluated and dropped (6.6).
 
 ### 8.5 Plugin / marketplace sync
 
@@ -914,7 +886,7 @@ can produce today (6.1, 6.4 above).
    must copy it over that repo's `.github/workflows/validate.yml`. This repo's own tooling cannot do
    this step; it has no access to that repo beyond the sync push itself.
 3. Confirm the synced marketplace actually serves the current plugin, not the retired one - the
-   same check `Documentation/InternalTesting-Install.md`'s "Confirm you're testing the new Hades"
+   same check `Documentation/Installing.md`'s "Confirm you're testing the new Hades"
    section already walks a tester through: tool count (32, not ~90) and `hades_status`'s `version`
    field.
 
@@ -922,7 +894,7 @@ can produce today (6.1, 6.4 above).
 
 1. Once 8.5.3 confirms the marketplace is current, flip install guidance from "local `--plugin-dir`
    only" back to the marketplace path everywhere it currently says otherwise: `scripts/plugin-README.md`,
-   `Documentation/InternalTesting-Install.md`, this file's own section 4 "Current install paths",
+   `Documentation/Installing.md`, this file's own section 4 "Current install paths",
    and `Shell~/HadesApp/Sources/HadesApp/Onboarding/Views/OnboardingClaudeCodeStepView.swift`.
 2. Re-verify the marketplace install end to end: `/plugin marketplace add TheArcForge/hades-plugin`
    → `/plugin install hades` → `/mcp` reports `hades` at 32 tools over the HTTP URL, not a `node`

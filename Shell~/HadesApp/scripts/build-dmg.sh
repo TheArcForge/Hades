@@ -8,10 +8,10 @@
 #
 #   1. UNSIGNED (Phase 1, today): pass --allow-unsigned. Ad-hoc signed only (same as build-app.sh's
 #      own last step), loudly labeled unsigned in the volume name, the filename, and a README
-#      inside the DMG. This is what ships via the Homebrew cask right now - see "The channel
-#      matters more than the signature" in
-#      docs/superpowers/plans/2026-08-06-distribution-phase-one.md: a cask install is never
-#      quarantined, so Gatekeeper's "unidentified developer" dialog never fires for it, unsigned or
+#      inside the DMG. The frictionless install path for this DMG is install.sh at the repo root,
+#      which fetches over curl and is therefore not quarantined - see "The channel matters more
+#      than the signature" (Documentation/ReleasePipeline.md section 6.2). Homebrew is NOT that
+#      path: it quarantines its own downloads (measured 2026-08-18), unsigned or
 #      not. A DMG downloaded from a browser IS quarantined, so it still hits that dialog - see
 #      Documentation/ReleasePipeline.md for the System Settings steps that get past it until a
 #      certificate exists.
@@ -76,9 +76,9 @@ unsigned build:
   "Signed release, step by step" in Documentation/ReleasePipeline.md for the one-time setup):
     build-dmg.sh Release --sign "Developer ID Application: NAME (TEAMID)" --notarize-profile PROFILE
 
-  Deliberately unsigned (Phase 1, today - Gatekeeper still flags this DMG if it is ever
-  quarantined, e.g. downloaded through a browser; the Homebrew cask is the install path that
-  avoids that entirely - see Documentation/ReleasePipeline.md):
+  Deliberately unsigned (Phase 1, today - Gatekeeper flags this DMG whenever it is quarantined,
+  which a browser download always is; install.sh at the repo root fetches over curl and is not
+  quarantined, which is the path that avoids it - see Documentation/ReleasePipeline.md):
     build-dmg.sh Release --allow-unsigned
 
 Check for a certificate with: security find-identity -v -p codesigning
@@ -221,9 +221,11 @@ Hades is not signed with an Apple Developer ID certificate.
 macOS Gatekeeper may warn about this the first time you open it - whether it does depends on how
 you got this file, not on anything wrong with the download:
 
-  - Installed via Homebrew (brew install --cask hades): no warning. Homebrew does not mark
-    downloaded files as quarantined, so Gatekeeper's "unidentified developer" check never runs.
-    This is the recommended way to install Hades today - see Documentation/ReleasePipeline.md.
+  - Installed via the project's install.sh (curl): no warning. curl does not mark downloaded
+    files as quarantined, so Gatekeeper's "unidentified developer" check never runs. This is the
+    recommended way to install Hades today:
+
+      curl -fsSL https://raw.githubusercontent.com/TheArcForge/Hades/main/install.sh | bash
 
   - Downloaded through a browser (this DMG): macOS marks the file quarantined, and opening it
     shows "Apple could not verify that this app is free of malware". This is not a corrupted
