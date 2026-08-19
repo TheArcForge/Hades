@@ -14,10 +14,9 @@ Three GitHub Actions workflows across two repositories.
 
 **`ci.yml`** — runs on every push and PR to `main`.
 
-Three parallel jobs:
-- **Bridge tests** — installs dependencies and runs Vitest in `Bridge~/`, then builds TypeScript to verify compilation.
-- **Scanner tests** — installs dependencies and runs the split Jest suite in `Scanner~/` (unit tests first, integration tests second, separated due to tree-sitter native addon conflicts).
+One job:
 - **`dotnet-tests`** ("App (.NET) Tests") — runs `dotnet test` against the .NET core in `App~/`.
+  The former Bridge and Scanner jobs went with the v1.2 tree (section 7).
 
 The Swift (`swift test` in `Shell~/HadesControl`, `Shell~/HadesSupervision`, `Shell~/HadesApp`),
 Unity plugin EditMode (`scripts/regression/run-plugin-editmode.sh`), and e2e
@@ -74,57 +73,19 @@ Purpose: guard rail against sync bugs or accidental direct edits.
 
 ## 2. Version locations
 
-> **`release.yml`'s description in Section 1 now reflects the current release flow** — it was
-> repointed at `Plugin-ClaudeCode~/`, and its own note there flags the one known gap
-> (`hades-plugin`'s `validate.yml` not yet updated to match). **Sections 2–5 still describe the
-> v1.2 release flow** — the Unity package, the Node bridge, and the pre-`Plugin-ClaudeCode~/`
-> shape of the `TheArcForge/hades-plugin` marketplace submission — and have not been revisited
-> yet; treat their Bridge/Scanner/`.claude-plugin`-at-repo-root details as stale until they are.
-> Section 6 covers the standalone macOS app that replaces all of it.
->
-> **The root `.claude-plugin/plugin.json` and `.mcp.json` referenced below no longer exist at the
-> repo root.** They now live under `Legacy~/` — a root manifest made this checkout installable as a
-> plugin, which silently served the retired ~90-tool in-Editor surface instead of the app's 32. The
-> current Claude Code plugin is `Plugin-ClaudeCode~/`, and its version lives in
-> `Plugin-ClaudeCode~/.claude-plugin/plugin.json`.
+> **Section 2 was rewritten when the v1.2 tree was deleted (section 7)** — its old tables listed
+> `package.json`, `Bridge~/launcher/src/index.ts`, and `Editor/MCP/MCPDispatcher.cs`, none of which
+> exist any more. **Sections 3–5 still describe the v1.2 release flow** and have not been revisited;
+> treat their Bridge/Scanner/`.claude-plugin`-at-repo-root details as stale. Section 6 covers the
+> standalone macOS app; section 8 is the current, concrete release procedure.
 
-Three files track the product version and must stay in lockstep on every release:
-
-| File | Repo | What it controls |
-|---|---|---|
-| `package.json` → `version` | Main | Unity Package Manager version |
-| `Legacy~/claude-plugin/plugin.json` → `version` | Main (v1.2, retired) | Former Claude Code plugin version |
-| `.claude-plugin/marketplace.json` → `plugins[0].version` | Plugin only | Self-hosted marketplace entry |
-
-The release workflow automatically updates `marketplace.json` in the plugin repo to match the tag. The other two must be bumped manually in the main repo before tagging.
-
-**Internal component versions (bump only if the component changed this release):**
-
-| File | Repo | Current | Purpose |
-|---|---|---|---|
-| `Bridge~/package.json` → `version` | Main | 1.1.0 | Bridge workspace version |
-| `Bridge~/hub/package.json` → `version` | Main | 1.1.0 | Hub component version |
-| `Scanner~/package.json` → `version` | Main | 1.1.0 | Scanner component version |
-
-These track internal API changes independently of the product version. **Policy:** leave them untouched on a release that didn't change them, but if a component changed substantially this release, bump it to the product version so the two don't silently diverge. (v1.1.0 bumped all three — the hub/launcher reliability overhaul and the scanner's meta-constants.)
-
-**Version constants in source (check each release):**
-
-| Location | Reports as | Notes |
-|---|---|---|
-| `Bridge~/launcher/src/index.ts` → `SERVER_VERSION` | launcher MCP `serverInfo.version` | a plain constant — **bump manually**, then rebuild Bridge so `launcher/dist` reflects it |
-| `Editor/MCP/MCPDispatcher.cs` → `serverInfo.version` | Unity MCP server `initialize` | **resolves dynamically** from the package manifest (`PackageInfo.FindForAssembly`) as of v1.1.0 — no manual bump needed |
-
-**Build invariant — the launcher must stay a single bundled file.** `Bridge~/launcher` builds to one self-contained `dist/index.js` via esbuild (`--bundle`). `EnsureStableLauncher` (`Editor/Core/MCPClientConfig.cs`) copies only that one file to the per-machine stable location (`~/.arcforge/hades-hub/launcher.js`), so any relative sibling import would crash the launcher at startup with `ERR_MODULE_NOT_FOUND` (this was the v1.1.0 install regression — the launcher had been split into `tsc`-emitted modules without updating the copy routine). Guarded by `Bridge~/tests/launcher/bundle.test.ts`; do not switch the launcher back to a multi-file `tsc` emit without also updating the copy routine.
-
-**Current (v2) version-stamp sites — not covered by anything above.** The app core, shell, and
-Unity plugin do not use `package.json`, `Legacy~`, or any Bridge/Scanner file for their own
-versions; these are the sites that actually carry the shipped version today:
+These are the sites that carry the shipped version. They must stay in lockstep on every release:
 
 | Location | Reports as | Notes |
 |---|---|---|
 | `App~/src/Hades.Server/Mcp/HadesTools.cs` → `ServerVersion` | MCP server version (`hades_status`, `initialize`) | plain constant — bump manually |
 | `Shell~/HadesApp/scripts/build-app.sh` → Info.plist `CFBundleShortVersionString` / `CFBundleVersion` | App bundle version | kept in lockstep with `ServerVersion` above; `build-dmg.sh` derives the DMG's filename from this plist |
+| `install.sh` → `VERSION` / `SHA256` | What the documented install downloads and verifies | `SHA256` must match the DMG attached to the release (section 8.4) |
 | `Plugin~/Assets/Hades/Runtime/HadesBoot.cs` → `PluginVersion` | Unity plugin version (sent in the `Hello` handshake) | independent version line from the app; two test mirrors (`CharonStatusTests.cs`, `Control/ProjectsTests.cs`) kept in sync with it |
 
 ---

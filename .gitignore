@@ -39,7 +39,6 @@ Thumbs.db
 .arcforge/graph.db-shm
 .arcforge/traces.db
 .arcforge/server.json
-.mcp.json
 
 # LLVM coverage output from the Xcode-instrumented HadesApp binary, written to its process CWD
 # on exit (seen at the repo root and at Shell~/HadesApp). Regenerated every run, never committed.
@@ -50,6 +49,13 @@ default.profraw.meta
 
 # Keep memory tracked
 !.arcforge/memory/
+
+# .mcp.json is deliberately NOT ignored, and must not be. A bare `.mcp.json` pattern matches at
+# ANY depth, which silently excluded Plugin-ClaudeCode~/.mcp.json - the v2 Claude Code plugin's own
+# manifest. scripts/sync-plugin.sh aborts without it ("missing its manifest or .mcp.json") and
+# release.yml validates it, so the plugin publish fails on any fresh checkout while working fine
+# on the machine that has the file untracked. It carries no machine-specific state: a static HTTP
+# entry pointing at 127.0.0.1:7823.
 
 # Superpowers artifacts
 docs/

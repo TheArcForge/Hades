@@ -72,10 +72,17 @@ See `Documentation/RegressionCoverage.md` for the per-issue regression coverage 
 5. Update `Documentation/` if you're changing user-facing behavior
 6. Open a PR against `main`
 
+Merged pull requests are credited by GitHub handle in the `CHANGELOG.md` entry for the release they
+ship in, and in the merge commit. You don't need to add this yourself.
+
 ## What NOT to Do
 
 - **Never edit the plugin repo** (`TheArcForge/hades-plugin`) directly — it is auto-synced from this repo and any changes will be overwritten
-- **Never generate `.meta` files or GUIDs** — Unity manages these automatically
+- **Never hand-write `.meta` files or invent GUIDs** — let Unity generate them. Unity-generated
+  `.meta` files **are** committed, and should be included in your PR alongside the `.cs` files they
+  belong to: the app copies `Plugin~/Assets/Hades` into a user's Unity project, and stable GUIDs
+  are what keep their scene and prefab references intact across installs and upgrades.
+  (`.gitignore` excludes only `*.pidb.meta`, `*.pdb.meta`, `*.mdb.meta`, and `docs.meta`.)
 - **Never commit `node_modules/`**
 
 ## Contributing Skills

@@ -204,15 +204,18 @@ There are interruptions in this happy path: domain reloads (assembly reloads, sc
 
 Running multiple Unity Editor instances simultaneously, each on a different project, is a common workflow — not an edge case. A developer might have one Unity instance on a game project and another on a tooling project, working on both within the same hour. Hades must handle this cleanly.
 
-The design property that makes this work: **Hades is fully project-scoped. Each Unity instance runs an independent Hades stack against its own project's `.arcforge/` directory.** No shared state between instances. No coordination needed.
+The design property that makes this work: **Hades is project-scoped by default. Each Unity instance runs an independent Hades stack against its own project's `.arcforge/` directory.** No coordination needed.
+
+This was always true of the **data plane** — the graph, the traces, and memory have lived in the project since the beginning. It was *not* originally true of the **control plane**: the hub rendezvous directory was hardcoded under `$HOME`, skills were installed globally, and Hades' own settings sat in Unity `EditorPrefs`, which is global per Unity install. Two projects on one machine therefore shared a hub process and a single set of preferences. As of the project-local installation change, the control plane is project-scoped too by default: the hub directory resolves to `<projectRoot>/.arcforge/hades-hub/` and settings live in `<projectRoot>/.arcforge/config.local.yaml`. A shared hub remains fully supported — it is a per-project setting, not a removed capability — and is the right choice for some workflows (see below).
 
 What this looks like concretely:
 
 - **Per-project storage.** Each project has its own `.arcforge/graph.db`, `.arcforge/traces.db`, `.arcforge/memory/`. Project A's data lives in Project A's directory; Project B's lives in Project B's. No cross-contamination.
+- **Per-project hub and settings.** In the default `Local` hub scope each project gets its own hub process, with its rendezvous files (`hub.json`, `hub.lock`, `pending/`, and the stable `launcher.js` copy) under `<projectRoot>/.arcforge/hades-hub/`. Settings — port, log level, Charon retention, and the scope switches themselves — live in `<projectRoot>/.arcforge/config.local.yaml` (§6.6). Switching a project's Hub scope to `Global` points it at the shared `~/.arcforge/hades-hub/` instead, which is what you want when a single Claude Code session spans a Unity project and a separate `file:`-referenced package repository: the launcher's working directory is then outside the Unity project, so a project-local hub is invisible to it and it falls back to the shared one. The `HADES_HUB_DIR` environment variable overrides both for a single launcher process.
 - **Independent MCP servers.** Each Unity instance starts its own MCP server on an OS-assigned ephemeral port (default `Port=0`). Each instance registers independently with the MCP Hub, keyed by project path.
 - **Hub-based routing.** The MCP Hub maintains a registry of all connected Unity instances. When Claude Code makes a tool call, the Hub routes it to the correct instance by matching the session's working directory to registered project paths — canonicalized (`realpath` + case-fold) so equivalent paths match, with a single-instance fallback when only one Unity is open. See **Plugin document** §3.5 for the matching algorithm.
 - **Independent dashboards.** When the user launches the Charon dashboard from Unity instance A, the dashboard process is scoped to Project A's traces database and binds to an OS-assigned ephemeral port. If the user launches a dashboard from Unity instance B, it gets its own OS-assigned port and reads Project B's traces. The two dashboards run simultaneously without interference. The user can have multiple browser tabs open, one per project.
-- **Independent skills config.** Skills are installed globally in the Claude Code config (per Vision §7.5), not per project. Both instances of the agent client read from the same global skill library. This is the correct shape — skills are meant to be shared across projects.
+- **Per-project skills by default.** Skills install to `<projectRoot>/.claude/skills/hades-*` when `skills_scope` is `Local` (the default), so each project carries the skill set that shipped with the Hades version it has installed. Setting `skills_scope` to `Global` installs them to `~/.claude/skills/` instead, shared across every project — which is what Vision §7.5 originally described, and what Claude Desktop requires, since it does not read project-scoped skills. Claude Code reads both.
 
 Unity itself prevents two instances from opening the same project simultaneously, so the case of "two Hades instances writing to the same `.arcforge/` directory" cannot occur. This simplifies our concurrency model significantly: each `.arcforge/` directory has at most one writer at a time.
 
@@ -1167,7 +1170,7 @@ Retention defaults:
 
 - 30 days of traces by default. Older are auto-pruned at Unity startup via `PruneOlderThan`.
 - Eval-dataset traces are exempt from auto-pruning regardless of age.
-- **Trace-count cap at startup** (a row budget derived from `CharonMaxSizeMb` in EditorPrefs — default 500MB ≈ 128k traces at ~4 KB each, floored at 5000): `PruneToTraceCap` deletes the oldest traces beyond the budget and runs a cheap `PRAGMA wal_checkpoint(PASSIVE)`. It deliberately does **not** `VACUUM` — freed pages are reused by subsequent inserts so the file plateaus, and a synchronous `VACUUM` of a multi-GB `traces.db` could freeze editor startup. (This replaced the earlier size-based `EnforceSizeLimit`, which trimmed to ~90% of the byte cap and then ran `wal_checkpoint(TRUNCATE)` + `VACUUM`.)
+- **Trace-count cap at startup** (a row budget derived from the `charon_max_size_mb` setting in `.arcforge/config.local.yaml` — default 500MB ≈ 128k traces at ~4 KB each, floored at 5000): `PruneToTraceCap` deletes the oldest traces beyond the budget and runs a cheap `PRAGMA wal_checkpoint(PASSIVE)`. It deliberately does **not** `VACUUM` — freed pages are reused by subsequent inserts so the file plateaus, and a synchronous `VACUUM` of a multi-GB `traces.db` could freeze editor startup. (This replaced the earlier size-based `EnforceSizeLimit`, which trimmed to ~90% of the byte cap and then ran `wal_checkpoint(TRUNCATE)` + `VACUUM`.)
 - *(Planned — not yet implemented as of v1.0.0.)* A `hades-charon prune` CLI for manual pruning outside of Unity startup.
 
 ### 3.10 Edge cases
@@ -1268,12 +1271,12 @@ Agent clients (Claude Code, Claude Desktop) connect to Unity's MCP server throug
 
 The full architecture is documented in the **Plugin document** (`Documentation/arcforge-hades-plugin.md`, §3) and the **MCP Hub design spec** (`docs/superpowers/specs/2026-05-13-mcp-hub-design.md`). Key properties:
 
-1. **Hub** — long-running Node.js HTTP server, one per machine. Maintains a registry of Unity instances, routes tool calls by project path matching, monitors instance health via heartbeats, buffers requests during domain reloads.
+1. **Hub** — long-running Node.js HTTP server, one per hub directory. That means one per project in the default local hub scope, and one per machine in global scope. Maintains a registry of Unity instances, routes tool calls by project path matching, monitors instance health via heartbeats, buffers requests during domain reloads.
 2. **Launcher** — thin stdio process that starts the Hub on demand and bridges stdio to HTTP. Zero npm dependencies. Two connectivity paths reach it:
    - **Plugin mode** (`--plugin-dir` for local installs; `/plugin install` for marketplace installs): the plugin's `.mcp.json` uses `${CLAUDE_PLUGIN_ROOT}/Bridge~/launcher/dist/index.js`
-   - **Project auto-discovery**: `MCPClientConfig` writes a `.mcp.json` to the Unity project root pointing to `~/.arcforge/hades-hub/launcher.js` (the stable installed copy)
+   - **Project auto-discovery**: `MCPClientConfig` writes a `.mcp.json` to the Unity project root pointing at the stable launcher copy at `HadesPaths.LauncherDir` — always the project-relative `.arcforge/hades-hub/launcher.js`, independent of hub scope (see §8.5.4 below for why this is decoupled from `HubDir`)
 
-   Both paths launch the same launcher binary, which connects to the shared Hub.
+   Both paths launch the same launcher binary, which connects to the Hub for its resolved hub directory. The launcher passes that directory to the Hub explicitly via `HADES_HUB_DIR` in the spawn environment, so the two can never disagree about where `hub.json` belongs.
 3. **Unity registration** — Unity instances register/deregister with the Hub via HTTP instead of writing discovery files. Heartbeat every 30s. Breadcrumb files for when the Hub is offline.
 
 **Key properties:**
@@ -1281,7 +1284,7 @@ The full architecture is documented in the **Plugin document** (`Documentation/a
 - Directory-independent (Hub routes by path matching, not by where `.mcp.json` lives)
 - Resilient to compilation failures (Hub probes Unity's HTTP endpoint before marking stale)
 - Zero npm runtime dependencies (both Hub and Launcher use only Node.js built-ins)
-- Claude Desktop support via stable launcher copy at `~/.arcforge/hades-hub/launcher.js` with `hub-path.json` pointer to hub entry point
+- Claude Desktop support via the stable launcher copy at `<hubDir>/launcher.js` — project-local by default — with a `hub-path.json` pointer alongside it to the hub entry point
 
 **v1.1 reliability hardening:**
 - **Forgiving path matching** — the Hub canonicalizes registered and requested project paths (`realpath` + case-fold) before comparing; the Launcher resolves the real Unity project root by walking up from its cwd; and a **single-instance fallback** routes an otherwise-unidentifiable call (e.g. a launcher whose cwd resolved to `/`) when exactly one Unity is registered. This eliminated a class of post-reload "No Unity instance found for …" errors where the registered and requested paths were equivalent but not byte-identical.
@@ -1905,7 +1908,7 @@ These are the cross-layer behaviors that need to work correctly. They form the b
 
 ### 6.6 Configuration and customization
 
-> **Status: Planned — not yet implemented as of v1.0.0.** The nested `graph:`/`charon:`/`mcp:` config blocks shown below are design targets. The only `.arcforge/config.yaml` reader currently implemented is Asphodel's flat `InferenceConfig` parser. Graph, Charon, and MCP settings live in Unity **EditorPrefs** (accessible via the Hades preferences panel), not in `config.yaml`. A `.arcforge/config.local.yaml` per-developer override file has no loader and is not currently gitignored.
+> **Status: partly planned.** The nested `graph:`/`charon:`/`mcp:` config blocks shown below remain design targets, not implemented as of v1.0.0. What exists today is two *flat* config files, described after the planned schema: `.arcforge/config.yaml` (team-shared, git-tracked, read only by Asphodel's `InferenceConfig` parser) and `.arcforge/config.local.yaml` (per-developer, gitignored, read by `HadesConfig`). Graph, Charon, and MCP settings live in the latter — they were held in Unity `EditorPrefs` until the project-local installation change.
 
 Planned `.arcforge/config.yaml` schema (when implemented):
 
@@ -1929,6 +1932,25 @@ asphodel:
 ```
 
 Currently implemented Asphodel config keys (flat, read from `InferenceConfig`): `enabled`, `promotion_confidence`, `promotion_min_samples`.
+
+**Per-developer settings — `.arcforge/config.local.yaml`.** Graph, Charon, and MCP settings live here, one file per project. They were previously stored in Unity `EditorPrefs`, which is global per Unity install — so two projects on the same machine unavoidably shared one port, one log level, and one Charon retention policy. `HadesConfig` reads this file using the same flat `key: value` dialect as `InferenceConfig`, and that reuse is deliberate: it keeps a YAML dependency out of the Editor assembly, and it lets the Node launcher read the single key it needs (`hub_scope`) without adding a parser to its dependency-free bundle. The file is machine-specific and gitignored. Edit the values at **Project Settings → Hades**, or via the **Hades → Settings…** menu item.
+
+| Key | Type | Default |
+|---|---|---|
+| `hub_scope` | `local` \| `global` | `local` |
+| `skills_scope` | `local` \| `global` | `local` |
+| `desktop_integration` | bool | `false` |
+| `mcp_port` | int | `0` (OS-assigned ephemeral) |
+| `mcp_enabled` | bool | `true` |
+| `mcp_auto_start` | bool | `true` |
+| `mcp_log_level` | int | `1` |
+| `domain_reload_strategy` | `auto` \| `manual` | `auto` |
+| `reload_timeout_seconds` | int | `120` |
+| `charon_enabled` | bool | `true` |
+| `charon_retention_days` | int | `30` |
+| `charon_max_size_mb` | int | `500` |
+
+A missing file, a missing key, and an unparseable value all fall back to the default silently. A missing file is the normal state of a fresh clone, so it must never warn. On first load in a project that has no `config.local.yaml` but does have legacy `Hades_MCP_*` EditorPrefs keys, Hades offers a one-time import of those values; the file is written either way, so the prompt never repeats, and the EditorPrefs keys are left in place because another project on the machine may not have been migrated yet.
 
 ### 6.7 Confidence modeling and graceful uncertainty
 
@@ -2723,7 +2745,15 @@ Charon continues operating during play mode — observability of agent actions d
 
 **Mitigation:**
 
-- Both clients connect through the Launcher (stdio process), which bridges to the Hub over HTTP. For Claude Code, the Launcher is reached via two paths: (1) the plugin's `.mcp.json` (using `${CLAUDE_PLUGIN_ROOT}/Bridge~/launcher/dist/index.js`) when the plugin is installed via `--plugin-dir` (local installs) or `/plugin install` (marketplace installs), or (2) a project-level `.mcp.json` written by `MCPClientConfig` to the Unity project root, pointing to the stable installed copy at `~/.arcforge/hades-hub/launcher.js`. For Claude Desktop, Unity writes `claude_desktop_config.json` pointing to the same stable launcher path.
+- Both clients connect through the Launcher (stdio process), which bridges to the Hub over HTTP. For Claude Code, the Launcher is reached via two paths: (1) the plugin's `.mcp.json` (using `${CLAUDE_PLUGIN_ROOT}/Bridge~/launcher/dist/index.js`) when the plugin is installed via `--plugin-dir` (local installs) or `/plugin install` (marketplace installs), or (2) a project-level `.mcp.json` written by `MCPClientConfig` to the Unity project root, pointing to the stable installed copy at the project-relative `.arcforge/hades-hub/launcher.js` — always that path, under either hub scope. The relative form is what Claude Code needs: it discovers `.mcp.json` in the directory it was started from and spawns the server with that directory as cwd, which is also the cwd the launcher itself walks up from to find the Unity project. This assumes the spawn cwd equals the `.mcp.json` directory — true for the standard Claude Code flow, but `claude --mcp-config` pointed at a `.mcp.json` from elsewhere would get `ENOENT` on the relative path where an absolute one would have worked.
+
+  A user-supplied `HADES_HUB_DIR` override must be an **absolute path**. It is resolved against each process's own cwd — Unity's and the launcher's may differ — so a relative override can point the two at different directories and break the rendezvous it's meant to force.
+
+  The launcher copy's location (`HadesPaths.LauncherDir`) is deliberately **not** the resolved hub directory (`HadesPaths.HubDir`), even though the two coincide under the default local scope. They answer different questions. `HubDir` is the rendezvous directory where `hub.json` is published, and Unity, the launcher, and the hub must each resolve it identically at runtime; `LauncherDir` is only a stable destination for a copied file, needed because the launcher's real package location moves with every version bump (`Library/PackageCache/com.arcforge.hades@<hash>`). Fusing them made `args[0]` track hub scope and so wrote one developer's `$HOME` into a shared file, for no gain: the launcher never derives its hub from its own location — `resolveHubDir` (`Bridge~/launcher/src/hub-dir.ts`) reads `HADES_HUB_DIR`, then walks up from cwd, then reads `hub_scope` from `config.local.yaml`. Keeping the copy project-local therefore leaves global hub scope working exactly as before. `hub-path.json` is the one artifact that still follows `HubDir`, because `findHubEntry` reads it from there at runtime.
+
+  **`.mcp.json` is git-tracked**, unlike the rest of `.arcforge/`. With `args[0]` now byte-identical on every machine and under either scope, the file is team configuration rather than machine state, and committing it means a fresh clone gets the Hades server without opening Unity first. The launcher it names *is* gitignored, so Claude Code reports the server as failed until the Editor has run once to regenerate it. Its `hades` entry is rewritten on every server start, which self-heals both a package version bump and a change of hub scope. The rewrite is a *merge*, not a replacement: `.mcp.json` is Claude Code's project-level MCP registry and may declare any number of servers Hades knows nothing about, so `MCPClientConfig.MergeHadesServer` reads the existing file, sets only `mcpServers.hades`, and preserves every sibling server and top-level key. Unparseable input is the one case that is replaced outright — Hades must be able to self-heal its own entry, and a file that does not parse has no readable siblings to lose. The Claude Desktop config is deliberately not treated that way (a global file holding settings outside Hades' remit), so a parse failure there aborts the write instead. For Claude Desktop, Unity writes `claude_desktop_config.json` pointing to the same stable launcher path, absolute because Desktop spawns servers with no meaningful working directory of its own; that file has no project-local equivalent (Claude Desktop is one application with one config file), so it is the single Hades write that cannot be contained in a workspace, and the `desktop_integration` setting — **default off** — gates it.
+
+  That default is not only about containment. The cwd Claude Code provides is exactly what Desktop does *not*: with no project root reachable from its working directory, the launcher's `findProjectRoot` returns `null` and `resolveHubDir` falls through to `$HOME/.arcforge/hades-hub`, while a local-scope Unity publishes `hub.json` into the project's own hub directory. The two never rendezvous, so a Desktop entry written under the default local hub scope is inert. Claude Desktop today therefore requires `hub_scope: global` (plus `skills_scope: global`, since `~/.claude/skills` is the only skills location Desktop reads). The planned lift is to write `env: { "HADES_HUB_DIR": "<absolute local hub dir>" }` into the Desktop entry, which hits rung 1 of the resolution chain and points Desktop straight at that project's hub — see the **Roadmap** §15, *Claude Desktop cannot reach a project-local hub*, for the design and the one edge it still has to settle.
 - The Launcher has zero npm dependencies — uses only Node.js built-ins. No `npx` or external tool required.
 - Node.js is a runtime dependency for MCP connectivity. Without Node.js, neither Claude Code nor Claude Desktop can connect to Hades.
 
@@ -2834,7 +2864,7 @@ When something goes wrong, the user should have clear paths forward. Documented 
 | "Dashboard won't load" | Trace database large | Run pruning; check disk space |
 | "Memory file won't save" | Frontmatter syntax error | Check parser warnings in dashboard |
 | "Agent ignores my memory entries" | Frontmatter not loaded | Restart Unity, check parse logs |
-| "MCP tools disappear after Unity restart" | Hub lost Unity registration | Check `~/.arcforge/hades-hub/hub.json` PID is alive; Unity re-registers on next heartbeat. If Hub PID is dead, delete `hub.json` and restart Claude Code session |
+| "MCP tools disappear after Unity restart" | Hub lost Unity registration | Check the PID in `hub.json` is alive — in `<projectRoot>/.arcforge/hades-hub/` by default, or `~/.arcforge/hades-hub/` in global hub scope (Project Settings → Hades shows the resolved path). Unity re-registers on next heartbeat. If Hub PID is dead, delete `hub.json` and restart Claude Code session |
 | "Database integrity error" | Corruption | Backup `.arcforge/`, then rebuild |
 
 These recovery procedures are part of user documentation, not buried in this technical document.
