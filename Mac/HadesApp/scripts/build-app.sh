@@ -254,7 +254,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key>
     <string>2.0.0</string>
     <key>CFBundleVersion</key>
-    <string>4</string>
+    <string>5</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <!-- No Dock icon, no Cmd+Tab entry - see this script's own header and

@@ -24,9 +24,20 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private let viewModel: MenuBarViewModel
     private let onOpenHades: () -> Void
 
-    init(viewModel: MenuBarViewModel, onQuit: @escaping () -> Void, onOpenHades: @escaping () -> Void) {
+    /// Reopens first-run setup. Without this there is NO route back to it: completion is stored in
+    /// `UserDefaults` under `HadesOnboardingCompleted`, scoped to the machine and written once, and
+    /// `AppDelegate` reads it only at launch. Anyone who removed Hades by dragging it to the Trash -
+    /// which leaves that preference behind - and reinstalled would never see setup again, with no
+    /// way to ask for it.
+    private let onRunSetupAgain: () -> Void
+
+    init(
+        viewModel: MenuBarViewModel, onQuit: @escaping () -> Void, onOpenHades: @escaping () -> Void,
+        onRunSetupAgain: @escaping () -> Void
+    ) {
         self.viewModel = viewModel
         self.onOpenHades = onOpenHades
+        self.onRunSetupAgain = onRunSetupAgain
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         self.popover = NSPopover()
         super.init()
@@ -90,11 +101,21 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let openItem = NSMenuItem(title: "Open Hades", action: #selector(handleOpenHades), keyEquivalent: "")
         openItem.target = self
         menu.addItem(openItem)
+
+        menu.addItem(.separator())
+        let setupItem = NSMenuItem(
+            title: "Run Setup Again…", action: #selector(handleRunSetupAgain), keyEquivalent: "")
+        setupItem.target = self
+        menu.addItem(setupItem)
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY + 4), in: button)
     }
 
     @objc private func handleOpenHades() {
         onOpenHades()
+    }
+
+    @objc private func handleRunSetupAgain() {
+        onRunSetupAgain()
     }
 
     private func statusIcon() -> NSImage? {

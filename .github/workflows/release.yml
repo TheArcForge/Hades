@@ -115,14 +115,20 @@ jobs:
             echo "Updated marketplace.json version to $VERSION"
           fi
 
-      - name: Commit and tag
+      # Deliberately NOT tagged. The plugin repo used to receive `git tag -f "$TAG"` and a
+      # `--tags` push, which put a vX.Y.Z tag on a repo that has no use for one - its version lives
+      # in plugin.json and marketplace.json, both synced above. The cost was real: with v2.0.0
+      # present in BOTH repos, the GitHub "draft a new release" tag dropdown offered it on the
+      # plugin repo too, and the 2.0.0 release was published there by mistake - complete with the
+      # 61 MB DMG, on a repo meant to hold only skills and commands. Removing the tag removes the
+      # ambiguity at its source.
+      - name: Commit
         run: |
           cd plugin-clone
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "Release $TAG — synced from TheArcForge/Hades" || echo "No changes to commit"
-          git tag -f "$TAG"
 
       - name: Push to plugin repo
         run: |
@@ -130,8 +136,8 @@ jobs:
           git remote set-url origin https://x-access-token:${{ secrets.PLUGIN_REPO_TOKEN }}@github.com/TheArcForge/hades-plugin.git
           if [ "$DRY_RUN" = "true" ]; then
             echo "DRY RUN — authenticating with the plugin repo and validating the push without updating any refs:"
-            git push --dry-run origin main --tags
-            echo "Dry run complete. No commits or tags were pushed to the plugin repo."
+            git push --dry-run origin main
+            echo "Dry run complete. Nothing was pushed to the plugin repo."
           else
-            git push origin main --tags
+            git push origin main
           fi

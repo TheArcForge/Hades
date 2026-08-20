@@ -73,10 +73,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             tracesViewModel: tracesViewModel, memoryViewModel: memoryViewModel, activationCoordinator: activationCoordinator)
         self.mainWindowScene = mainWindowScene
 
+        // Created before the menu bar because BOTH reach onboarding through it: the first-run gate
+        // below, and the menu's own "Run Setup Again…" item. Creates the window once and reuses it,
+        // matching OnboardingWindowController's own "create once, reuse" contract - showing it a
+        // second time is exactly what its `if let window` branch already handles.
+        let onboardingCompletionStore = UserDefaultsOnboardingStore()
+        let showOnboarding: @MainActor () -> Void = { [weak self] in
+            guard let self else { return }
+            if let existing = self.onboardingWindowController {
+                existing.show()
+                return
+            }
+            // Plan 14 Task 10: the control API now has a real /control/migration/* surface (see
+            // Hades.Server.Control.MigrationEndpoint) to back this seam - see LiveMigrationOffering's
+            // own doc comment for exactly what it does (imports memory and traces) and does not do
+            // (any of V12Cleanup's four cleanup routes) under this offer.
+            let onboardingViewModel = OnboardingViewModel(
+                projectsViewModel: projectsViewModel, completionStore: onboardingCompletionStore,
+                migrationOffering: LiveMigrationOffering())
+            let controller = OnboardingWindowController(
+                viewModel: onboardingViewModel, activationCoordinator: activationCoordinator)
+            self.onboardingWindowController = controller
+            controller.show()
+        }
+
         menuBarController = MenuBarController(
             viewModel: viewModel,
             onQuit: { NSApp.terminate(nil) },
-            onOpenHades: { mainWindowScene.show() }
+            onOpenHades: { mainWindowScene.show() },
+            onRunSetupAgain: showOnboarding
         )
 
         // THE CALLER for first-run onboarding (Plan 14 Task 6, spec #3 §3.6): the one and only place
@@ -88,20 +113,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `projectsViewModel` instance the main window polls (constructed above, captured into
         // `mainWindowViewModel.refreshSelectedSection` already) - a project added during onboarding
         // is already there once the main window opens later; nothing is fetched twice.
-        let onboardingCompletionStore = UserDefaultsOnboardingStore()
+        // First-run gate. `hasCompletedOnboarding` is machine-scoped and written once, so it is no
+        // longer the ONLY route in - the menu's "Run Setup Again…" item shares `showOnboarding`
+        // above, which is what makes setup reachable after a drag-to-Trash reinstall leaves this
+        // preference behind.
         if !onboardingCompletionStore.hasCompletedOnboarding {
-            // Plan 14 Task 10: the control API now has a real /control/migration/* surface (see
-            // Hades.Server.Control.MigrationEndpoint) to back this seam, so this is no longer the
-            // `nil` MigrationOffering's own doc comment describes Task 6 leaving it - see
-            // LiveMigrationOffering's own doc comment for exactly what it does (imports memory and
-            // traces) and does not do (any of V12Cleanup's four cleanup routes) under this offer.
-            let onboardingViewModel = OnboardingViewModel(
-                projectsViewModel: projectsViewModel, completionStore: onboardingCompletionStore,
-                migrationOffering: LiveMigrationOffering())
-            let onboardingWindowController = OnboardingWindowController(
-                viewModel: onboardingViewModel, activationCoordinator: activationCoordinator)
-            self.onboardingWindowController = onboardingWindowController
-            onboardingWindowController.show()
+            showOnboarding()
         }
 
         // Adopt-or-spawn happens off the main run loop's synchronous startup path so the status

@@ -28,7 +28,7 @@
 set -euo pipefail
 
 VERSION="2.0.0"
-SHA256="001623dae48ce8a48c8703c656a5841036078055b67a13b88009c296680dd296"
+SHA256="cec8fce26cdb17c712b8d3dd9e32d1a9b2f9d0b3bcfa3042d3f0d42f5672d044"
 
 REPO="TheArcForge/Hades"
 DMG_NAME="Hades-${VERSION}-unsigned.dmg"
@@ -128,12 +128,25 @@ else
     echo "    no quarantine attribute - the app will launch without a Gatekeeper prompt"
 fi
 
+# Launch it. This is not a convenience: Hades is LSUIElement (menu-bar only - no Dock icon, no
+# Cmd+Tab entry, no window until it runs), so an installer that exits without launching produces
+# NOTHING the user can see. The first tester to install this way reported "I never saw the setup
+# wizard" - the app was simply never started. `|| true` because a non-GUI context (ssh, CI) has
+# nothing to launch into, and that must not fail an otherwise-good install.
+info "Launching Hades"
+if open -a "$TARGET" 2>/dev/null; then
+    echo "    look for the Hades icon in your menu bar - setup opens automatically on first run"
+else
+    echo "    could not launch automatically (no GUI session?) - open Hades from /Applications"
+fi
+
 cat <<EOF
 
 $(printf '\033[1;32m✓\033[0m') Hades ${VERSION} installed to ${TARGET}
 
 Next:
-  1. Open Hades from /Applications or Spotlight. It lives in the menu bar.
+  1. Hades is now running in your menu bar. First-run setup should already be on screen;
+     if not, open Hades from /Applications or Spotlight.
   2. Add your Unity project when it asks.
   3. Connect Claude Code. In a claude session:
        /plugin marketplace add TheArcForge/hades-plugin

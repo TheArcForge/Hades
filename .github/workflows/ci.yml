@@ -16,15 +16,26 @@ jobs:
     # File.SetUnixFileMode, and root inside a container ignores mode bits, which would make
     # those assertions pass for the wrong reason.
     runs-on: macos-latest
-    # Job-level, not per-step: Hades.Server.Tests already isolates itself via a
-    # [ModuleInitializer] (HadesHomeIsolation.cs) that defers to an already-set value, so this
-    # composes rather than conflicts with it - and Hades.Contract.Tests/Hades.Cli.Tests/
-    # Hades.Core.Tests have no such safety net, so without a job-level value they would fall back
-    # to this runner's real application-data directory instead of a throwaway one.
-    env:
-      HADES_HOME: ${{ runner.temp }}/hades-home
     steps:
       - uses: actions/checkout@v4
+
+      # HADES_HOME must reach EVERY test project: Hades.Server.Tests isolates itself via a
+      # [ModuleInitializer] (HadesHomeIsolation.cs) that defers to an already-set value, but
+      # Hades.Contract.Tests/Hades.Cli.Tests/Hades.Core.Tests have no such safety net and would
+      # otherwise fall back to the runner's real application-data directory.
+      #
+      # It is exported through $GITHUB_ENV rather than a job-level `env:` block, and that is not a
+      # style choice. `jobs.<id>.env` may only use the github/needs/strategy/matrix/vars/secrets/
+      # inputs contexts - `runner` is NOT among them, and is available only inside steps. A
+      # job-level `HADES_HOME: ${{ runner.temp }}/...` is therefore a workflow VALIDATION error:
+      # syntactically valid YAML that GitHub rejects before scheduling anything, which surfaces as
+      # a run that fails in 0 seconds with zero jobs and no log to read. This job did exactly that
+      # on every run from 2026-08-10 (the commit that introduced it) to 2026-08-20. $RUNNER_TEMP is
+      # the same value as a plain environment variable, and is legal here.
+      - name: Set up an isolated HADES_HOME
+        run: |
+          echo "HADES_HOME=$RUNNER_TEMP/hades-home" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/hades-home"
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -34,9 +45,6 @@ jobs:
           # would turn this job red for reasons unrelated to whatever it was actually meant to
           # check.
           global-json-file: Core/global.json
-
-      - name: Create HADES_HOME
-        run: mkdir -p "$HADES_HOME"
 
       # Honesty note for whoever reads the passing count this job prints: at least nine test
       # files (the RealProject*SmokeTest.cs family - six under Hades.Server.Tests, three under
