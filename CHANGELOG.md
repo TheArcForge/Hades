@@ -40,10 +40,6 @@ Two rounds of internal-tester feedback and three proactive hardening passes, eac
 
 Contributed by [@PaoloOranges](https://github.com/PaoloOranges).
 
-> Merged to the v1.x line and **superseded by 2.0.0**, which replaced the Node hub, the
-> in-Editor MCP server, and Unity `EditorPrefs` outright. Kept as the record of the work and
-> its author — none of the behaviour described below applies to 2.0.0 or later.
-
 A Unity project can now hold its entire Hades installation inside its own workspace, and does so by default. Previously the data plane was project-scoped but the control plane was not: the hub rendezvous directory was hardcoded under `$HOME`, skills were copied to `~/.claude/skills/`, and settings lived in Unity `EditorPrefs`, which is global per Unity install. Two projects on one machine therefore shared a hub process and a single set of preferences.
 
 ### Changed
