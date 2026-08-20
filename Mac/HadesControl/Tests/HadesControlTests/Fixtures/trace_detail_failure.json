@@ -1,0 +1,39 @@
+{
+    "traceId": "24f67f0f6b614961b4f9988c7dafa75e",
+    "tool": "search_by_name",
+    "startUtcMs": 1785934365026,
+    "endUtcMs": 1785934365026,
+    "durationMs": 0,
+    "outcome": "error",
+    "spans": [
+        {
+            "spanId": "82ce9eeb4c624f23bc3e44db866f959c",
+            "name": "search_by_name",
+            "kind": "tool_call",
+            "startUtcMs": 1785934365026,
+            "endUtcMs": 1785934365026,
+            "durationMs": 0,
+            "status": "error",
+            "attributes": [
+                {
+                    "key": "arguments.namePattern",
+                    "valueDisplay": ""
+                }
+            ],
+            "events": [
+                {
+                    "key": "[0].message",
+                    "valueDisplay": "search_by_name needs a non-empty 'namePattern' \u2014 the substring to look for, e.g. {\"namePattern\": \"PlayerController\"}. Add it and call again."
+                },
+                {
+                    "key": "[0].name",
+                    "valueDisplay": "exception"
+                },
+                {
+                    "key": "[0].timeUtcMs",
+                    "valueDisplay": "1785934365026"
+                }
+            ]
+        }
+    ]
+}

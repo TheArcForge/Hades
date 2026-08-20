@@ -16,12 +16,11 @@ What you want to happen.
 
 ## Which Hades layer does this relate to?
 
-- [ ] Graph
-- [ ] Charon
-- [ ] Asphodel
-- [ ] Skills
-- [ ] MCP Tools
-- [ ] Plugin/Distribution
+- [ ] .NET core / graph engine
+- [ ] MCP tools
+- [ ] Unity plugin (dial-out)
+- [ ] SwiftUI shell/app
+- [ ] Memory & migration
 - [ ] Other
 
 ## Additional context

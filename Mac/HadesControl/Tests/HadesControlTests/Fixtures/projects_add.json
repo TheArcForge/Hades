@@ -1,0 +1,22 @@
+{
+    "name": "Hades-Unity-Client",
+    "path": "/Users/mike/Projects/Hades-Unity-Client",
+    "productGuid": "15c012f27331e49229cef25e74537816",
+    "unityVersion": "6000.3.2f1",
+    "indexState": "indexed",
+    "indexStatus": "indexed 0s ago",
+    "nodeCount": 494,
+    "edgeCount": 332,
+    "editor": {
+        "state": "absent",
+        "status": "No Editor attached"
+    },
+    "warnings": [
+        {
+            "code": "pluginVersionMismatch",
+            "severity": "warning",
+            "message": "The installed Hades plugin (v1.2.0) is a different major version from this app (v2.0.0-dev) — compatibility is not assured, and most Editor-dependent tools should be expected to fail until it is updated.",
+            "remedy": "Use Install/Update Plugin for this project, then restart Unity if it is already running."
+        }
+    ]
+}

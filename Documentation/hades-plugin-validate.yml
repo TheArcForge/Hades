@@ -1,0 +1,88 @@
+# DRAFT — NOT ACTIVE IN THIS REPO.
+#
+# This file is not read by any workflow here. It is a drop-in replacement for
+# `.github/workflows/validate.yml` in the separate `TheArcForge/hades-plugin` repository — this
+# repo's tooling has no access to that repo and cannot edit it directly, so the fix has to land
+# as a file for a human (or that repo's own agent) to copy over by hand.
+#
+# Why it's needed: `TheArcForge/hades-plugin`'s current `validate.yml` still checks for the
+# retired v1.2 shape that used to get synced there — `Bridge~/launcher/dist/index.js`,
+# `Bridge~/hub/dist/index.js`, `Scanner~/index.js`, `Scanner~/package.json`, and a `.mcp.json`
+# that must contain the string `CLAUDE_PLUGIN_ROOT`. None of that exists after a sync from this
+# repo's `scripts/sync-plugin.sh` (see `.github/workflows/release.yml`): `ClaudeCodePlugin`
+# ships a bare HTTP `.mcp.json` pointing at the standalone app, with no local process and no
+# `Bridge~`/`Scanner~` at all. The next release sync will turn that check red for content that
+# synced correctly. This replacement mirrors the validation block in this repo's own
+# `.github/workflows/release.yml`, which validates that same post-sync content before it is ever
+# pushed to the plugin repo.
+#
+# To apply: copy everything in this file (this header is itself a valid YAML comment block) to
+# `.github/workflows/validate.yml` in `TheArcForge/hades-plugin`, replacing what's there now.
+
+name: Validate Plugin
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Validate Plugin Structure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required files
+        run: |
+          echo "Checking required files..."
+          test -f .claude-plugin/plugin.json || { echo "FAIL: .claude-plugin/plugin.json missing"; exit 1; }
+          test -f .mcp.json || { echo "FAIL: .mcp.json missing"; exit 1; }
+          test -f README.md || { echo "FAIL: README.md missing"; exit 1; }
+          test -f LICENSE || { echo "FAIL: LICENSE missing"; exit 1; }
+          test -f CLAUDE.md || { echo "FAIL: CLAUDE.md missing"; exit 1; }
+          echo "All required files present."
+
+      - name: Validate plugin.json is valid JSON
+        run: |
+          python3 -c "import json; json.load(open('.claude-plugin/plugin.json'))" || { echo "FAIL: plugin.json is not valid JSON"; exit 1; }
+
+      - name: Validate .mcp.json shape
+        run: |
+          python3 -c "
+          import json
+          d = json.load(open('.mcp.json'))
+          assert 'mcpServers' not in d
+          hades = d['hades']
+          assert hades['type'] == 'http'
+          assert hades['url'] == 'http://127.0.0.1:7823/mcp'
+          " && echo "PASS: .mcp.json is a plugin-root HTTP entry, no mcpServers wrapper" || { echo "FAIL: .mcp.json is not the expected HTTP hades entry"; exit 1; }
+
+      - name: Check skill count
+        run: |
+          COUNT=$(find skills -name "SKILL.md" | wc -l | tr -d ' ')
+          echo "Skills found: $COUNT"
+          [ "$COUNT" -eq 22 ] || { echo "FAIL: expected 22 skills, got $COUNT"; exit 1; }
+
+      - name: Check command count
+        run: |
+          COUNT=$(ls commands/*.md 2>/dev/null | wc -l | tr -d ' ')
+          echo "Commands found: $COUNT"
+          [ "$COUNT" -eq 6 ] || { echo "FAIL: expected 6 commands, got $COUNT"; exit 1; }
+
+      - name: Check no excluded files
+        run: |
+          METAS=$(find . -name "*.meta" -not -path "./.git/*" | wc -l | tr -d ' ')
+          [ "$METAS" -eq 0 ] || { echo "FAIL: found $METAS .meta files"; exit 1; }
+          CS=$(find . -name "*.cs" -not -path "./.git/*" | wc -l | tr -d ' ')
+          [ "$CS" -eq 0 ] || { echo "FAIL: found $CS .cs files"; exit 1; }
+          NM=$(find . -name "node_modules" -type d -not -path "./.git/*" | wc -l | tr -d ' ')
+          [ "$NM" -eq 0 ] || { echo "FAIL: found node_modules"; exit 1; }
+          echo "No excluded files found."
+
+      - name: Check retired v1.2 shape is absent
+        run: |
+          [ ! -e Bridge~ ] || { echo "FAIL: Bridge~ present (retired v1.2 shape)"; exit 1; }
+          [ ! -e Scanner~ ] || { echo "FAIL: Scanner~ present (retired v1.2 shape)"; exit 1; }
+          echo "No retired v1.2 directories found."

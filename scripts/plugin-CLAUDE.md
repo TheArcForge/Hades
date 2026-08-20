@@ -1,6 +1,6 @@
 # Hades — Agent Guidelines
 
-This is a Unity project with Hades installed. You have 89 MCP tools that give you deep structural understanding of the project — a knowledge graph of every scene, prefab, script, asset, and their dependencies. Use them.
+This is a Unity project with Hades installed. You have 32 MCP tools that give you deep structural understanding of the project — a knowledge graph of every scene, prefab, script, asset, and their dependencies. Use them.
 
 ## Core principle: structural context first
 
@@ -10,22 +10,22 @@ Before answering questions about this project, before writing code, before sugge
 |---|---|
 | `grep -r "PlayerController"` | `search_by_name` + `find_references_to` — find it in the graph with all its references |
 | `find . -name "*.cs"` to understand the project | `get_project_summary` — structured overview with counts and architecture |
-| Reading scene files as YAML | `get_scene_summary` + `scene_get_hierarchy` — parsed structure, not raw text |
+| Reading scene files as YAML | `get_scene_summary` + `inspect_asset` — parsed structure, not raw text |
 | Guessing what depends on something | `trace_dependencies` — recursive dependency trace through the graph |
-| Reading a prefab file to understand it | `prefab_get_contents` — structured hierarchy without instantiating |
+| Reading a prefab file to understand it | `inspect_asset` — structured hierarchy without instantiating |
 
 Bash is for things the graph doesn't cover: reading file contents, running commands, editing code. The graph is for understanding project structure, finding relationships, and navigating the codebase.
 
 ## How to approach common questions
 
 **"Tell me about this project"**
-→ `get_project_summary` (deep) → `get_scene_summary` for key scenes → `get_memory_summary` for documented decisions
+→ `get_project_summary` → `get_scene_summary` for key scenes → `get_memory_summary` for documented decisions
 
 **"Where is X used?" / "What would break if I remove X?"**
 → `search_by_name` to find it → `find_references_to` for incoming references → `trace_dependencies` for outgoing dependencies
 
 **"How does [feature] work?"**
-→ `search_by_name` for related scripts → `find_references_to` to see where they're used → `get_scene_summary` / `prefab_get_contents` to see how they're assembled → then read the actual code
+→ `search_by_name` for related scripts → `find_references_to` to see where they're used → `get_scene_summary` / `inspect_asset` to see how they're assembled → then read the actual code
 
 **"I want to add/change [feature]"**
 → First understand what exists (graph queries above) → check project memory via `recall_memory` for relevant decisions/conventions → then propose the approach
@@ -41,13 +41,13 @@ This project may have documented decisions, patterns, and conventions in `.arcfo
 
 When you need to change scenes, prefabs, components, or assets — use the MCP tools, not file editing. Unity assets are binary or complex YAML that should not be hand-edited:
 
-- **Scenes**: `scene_create_gameobject`, `scene_setup`, `component_add`, `component_set_properties`
-- **Prefabs**: `prefab_create`, `prefab_edit_property`, `prefab_open_editing` / `prefab_save_editing`
-- **Materials**: `material_create`, `material_set_property`, `material_assign`
-- **Animation**: `animation_create_controller`, `animation_assign_clip`
-- **References**: `reference_set` (for wiring up object references between components)
+- **Scenes**: `scene_apply` (batch ops: create, addComponent, setProperties, setReference, removeComponent, addListener, removeListener, delete, reparent, rename, select) / `scene_manage` (batch ops: save, create, open, duplicate)
+- **Prefabs**: `prefab_apply` (batch ops: create, instantiate, applyOverrides, editProperty, createVariant)
+- **Materials**: `material_apply` (batch ops: create, setProperty, assign, duplicate, swapShader)
+- **Animation**: `animation_apply` (batch ops: assignController, assignClip, createController, editController)
+- **References**: `scene_apply`'s `setReference` op (for wiring up object references between components)
 
-For C# scripts: write and edit code files normally with your editor tools. Use `BeginScriptEditing` / `EndScriptEditing` to batch multiple script changes before triggering recompilation.
+For C# scripts: write and edit code files normally with your editor tools. Use `script_editing_session` (action: "begin" / "end") to batch multiple script changes before triggering recompilation.
 
 ## Recovering a stalled MCP connection (macOS)
 

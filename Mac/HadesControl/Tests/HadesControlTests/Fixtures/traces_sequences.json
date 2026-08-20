@@ -1,0 +1,32 @@
+{
+    "sequences": [
+        {
+            "id": "8e26d015f3f64ca887a8f397fce03799",
+            "tools": [
+                "hades_status",
+                "search_by_name",
+                "find_references_to",
+                "search_by_name",
+                "propose_memory_update",
+                "propose_memory_update",
+                "propose_memory_update"
+            ],
+            "pattern": "hades_status \u2192 search_by_name \u2192 find_references_to \u2192 search_by_name \u2192 propose_memory_update \u2192 propose_memory_update \u2192 propose_memory_update",
+            "callCount": 7,
+            "startUtcMs": 1785919231447,
+            "endUtcMs": 1785919255543,
+            "durationMs": 24096,
+            "outcome": "error",
+            "traceIds": [
+                "8e26d015f3f64ca887a8f397fce03799",
+                "f2e55401519949998c03769e11dab297",
+                "982b5658d8224e0fb784f95a01bfb886",
+                "0186f14733ee4656ace4074295c5915b",
+                "71e7bbf575ac48e3af1bf500f6f14712",
+                "98e99d699524482fa1ba932abed84463",
+                "37a2abc514b04fcab61fbcc90238699e"
+            ]
+        }
+    ],
+    "truncated": false
+}

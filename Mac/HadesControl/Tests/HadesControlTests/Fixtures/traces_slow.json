@@ -1,0 +1,28 @@
+{
+    "tools": [
+        {
+            "tool": "propose_memory_update",
+            "callCount": 3,
+            "averageDurationMs": 5.3,
+            "maxDurationMs": 16
+        },
+        {
+            "tool": "hades_status",
+            "callCount": 1,
+            "averageDurationMs": 2,
+            "maxDurationMs": 2
+        },
+        {
+            "tool": "find_references_to",
+            "callCount": 1,
+            "averageDurationMs": 1,
+            "maxDurationMs": 1
+        },
+        {
+            "tool": "search_by_name",
+            "callCount": 2,
+            "averageDurationMs": 1,
+            "maxDurationMs": 2
+        }
+    ]
+}

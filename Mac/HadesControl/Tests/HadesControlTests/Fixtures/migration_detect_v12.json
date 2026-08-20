@@ -1,0 +1,18 @@
+{
+  "projectRoot": "/Users/mike/Projects/Hades-Unity-Client",
+  "isV12Project": true,
+  "manifestEntry": {
+    "present": true,
+    "value": "file:/Users/mike/Projects/Hades",
+    "resolvedPath": "/Users/mike/Projects/Hades"
+  },
+  "hasMemory": true,
+  "memoryDocumentCount": 3,
+  "hasTraces": true,
+  "hasGraph": false,
+  "hasGeneratedMcpConfig": true,
+  "claudeMd": {
+    "shape": "marked"
+  },
+  "hasUnityPlugin": false
+}

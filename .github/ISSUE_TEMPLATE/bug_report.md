@@ -23,8 +23,8 @@ What you expected to happen.
 ## Environment
 
 - Unity version:
-- Node.js version (`node --version`):
-- OS:
+- Hades app version (`2.0.0`, from `hades_status`):
+- macOS version:
 - Claude Code version (`claude --version`):
 
 ## Logs

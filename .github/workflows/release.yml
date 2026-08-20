@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Dry run — build, sync, validate, and auth-check the push without updating the plugin repo"
+        description: "Dry run — sync, validate, and auth-check the push without updating the plugin repo"
         type: boolean
         default: true
       version:
@@ -33,15 +33,6 @@ jobs:
           fi
           echo "Triggered by: ${{ github.event_name }}"
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: "Bridge~/package-lock.json"
-
-      - name: Install and build Bridge
-        run: cd Bridge~ && npm ci && npm run build
-
       - name: Sync plugin to output directory
         run: bash scripts/sync-plugin.sh ./plugin-output
 
@@ -59,6 +50,15 @@ jobs:
 
           python3 -c "import json; json.load(open('./plugin-output/.claude-plugin/plugin.json'))" || { echo "FAIL: plugin.json is not valid JSON"; exit 1; }
 
+          python3 -c "
+          import json
+          d = json.load(open('./plugin-output/.mcp.json'))
+          assert 'mcpServers' not in d
+          hades = d['hades']
+          assert hades['type'] == 'http'
+          assert hades['url'] == 'http://127.0.0.1:7823/mcp'
+          " && echo "PASS: .mcp.json is a plugin-root HTTP entry, no mcpServers wrapper" || { echo "FAIL: .mcp.json is not the expected HTTP hades entry"; exit 1; }
+
           METAS=$(find ./plugin-output -name "*.meta" -not -path "./.git/*" | wc -l | tr -d ' ')
           [ "$METAS" -eq 0 ] || { echo "FAIL: found $METAS .meta files in plugin output"; exit 1; }
 
@@ -68,8 +68,8 @@ jobs:
           NM=$(find ./plugin-output -name "node_modules" -type d -not -path "./.git/*" | wc -l | tr -d ' ')
           [ "$NM" -eq 0 ] || { echo "FAIL: found node_modules in plugin output"; exit 1; }
 
-          test -f ./plugin-output/Bridge~/launcher/dist/index.js || { echo "FAIL: Bridge launcher dist missing"; exit 1; }
-          test -f ./plugin-output/Bridge~/hub/dist/index.js || { echo "FAIL: Bridge hub dist missing"; exit 1; }
+          [ ! -e ./plugin-output/Bridge~ ] || { echo "FAIL: Bridge~ present in plugin output (retired v1.2 shape)"; exit 1; }
+          [ ! -e ./plugin-output/Scanner~ ] || { echo "FAIL: Scanner~ present in plugin output (retired v1.2 shape)"; exit 1; }
 
           echo "All validation checks passed."
 
@@ -87,6 +87,22 @@ jobs:
             --exclude='CONTRIBUTING.md' \
             --exclude='.claude-plugin/marketplace.json' \
             ./plugin-output/ ./plugin-clone/
+
+      - name: Verify the plugin manifest matches the tag
+        run: |
+          # marketplace.json (below) lives in the PLUGIN repo and is derived, so it is rewritten.
+          # plugin.json lives HERE and is a source-of-truth version site (ReleasePipeline section 2),
+          # so a mismatch means someone tagged without bumping it - fail loudly instead of papering
+          # over it. This gate exists because plugin.json shipped at 0.1.0 through the whole 2.0.0
+          # cycle: it was absent from the lockstep table, so nothing ever compared it to anything.
+          VERSION="${TAG#v}"
+          MANIFEST_V=$(python3 -c "import json; print(json.load(open('ClaudeCodePlugin/.claude-plugin/plugin.json'))['version'])")
+          if [ "$MANIFEST_V" != "$VERSION" ]; then
+            echo "FAIL: ClaudeCodePlugin/.claude-plugin/plugin.json is $MANIFEST_V but the tag is $VERSION."
+            echo "Bump it (and every other site in ReleasePipeline.md section 2) and re-tag."
+            exit 1
+          fi
+          echo "plugin.json matches the tag: $VERSION"
 
       - name: Update marketplace version
         run: |

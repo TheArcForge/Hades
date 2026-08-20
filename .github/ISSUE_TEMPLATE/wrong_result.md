@@ -6,7 +6,7 @@ labels: wrong-result
 assignees: ''
 ---
 
-> Hades is honest about its confidence, but if a result is wrong we want to know. Concrete repros on real projects are exactly how v1 gets solid.
+> Hades is honest about its confidence, but if a result is wrong we want to know. Concrete repros on real projects are exactly how it gets solid.
 
 ## What did you ask?
 
@@ -20,7 +20,7 @@ How it differs from the result above.
 
 ## Confidence signal it reported
 
-Trust / Verify / Confirm — or paste the confidence block. See [Interpreting results](../../Documentation/interpreting-results.md) for what each signal means.
+Trust / Verify / Confirm — or paste the confidence block. See [Interpreting results](../../Documentation/Retired/interpreting-results.md) (an archived v1.2 doc, kept for reference) for what each signal means.
 
 ## What kind of thing?
 
@@ -38,5 +38,5 @@ Generics, reflection/DI, precompiled DLLs or packages, assembly definitions, Add
 ## Environment
 
 - Unity version:
-- Node.js version (`node --version`):
-- OS:
+- Hades app version (`2.0.0`, from `hades_status`):
+- macOS version:

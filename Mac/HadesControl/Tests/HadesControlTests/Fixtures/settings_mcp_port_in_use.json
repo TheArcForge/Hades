@@ -1,0 +1,10 @@
+{
+    "mcpPort": {
+        "port": 9999,
+        "inUse": true,
+        "message": "Hades is running on port 9999 \u2014 the documented MCP port 7823 is already in use by another process. Find and stop whatever is using port 7823 (`lsof -nP -iTCP:7823 -sTCP:LISTEN`), or set ASPNETCORE_URLS to run Hades at a different address."
+    },
+    "logLevel": {
+        "level": "Information"
+    }
+}

@@ -19,9 +19,6 @@
 *.mdb
 *.opendb
 *.VC.db
-*.pidb.meta
-*.pdb.meta
-*.mdb.meta
 
 # OS
 .DS_Store
@@ -33,36 +30,34 @@ Thumbs.db
 *.swp
 *.swo
 
-# Node — dependencies are never committed
-Bridge~/node_modules/
-Bridge~/hub/node_modules/
-Scanner~/node_modules/
-Dashboard~/node_modules/
-
-# Note: compiled output IS committed on purpose (shipped prebuilt, zero native deps):
-#   Bridge~/launcher/dist, Bridge~/hub/dist  -> consumed by the Claude Code plugin
-#   Dashboard~/dist                          -> served by the Unity Editor at runtime
-# Scanner~ ships as source (native tree-sitter deps are built per-platform via npm install).
-
 # Hades runtime artifacts (machine-specific)
 .arcforge/graph.db
 .arcforge/graph.db-wal
 .arcforge/graph.db-shm
 .arcforge/traces.db
 .arcforge/server.json
-.arcforge/config.local.yaml
-.arcforge/hades-hub/
+
+# LLVM coverage output from the Xcode-instrumented HadesApp binary, written to its process CWD
+# on exit (seen at the repo root and at Mac/HadesApp). Regenerated every run, never committed.
+# Bare filenames match at any depth, so this covers both locations.
+default.profraw
 
 # Keep memory tracked
 !.arcforge/memory/
 
-# .mcp.json is deliberately NOT ignored. Its only Hades entry is
-# `node .arcforge/hades-hub/launcher.js` — a project-relative path that is byte-identical on every
-# machine and under either hub scope, so it is team config, not machine state. Claude Code reads
-# any number of other servers from the same file; Hades merges rather than overwrites.
-# The launcher it names IS ignored (above), so a fresh clone reports the server as failed until
-# the Unity Editor has been opened once to regenerate it.
+# .mcp.json is deliberately NOT ignored, and must not be. A bare `.mcp.json` pattern matches at
+# ANY depth, which silently excluded ClaudeCodePlugin/.mcp.json - the v2 Claude Code plugin's own
+# manifest. scripts/sync-plugin.sh aborts without it ("missing its manifest or .mcp.json") and
+# release.yml validates it, so the plugin publish fails on any fresh checkout while working fine
+# on the machine that has the file untracked. It carries no machine-specific state: a static HTTP
+# entry pointing at 127.0.0.1:7823.
 
 # Superpowers artifacts
 docs/
-docs.meta
+
+# No .meta files belong in this repository. It is not a Unity project and is not consumed as a
+# Unity package; the Unity plugin ships source only, and Unity generates .meta in the USER's
+# project on import (PluginInstaller writes none - see its doc comment). Ignoring them outright
+# means opening this checkout in Unity, or dropping it inside a Unity project, cannot quietly add
+# a single one.
+*.meta

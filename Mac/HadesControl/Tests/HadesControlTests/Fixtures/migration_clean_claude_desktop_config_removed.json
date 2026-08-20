@@ -1,0 +1,6 @@
+{
+  "removed": true,
+  "message": "Removed the 'hades' entry from claude_desktop_config.json. Every other server entry is untouched.",
+  "scopeWarning": "This changes claude_desktop_config.json globally for Claude Desktop on this machine, not just this project - any other MCP server entries are left untouched.",
+  "occurrencesFound": 1
+}

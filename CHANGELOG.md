@@ -4,7 +4,39 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — Project-Local Installation
+## [2.0.0] — Standalone macOS App — 2026-08-17
+
+Hades is now a **standalone macOS menu-bar app** rather than an in-Unity-Editor package. A .NET 10 core builds and serves the knowledge graph over MCP; the Unity plugin is optional and dials out to the app only for live-Editor features. The v1.x architecture (in-Editor MCP server, Node.js Bridge/Scanner, browser dashboard, Charon/Asphodel) is **retired** — its docs live under `Documentation/Retired/`, and its code only in git history.
+
+This entry covers the whole standalone-app rewrite, released as `2.0.0`; the internal beta.1–beta.3 builds were not separately logged.
+
+### Added
+
+- **Standalone macOS app.** A SwiftUI menu-bar shell supervises a .NET 10 core through `HadesCoreReaper` (which guarantees the core dies with the app, even on SIGKILL); a local control API drives a Projects / Traces / Memory / Settings window. The core serves MCP at `http://127.0.0.1:7823/mcp`.
+- **32 consolidated MCP tools.** The ~90 granular in-Editor tools folded into 32 family tools (`graph_query`, `search_by_name`, `find_references_to`, `trace_dependencies`, `inspect_asset`, `scene_apply`, `prefab_apply`, `material_apply`, `animation_apply`, the memory/settings tools, and the editor-proxy tools).
+- **Binary/imported assets as graph nodes.** Textures, models, audio, fonts, shaders, and animation clips are indexed meta-only (path/name/kind/GUID), so reference and dependency queries answer for them. Targets resolved outside every scanned root (e.g. a registry package's own copy under `Library/PackageCache`) remain honestly dangling.
+- **MCP roots auto-adoption.** A Unity project opened as a session root registers automatically, with a one-line announcement in the first tool result.
+- **Server-side regression capture/replay** (`hades_regression`) covering the whole tool surface, not just editor-routed calls.
+- **Guided migration from v1.2** — detection and cleanup of the retired hub/config/plugin state, preserving authored `.arcforge/memory/` byte-for-byte.
+- **Regression-coverage matrix** ([`Documentation/RegressionCoverage.md`](Documentation/RegressionCoverage.md)) mapping every fixed issue to its pinning test, and a batchmode Unity plugin test runner (`scripts/regression/run-plugin-editmode.sh`).
+
+### Changed
+
+- The Unity plugin (`UnityPlugin`, version **1.4.0**) dials out to the app over a local socket instead of hosting the MCP server in-Editor; a plugin-version skew warning surfaces when the installed plugin lags the app.
+- Memory conventions and proposals surface through the app's Memory window and the `/hades:*` commands rather than a browser dashboard.
+
+### Fixed
+
+Two rounds of internal-tester feedback and three proactive hardening passes, each landing with a regression test (traceable in [`Documentation/RegressionCoverage.md`](Documentation/RegressionCoverage.md)). Highlights:
+
+- **A deeply-nested prefab/scene no longer crashes the server.** `inspect_asset` bounds hierarchy and node recursion (512 levels) and returns a clean error instead of an uncatchable stack overflow that took down every project.
+- **Asset-path writes cannot escape the assets root or overwrite unrelated files**; over-long paths and cycle-shaped inputs (reparent-under-self, scene-onto-itself, variant whose base equals its target) are refused before any write.
+- **Running tests never writes your open scene.** `project_run_tests` used to save every dirty open scene before running — for EditMode as well as PlayMode — silently modifying version-controlled files. That save is gone; a dirty scene stays dirty.
+- **A corrupt asset file no longer aborts a rebuild or wedges background sync** — an unparseable file drops from the graph cleanly and is named in a warning.
+- **Concurrent memory-proposal writes can't clobber each other**, and migration cleanup removes only Hades's own MCP entry, never other configured servers.
+- Full 32-tool handshake acceptance, live re-indexing without a manual rebuild, honest result-truncation flags, and correct trace attribution on multi-project servers.
+
+## [Unreleased on the v1.x line] — Project-Local Installation
 
 Contributed by [@PaoloOranges](https://github.com/PaoloOranges).
 
@@ -28,6 +60,31 @@ A Unity project can now hold its entire Hades installation inside its own worksp
 ### Notes
 
 - **`~/.arcforge/hades-hub/` is no longer used in the default configuration.** Nothing in it needs migrating — `hub-path.json` is regenerated on every server start, `hub.json`, `hub.lock`, and `pending/` are live runtime state of a possibly-running hub, and `launcher.js` is no longer written there at all. Hades neither moves nor deletes the folder, because it cannot know whether another project on the machine still depends on it; a one-time notice points it out instead. Delete it by hand once every project has been updated and no hub process is running.
+
+## [1.2.0] — Graph-Grounded Convention Inference
+
+Hades now reads a project's *conventions* directly off the knowledge graph and offers each one as a promotable memory entry — so a fresh session, or a teammate after `git pull`, starts already knowing how the project does things without anyone having written it down.
+
+A new `ConventionInferrer` runs alongside the existing trace-based inference but reads graph *structure* instead of behaviour: six deterministic detectors recognize ScriptableObject event channels, Addressables adoption, prefab-variant strategy, ScriptableObject config data, type-naming conventions, and the render pipeline. Each fired convention is re-derived on every rebuild, so it is **self-validating** — it retracts itself the moment the structure that supports it disappears, the one guarantee statistical trace inference can't make. Conventions surface through the existing proposal queue (dashboard + `/hades:show-proposals`), and a small dismissal ledger means a rejected convention is never proposed again.
+
+This release also hardens the memory-write path and closes three reliability/security gaps carried on the audit.
+
+### Added
+
+- **Graph-grounded convention inference** — a `ConventionInferrer` (a sibling to `PatternInferenceEngine`, but reading the graph rather than Charon traces) with six deterministic detectors: ScriptableObject **event channels**, **Addressables** adoption, **prefab-variant** strategy, **ScriptableObject config** data, type-**naming** suffixes, and the **render pipeline** (URP/HDRP). It runs on graph-rebuild-complete on its own throttle, separate from the periodic trace-inference pass.
+- **Self-validating Tier-2 conventions** — `.arcforge/memory/inferred/convention-*.md` is reconciled on every run (written when a detector fires, deleted when it stops firing), so the inferred view can never go stale.
+- **Convention promotion proposals** — each detected convention becomes a one-click-promotable proposal in the existing queue; Accept writes it to Tier-1 (`patterns.md` / `conventions.md`) with a stable marker. A dismissal ledger (`inferred/.conventions-state.json`) remembers rejections so a dismissed convention isn't re-proposed, and re-flags a promoted convention that later stops holding.
+- **`GraphDatabase.FindNodesByTypeAndTier`** — a tier-scoped node query (reads project-only types for the naming detector, so engine/BCL builtins don't pollute the result).
+
+### Changed
+
+- **`MemoryManager.CreateProposal` accepts an optional stable id** — lets the convention inferrer write one idempotent proposal per detector (`convention-{key}`) instead of a fresh timestamped file every rebuild.
+
+### Fixed
+
+- **Security: path traversal in memory-file writes.** `propose_memory_update` and the proposal-accept path (C#), and the dashboard's memory API (Node), accepted caller-supplied file names and joined them into the memory directory with no validation — so a `../…` name could read or overwrite files outside `.arcforge/memory/`. Both now reject any non-basename / traversal / rooted name, on both the propose and the accept side (accept re-validates the untrusted `target_file` it reads back from the proposal).
+- **A timed-out tool no longer applies twice.** A tool call that exceeded the 30-second transport timeout was reported to the client as failed, but its work item stayed queued and still executed when the main thread freed up — so a mutating tool the agent was told had failed applied late, and the agent's retry applied it a second time. Queued work now carries a deadline and is skipped once it has expired.
+- **App-Nap starvation window narrowed.** The anti–App-Nap activity assertion is now acquired in the `[InitializeOnLoad]` static constructor (which runs synchronously during a domain reload) rather than inside the later, starvable `Boot` tick, so a backgrounded editor is more likely to keep running long enough to re-register the MCP server after a reload. *(A deeply backgrounded editor can still nap; this narrows the window rather than eliminating it.)*
 
 ## [1.1.0] — Graph Ownership Model, Incremental Integrity, Startup Reliability & Felt Performance
 

@@ -1,0 +1,40 @@
+{
+    "projects": [
+        {
+            "name": "fake-project-p12t1",
+            "path": "/private/tmp/claude-501/-Users-mike-Projects-Hades-Unity-Client/548e2df8-25b8-4a88-ae83-86e138c3b958/scratchpad/fake-project-p12t1",
+            "productGuid": "deadbeefdeadbeefdeadbeefdeadbeef",
+            "indexState": "indexed",
+            "indexStatus": "indexed 0s ago",
+            "nodeCount": 0,
+            "edgeCount": 0,
+            "editor": {
+                "state": "absent",
+                "status": "No Editor attached"
+            },
+            "warnings": [
+                {
+                    "code": "pathMissing",
+                    "severity": "error",
+                    "message": "Project path not found \u2014 check that the volume is mounted or the drive is connected.",
+                    "remedy": "Reconnect the volume, or remove this project from Hades if it no longer exists."
+                }
+            ]
+        },
+        {
+            "name": "Hades-Unity-Client",
+            "path": "/Users/mike/Projects/Hades-Unity-Client",
+            "productGuid": "15c012f27331e49229cef25e74537816",
+            "unityVersion": "6000.3.2f1",
+            "indexState": "indexed",
+            "indexStatus": "indexed 4m ago",
+            "nodeCount": 494,
+            "edgeCount": 332,
+            "editor": {
+                "state": "absent",
+                "status": "No Editor attached"
+            },
+            "warnings": []
+        }
+    ]
+}

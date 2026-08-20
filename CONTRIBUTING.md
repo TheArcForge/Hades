@@ -2,8 +2,10 @@
 
 ## Prerequisites
 
-- Unity 6000.0+
-- Node.js 20+
+- .NET 10 SDK
+- Xcode + Swift toolchain (macOS)
+- Unity 6000.x (only for the Unity plugin)
+- Python 3 (only for the e2e regression suite)
 - Claude Code (latest)
 
 ## Setup
@@ -12,42 +14,57 @@
 git clone https://github.com/TheArcForge/Hades.git
 cd Hades
 
-# Build the Bridge (Hub + Launcher)
-cd Bridge~ && npm ci && npm run build && cd ..
+# Build the .NET core
+dotnet build Core
 
-# Install Scanner dependencies
-cd Scanner~ && npm ci && cd ..
+# Build the macOS app (builds the Swift shell and embeds the published .NET server)
+Mac/HadesApp/scripts/build-app.sh
 ```
 
-Open your Unity project and add the package via **Package Manager → Add package from disk**, selecting `package.json` at the repo root.
+The Unity plugin is optional (only needed for live-Editor features) and isn't added via Package Manager anymore — install it from the running app via **Projects → Install Plugin**.
 
 ## Project Structure
 
 | Path | Contents |
 |---|---|
-| `Editor/` | Unity C# code — Graph, Charon, Asphodel, MCP server |
-| `Bridge~/` | Node.js Hub + Launcher (TypeScript → compiled JS) |
-| `Scanner~/` | Node.js C# parser (tree-sitter based) |
-| `skills/` | 22 Claude Code skills (Markdown) |
-| `commands/` | 6 slash commands (Markdown) |
-| `.claude-plugin/` | Plugin manifest |
-| `Documentation/` | Architecture docs, roadmap, guides |
+| `Mac/` | SwiftUI macOS app (`HadesApp`) + Swift packages `HadesControl`, `HadesSupervision` |
+| `Core/` | .NET 10 core — `Hades.Server`, `Hades.Core`, `Hades.Contract`, `Hades.Cli` (tests under `Core/tests`) |
+| `UnityPlugin/` | Unity Editor plugin (C#, v1.4.0) — optional, dials out to the app over a local socket |
+| `ClaudeCodePlugin/` | The Claude Code plugin — manifest, `.mcp.json`, 22 skills, 6 commands. Source of truth for the `hades-plugin` repo, which is generated from it |
+| `Documentation/` | Architecture docs, install guides, release pipeline. `Retired/` holds retired v1.2 docs (see its README) |
 
-Directories with a tilde suffix (`Bridge~/`, `Scanner~/`) are invisible to Unity's asset pipeline by design.
+These directories used to carry a `~` suffix, which hides them from Unity's asset pipeline. That
+mattered while the repo was itself a Unity package; it no longer is — Hades is a macOS app, and the
+Unity plugin reaches a project by being installed into it, not by the project consuming this repo.
+The suffixes were dropped accordingly, and with them the last `.meta` files: **this repository now
+contains none at all.** The Unity plugin ships source only — `PluginInstaller` writes no `.meta`
+(it says so in its own doc comment), and Unity generates them in the user's project on import,
+which is where they belong.
+
+**The repository root is deliberately not an installable Claude Code plugin.** Its manifest and
+`.mcp.json` used to live here and pointed at the retired in-Editor server, so pointing Claude Code
+at this checkout silently loaded the wrong generation of Hades. Install `ClaudeCodePlugin/`
+instead; a test enforces that the root stays un-installable.
 
 ## Running Tests
 
 All tests must pass before submitting a PR.
 
 ```bash
-# Bridge tests
-cd Bridge~ && npm test
+# .NET core (~1863 tests; isolate with HADES_HOME=$(mktemp -d))
+dotnet test Core
 
-# Scanner tests
-cd Scanner~ && npm test
+# Swift — run in each of Mac/HadesControl, Mac/HadesSupervision, Mac/HadesApp (70 / 14 / 211 tests)
+swift test
+
+# Unity plugin EditMode, batchmode (384 tests)
+scripts/regression/run-plugin-editmode.sh
+
+# End-to-end (25 cases; needs the app running with a project registered)
+python3 scripts/regression/hades_suite.py --url http://127.0.0.1:7823/mcp
 ```
 
-For Unity tests: open **Window → General → Test Runner** and run both EditMode and PlayMode suites.
+See `Documentation/RegressionCoverage.md` for the per-issue regression coverage map.
 
 ## How to Contribute
 
@@ -64,12 +81,11 @@ ship in, and in the merge commit. You don't need to add this yourself.
 ## What NOT to Do
 
 - **Never edit the plugin repo** (`TheArcForge/hades-plugin`) directly — it is auto-synced from this repo and any changes will be overwritten
-- **Never hand-write `.meta` files or invent GUIDs** — let Unity generate them. Unity-generated
-  `.meta` files **are** committed, and should be included in your PR alongside the `.cs` files they
-  belong to: this is a UPM git package, so consumers installing by git URL depend on stable GUIDs.
-  (`.gitignore` excludes only `*.pidb.meta`, `*.pdb.meta`, `*.mdb.meta`, and `docs.meta`.)
+- **Never hand-write `.meta` files or invent GUIDs, and do not commit `.meta` files at all.** This
+  repository ships none. The app writes `UnityPlugin/Assets/Hades` into a user's project as source,
+  and Unity generates the `.meta` files there on import — the only place they should exist.
+  `PluginInstaller` states the same rule in its own doc comment.
 - **Never commit `node_modules/`**
-- **Don't add new npm runtime dependencies to Bridge** — it is zero-dependencies by design
 
 ## Contributing Skills
 
@@ -80,6 +96,6 @@ Skills live in `skills/<name>/SKILL.md`. Each file must have YAML frontmatter wi
 Open a [GitHub Issue](https://github.com/TheArcForge/Hades/issues) and include:
 
 - Unity version
-- Node.js version
+- Hades app version (`2.0.0`, from `hades_status`)
 - OS and version
 - Steps to reproduce

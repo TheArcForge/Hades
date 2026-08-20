@@ -1,0 +1,22 @@
+{
+    "editors": [
+        {
+            "project": "Hades-Unity-Client",
+            "productGuid": "15c012f27331e49229cef25e74537816",
+            "state": "attached",
+            "status": "Editor attached",
+            "unityVersion": "6000.3.2f1",
+            "processId": 54321,
+            "connectionAgeSeconds": 180
+        },
+        {
+            "project": "fake-project-p12t1",
+            "productGuid": "deadbeefdeadbeefdeadbeefdeadbeef",
+            "state": "busy",
+            "status": "Editor attached (busy)",
+            "unityVersion": "6000.3.2f1",
+            "processId": 54399,
+            "connectionAgeSeconds": 8
+        }
+    ]
+}

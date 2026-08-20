@@ -56,9 +56,9 @@ The share of edges Hades **attempted** to resolve that it *did* resolve — **no
 
 | Tier | Tools / answers | How to use |
 |---|---|---|
-| **Trust** | `get_scene_summary`, `prefab_get_contents`, `material_get_properties`, `asset_get_info`, type → file lookups, `search_by_name` | Use directly; these read serialized project data |
+| **Trust** | `get_scene_summary`, `inspect_asset` (scene/prefab/material/animator-controller/asset structure), type → file lookups, `search_by_name` | Use directly; these read serialized project data |
 | **Verify** | `find_references_to` (scripts/prefabs) | Strong lead. Check `nested_by` + confidence before "unused/safe to delete" |
-| **Confirm** | inheritance / `implements` via `query_graph`, `trace_dependencies` (C#), `find_prefabs_with_component` | Confirm independently when types come from packages/DLLs, generics, or reflection/DI |
+| **Confirm** | inheritance / `implements` and prefab-component usage via `graph_query`, `trace_dependencies` (C#) | Confirm independently when types come from packages/DLLs, generics, or reflection/DI |
 
 ## The mental model
 

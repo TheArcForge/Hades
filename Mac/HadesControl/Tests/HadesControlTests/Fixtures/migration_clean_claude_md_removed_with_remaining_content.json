@@ -1,0 +1,5 @@
+{
+  "removed": true,
+  "message": "Removed the HADES:START/END block. Every other byte in the file is untouched.",
+  "remainingContentOutsideBlock": true
+}
