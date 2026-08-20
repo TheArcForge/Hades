@@ -23,29 +23,26 @@ This is the Claude Code plugin half of [**Hades**](https://github.com/TheArcForg
 
 ## Installation
 
-### Option A: Per-session (current recommended path)
-
-```bash
-claude --plugin-dir /path/to/hades-plugin
-```
-
-This loads the plugin for a single session only — pass it every time you start `claude`. It
-won't appear in `/plugin list`; that's expected for a `--plugin-dir` install, not a bug.
-
-### Option B: Persistent install via marketplace
-
-> **Not usable right now.** The Hades marketplace (`TheArcForge/hades-plugin`) has not yet been
-> republished to match this plugin — it currently still serves the retired v1.2 plugin (a Node
-> stdio launcher, closer to 90 tools than 32). Registering it today installs the wrong, retired
-> generation of Hades. Use Option A until this notice is removed.
+### Option A: Persistent install via marketplace (recommended)
 
 ```
 /plugin marketplace add TheArcForge/hades-plugin
 /plugin install hades
 ```
 
-Once the marketplace is republished with the current plugin, this will persist across sessions
-— you only do it once.
+You only do this once — it persists across sessions. Afterwards run `/mcp` and confirm `hades`
+reports **32 tools** over an HTTP URL. If it reports closer to 90, or a `node` command, you have
+the retired v1.2 plugin — see "Already have the old plugin?" below.
+
+### Option B: Per-session, from a clone
+
+```bash
+claude --plugin-dir /path/to/hades-plugin
+```
+
+For contributors, or anyone wanting the exact tree they checked out. This loads the plugin for a
+single session only — pass it every time you start `claude`. It won't appear in `/plugin list`;
+that's expected for a `--plugin-dir` install, not a bug.
 
 ### Verify
 

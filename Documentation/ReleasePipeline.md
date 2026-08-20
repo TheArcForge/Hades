@@ -171,13 +171,12 @@ Complete all items before creating a release tag.
 
 ### Current install paths
 
-> **Not current.** This subsection describes the intended shape of Anthropic marketplace
-> submission, not today's working install path. As of this internal testing round, the
-> self-hosted marketplace (`TheArcForge/hades-plugin`) has not been resynced to the current
-> plugin — it still serves the retired v1.2 plugin (Node stdio launcher, closer to 90 tools
-> than 32). Do not point testers or users at `/plugin marketplace add` today. The working path
-> is `claude --plugin-dir <path>/ClaudeCodePlugin` — see
-> `Documentation/Installing.md`.
+> **The self-hosted marketplace is the documented path as of 2.0.0**, and every user-facing
+> surface now says so: README.md, `Documentation/Installing.md`, `install.sh`, the app's own
+> onboarding step 3, and the plugin repo's README. It becomes true the moment tag `vX.Y.Z` is
+> pushed and `release.yml` resyncs `TheArcForge/hades-plugin` (8.5) — before that push it still
+> serves the retired v1.2 plugin, so **tag before pointing anyone at it**. Anthropic marketplace
+> submission below remains a future step, unchanged.
 
 Before marketplace acceptance, the plan is for users to install via the self-hosted marketplace:
 ```
@@ -764,8 +763,9 @@ The authoritative, current, top-to-bottom checklist for shipping a v2 release - 
 order. It supersedes sections 2-5 above for *execution* (those describe the retired v1.2 flow, per
 the banner at the top of section 2); section 6 holds the detailed build/signing/cask reasoning this
 section points back to rather than repeats. Both open variables this document previously flagged
-are now resolved by product decision: **distribution is Homebrew, v1 ships unsigned** (no Apple
-Developer ID certificate / no notarization - signing is future work), and **the
+are now resolved by product decision: **distribution is `install.sh` over curl, v1 ships unsigned**
+(no Apple Developer ID certificate / no notarization - signing is future work; Homebrew was
+evaluated and dropped because it quarantines its downloads, section 6.6), and **the
 `TheArcForge/hades-plugin` marketplace will be republished with the current plugin at release** -
 step 5 below covers exactly what that republish requires and its one known blocker.
 
@@ -778,6 +778,11 @@ Bump these together to the release version (`X.Y.Z`, e.g. `2.0.0`):
 | `Core/src/Hades.Server/Mcp/HadesTools.cs` | `ServerVersion` constant |
 | `Mac/HadesApp/scripts/build-app.sh` | Info.plist `CFBundleShortVersionString` |
 | `Mac/HadesApp/scripts/build-app.sh` | Info.plist `CFBundleVersion` (build number - bump too) |
+| `install.sh` | `VERSION` (and `SHA256`, once 8.3 has produced the DMG - see 8.4) |
+| `ClaudeCodePlugin/.claude-plugin/plugin.json` | `version` - `release.yml` FAILS the release if this does not match the tag |
+
+This table must stay identical to section 2's. It previously listed only the first three, which is
+why `plugin.json` sat at `0.1.0` for the entire 2.0.0 cycle without anything noticing.
 
 `build-dmg.sh` (8.3 below) reads `CFBundleShortVersionString` back out of the already-built `.app`
 to name the DMG - rebuild the app after bumping `build-app.sh`, before running `build-dmg.sh`, or
@@ -822,28 +827,41 @@ can produce today (6.1, 6.4 above).
 
 ### 8.4 Publish
 
-1. Create the GitHub Release on `TheArcForge/Hades` for tag `vX.Y.Z`; attach the DMG built in 8.3
-   as a release asset.
-2. Update `install.sh`'s `VERSION` and `SHA256` constants from the uploaded DMG, and confirm the
-   URL it names resolves (`curl -fsSL -I` it). Until that release asset exists, the script 404s -
-   that is the one thing publishing has to get right for the documented install path to work.
-3. Verify `install.sh` end to end against the published release on a Mac that has never had Hades
-   installed. Expect no Gatekeeper prompt (curl does not quarantine - 6.2) and `codesign -v` valid
-   on the installed bundle. There is no cask to publish; Homebrew was evaluated and dropped (6.6).
+**Order matters here, and an earlier version of this section had it wrong.** It said to create the
+Release first and pin `install.sh` afterwards - but `install.sh` is served from
+`raw.githubusercontent.com/.../main/install.sh`, so pinning after the merge leaves `main` carrying a
+stale checksum until a second commit lands. The digest is known as soon as 8.3 builds the DMG, so
+pin it *before* merging, not after publishing.
+
+1. **Pin `install.sh`** from the DMG built in 8.3: `shasum -a 256` it, set `SHA256` and `VERSION`.
+   Nothing is uploaded yet - the digest of the local artifact and the released one are the same file.
+2. **Commit, then merge the release branch to `main`.** Both `install.sh` and `uninstall.sh` are
+   fetched from `main` by their documented curl URLs, so until this lands, every install command in
+   the README 404s. This step used to be absent from this checklist entirely.
+3. **Tag `vX.Y.Z` and push the tag.** This fires `release.yml`: it verifies `plugin.json` matches the
+   tag (8.1), syncs the plugin, and pushes to `TheArcForge/hades-plugin` (8.5). It does NOT create
+   the GitHub Release or upload anything.
+4. **Create the GitHub Release** for that tag and attach the DMG from 8.3. Until the asset exists,
+   `install.sh` downloads nothing - this is the one step that makes the documented install work.
+5. **Verify `install.sh` end to end** against the published release, ideally on a Mac that has never
+   had Hades installed. Expect no Gatekeeper prompt (curl does not quarantine - 6.2) and
+   `codesign -v` valid on the installed bundle. `uninstall.sh` is worth the same pass. There is no
+   cask to publish; Homebrew was evaluated and dropped (6.6).
+6. **Update the GitHub repo description.** It is the first line anyone reads, and it long advertised
+   the retired tool count. Confirm it matches what this release actually ships.
 
 ### 8.5 Plugin / marketplace sync
 
 1. Pushing tag `vX.Y.Z` runs `.github/workflows/release.yml`, which runs `scripts/sync-plugin.sh`
    and pushes the current `ClaudeCodePlugin/` content to `TheArcForge/hades-plugin` (section 1
    above).
-2. **Known blocker - handle this as its own step, before or immediately after the push, not as a
-   footnote discovered later:** `TheArcForge/hades-plugin`'s own `.github/workflows/validate.yml`
-   still checks for the retired v1.2 shape (Bridge dist, Scanner source, a `.mcp.json` requiring
-   `${CLAUDE_PLUGIN_ROOT}`-relative paths) and will fail red on this sync, because the synced
-   content has none of that anymore. A drop-in replacement already exists in this repo at
-   `Documentation/hades-plugin-validate.yml` - someone with push access to `TheArcForge/hades-plugin`
-   must copy it over that repo's `.github/workflows/validate.yml`. This repo's own tooling cannot do
-   this step; it has no access to that repo beyond the sync push itself.
+2. **Resolved 2026-08-20 - no longer a blocker, but the ordering still matters.**
+   `TheArcForge/hades-plugin`'s `validate.yml` used to check for the retired v1.2 shape (Bridge
+   dist, Scanner source, a `.mcp.json` requiring `${CLAUDE_PLUGIN_ROOT}`) and would have gone red on
+   this sync, because the synced content has none of that. The corrected workflow - which instead
+   asserts that shape is ABSENT - has been pushed to that repo. Note `.github` is excluded from the
+   rsync, so that fix could never have ridden along with the sync: it had to land in the plugin repo
+   first. If that workflow is ever reverted there, re-apply it BEFORE tagging, not after.
 3. Confirm the synced marketplace actually serves the current plugin, not the retired one - the
    same check `Documentation/Installing.md`'s "Confirm you're testing the new Hades"
    section already walks a tester through: tool count (32, not ~90) and `hades_status`'s `version`
@@ -851,10 +869,12 @@ can produce today (6.1, 6.4 above).
 
 ### 8.6 Post-publish
 
-1. Once 8.5.3 confirms the marketplace is current, flip install guidance from "local `--plugin-dir`
-   only" back to the marketplace path everywhere it currently says otherwise: `scripts/plugin-README.md`,
-   `Documentation/Installing.md`, this file's own section 4 "Current install paths",
-   and `Mac/HadesApp/Sources/HadesApp/Onboarding/Views/OnboardingClaudeCodeStepView.swift`.
+1. **Already flipped, ahead of the sync - so verify rather than edit.** All five surfaces
+   (`README.md`, `scripts/plugin-README.md`, `Documentation/Installing.md`, this file's section 4,
+   and `OnboardingClaudeCodeStepView.swift`) already lead with the marketplace path. That was a
+   deliberate bet that the tag would land: it makes them correct from the moment of the sync, at the
+   cost of being wrong in the window between shipping the docs and pushing the tag. Confirm each
+   still reads correctly post-sync; the work to do here is checking, not rewriting.
 2. Re-verify the marketplace install end to end: `/plugin marketplace add TheArcForge/hades-plugin`
    → `/plugin install hades` → `/mcp` reports `hades` at 32 tools over the HTTP URL, not a `node`
    command.
