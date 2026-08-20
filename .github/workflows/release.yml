@@ -104,15 +104,28 @@ jobs:
           fi
           echo "plugin.json matches the tag: $VERSION"
 
-      - name: Update marketplace version
+      # marketplace.json is EXCLUDED from the rsync above - it belongs to the plugin repo, not to
+      # this one - which means nothing here can correct it and nothing there maintains it. That is
+      # not hypothetical: its description advertised "89 MCP tools" from the v1.x era right through
+      # the 2.0.0 release, while the very same file's `version` was being bumped to 2.0.0 by the jq
+      # below. The version was derived and stayed correct; the description was hand-written and rotted.
+      #
+      # So derive BOTH from ClaudeCodePlugin/.claude-plugin/plugin.json, which IS synced from this
+      # repo and reviewed with it. Same fix as the version, applied to the field that drifted.
+      - name: Update marketplace entry from the plugin manifest
         run: |
           VERSION="${TAG#v}"
           cd plugin-clone
           if [ -f .claude-plugin/marketplace.json ]; then
+            DESC=$(jq -r '.description' .claude-plugin/plugin.json)
+            [ -n "$DESC" ] && [ "$DESC" != "null" ] || { echo "FAIL: plugin.json has no description to derive from"; exit 1; }
             tmp=$(mktemp)
-            jq --arg v "$VERSION" '.plugins |= map(.version = $v)' .claude-plugin/marketplace.json > "$tmp"
+            jq --arg v "$VERSION" --arg d "$DESC" \
+              '.plugins |= map(.version = $v | .description = $d)' \
+              .claude-plugin/marketplace.json > "$tmp"
             mv "$tmp" .claude-plugin/marketplace.json
-            echo "Updated marketplace.json version to $VERSION"
+            echo "marketplace.json: version -> $VERSION"
+            echo "marketplace.json: description <- plugin.json"
           fi
 
       # Deliberately NOT tagged. The plugin repo used to receive `git tag -f "$TAG"` and a

@@ -3,7 +3,7 @@
   "name": "hades",
   "displayName": "Hades",
   "version": "2.0.0",
-  "description": "Unity-aware AI infrastructure for Claude Code: a queryable knowledge graph of your Unity project, observability, memory, and skills for Unity development.",
+  "description": "Unity-aware AI infrastructure for Claude Code: a queryable knowledge graph of your Unity project, plus observability, project memory, and 22 skills. Connects to the standalone Hades macOS app, which serves 32 MCP tools.",
   "author": {
     "name": "ArcForge",
     "url": "https://github.com/TheArcForge"
