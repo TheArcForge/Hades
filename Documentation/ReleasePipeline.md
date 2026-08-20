@@ -18,6 +18,27 @@ One job:
 - **`dotnet-tests`** ("App (.NET) Tests") — runs `dotnet test` against the .NET core in `Core/`.
   The former Bridge and Scanner jobs went with the v1.2 tree (section 7).
 
+> **A workflow that fails in 0 seconds with zero jobs is a VALIDATION error, not a test failure.**
+> This job did exactly that on every run from 2026-08-10 to 2026-08-20 - ten days during which the
+> .NET suite never ran in CI at all, while the README's badge showed a red X and nobody read it as
+> anything but flaky. The cause: a job-level
+> `env: HADES_HOME: ${{ runner.temp }}/hades-home`. The `runner` context is available only inside
+> steps; `jobs.<id>.env` may use github/needs/strategy/matrix/vars/secrets/inputs and nothing else.
+> GitHub rejects the workflow before scheduling anything, so there is no job, no log, and no error
+> text anywhere in the UI or API.
+>
+> Two things make this hard to diagnose, both worth knowing in advance:
+> - **Local YAML validation cannot catch it.** The file is perfectly valid YAML - `yaml.safe_load`
+>   parses it, there are no tabs, no BOM, no duplicate keys. It is the *expression context* that is
+>   illegal, which only GitHub's own schema knows about.
+> - **The workflow's displayed name is not a signal.** It shows as the file path rather than `CI`,
+>   which looks like a parse failure - but it does that on the successful runs too, going back
+>   months. Chasing it wastes time.
+>
+> Diagnose by comparing the last success against the first failure (`gh run list --workflow=ci.yml`)
+> and reading the diff of the workflow file between those two commits. `$RUNNER_TEMP` as a plain
+> environment variable, exported through `$GITHUB_ENV` in a step, does the same job legally.
+
 The Swift (`swift test` in `Mac/HadesControl`, `Mac/HadesSupervision`, `Mac/HadesApp`),
 Unity plugin EditMode (`scripts/regression/run-plugin-editmode.sh`), and e2e
 (`scripts/regression/hades_suite.py`) suites all run outside `ci.yml` — see §5 for the current
@@ -843,12 +864,51 @@ pin it *before* merging, not after publishing.
    the GitHub Release or upload anything.
 4. **Create the GitHub Release** for that tag and attach the DMG from 8.3. Until the asset exists,
    `install.sh` downloads nothing - this is the one step that makes the documented install work.
-5. **Verify `install.sh` end to end** against the published release, ideally on a Mac that has never
-   had Hades installed. Expect no Gatekeeper prompt (curl does not quarantine - 6.2) and
-   `codesign -v` valid on the installed bundle. `uninstall.sh` is worth the same pass. There is no
-   cask to publish; Homebrew was evaluated and dropped (6.6).
+   Three traps, all hit for real on 2026-08-20:
+   - **Create it on `TheArcForge/Hades`, not the plugin repo.** `release.yml` used to push `--tags`
+     to `TheArcForge/hades-plugin`, so `vX.Y.Z` existed in BOTH repos and appeared in the plugin
+     repo's "draft a new release" tag dropdown looking entirely correct. The 2.0.0 release was
+     published there by mistake, 61 MB DMG and all, on a repo that holds only skills and commands.
+     Fixed at the source - `release.yml` no longer tags that repo - but check the URL anyway.
+   - **A release and its assets are separate objects.** Deleting the misplaced release deleted the
+     uploaded DMG with it; recreating the release on the right repo produced a page that looked
+     complete (title, notes, Latest badge) with **zero assets** and an install URL still 404ing.
+     After publishing, assert the asset count, not the page.
+   - **A freshly uploaded asset 404s for a short while** before the CDN catches up. A 404 within a
+     minute of upload is propagation, not failure - re-check before re-uploading.
+5. **Verify `install.sh` end to end** against the published release, running the real documented
+   command (`curl ... | bash`) rather than a local variant with the URL swapped - the variant tests
+   the installer, not the release. Ideally on a Mac that has never had Hades installed. Expect no
+   Gatekeeper prompt (curl does not quarantine - 6.2), `codesign -v` valid, and **the first-run
+   wizard on screen**: Hades is `LSUIElement`, so an install that does not launch the app produces
+   no Dock icon, no window and no menu-bar item - indistinguishable from an install that did
+   nothing. That is exactly how it was reported ("I never saw the wizard") before `install.sh`
+   learned to launch. `uninstall.sh` is worth the same pass. There is no cask to publish; Homebrew
+   was evaluated and dropped (6.6).
+
+   **Confirm the checksum of the PUBLISHED file**, not the local one:
+   `curl -fsSL <asset-url> | shasum -a 256` against `install.sh`'s `SHA256`. Matching the artifact
+   you built proves nothing about what GitHub actually stored.
 6. **Update the GitHub repo description.** It is the first line anyone reads, and it long advertised
    the retired tool count. Confirm it matches what this release actually ships.
+
+### 8.4b Replacing an already-published asset
+
+Sometimes a bug surfaces minutes after publishing and a full version bump is disproportionate.
+Replacing the asset in place is defensible **only** when the download count is effectively zero -
+check it (`gh api repos/OWNER/REPO/releases/tags/vX.Y.Z --jq '.assets[].download_count'`) and account
+for every download before deciding. Anyone already holding the old bytes gets a file whose checksum
+no longer matches `install.sh`, which is a silent trap for them and a loud one for everyone else.
+
+When you do it:
+
+- **Bump `CFBundleVersion`** (not the marketing version). Same `2.0.0`, new build number - that field
+  exists precisely so two different binaries never both claim to be the same build.
+- **Land the new `install.sh` pin and the asset swap close together.** Between them the pin and the
+  artifact disagree. The failure is safe by design - `install.sh` refuses on a checksum mismatch
+  rather than installing - but it is still a broken install command for anyone in that window.
+- Merging first is marginally better: the fix in `install.sh` ships sooner, and the mismatch window
+  behaves identically either way.
 
 ### 8.5 Plugin / marketplace sync
 
