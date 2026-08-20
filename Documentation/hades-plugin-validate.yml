@@ -9,7 +9,7 @@
 # retired v1.2 shape that used to get synced there — `Bridge~/launcher/dist/index.js`,
 # `Bridge~/hub/dist/index.js`, `Scanner~/index.js`, `Scanner~/package.json`, and a `.mcp.json`
 # that must contain the string `CLAUDE_PLUGIN_ROOT`. None of that exists after a sync from this
-# repo's `scripts/sync-plugin.sh` (see `.github/workflows/release.yml`): `Plugin-ClaudeCode~`
+# repo's `scripts/sync-plugin.sh` (see `.github/workflows/release.yml`): `ClaudeCodePlugin`
 # ships a bare HTTP `.mcp.json` pointing at the standalone app, with no local process and no
 # `Bridge~`/`Scanner~` at all. The next release sync will turn that check red for content that
 # synced correctly. This replacement mirrors the validation block in this repo's own

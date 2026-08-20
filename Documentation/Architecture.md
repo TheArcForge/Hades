@@ -7,14 +7,14 @@ is gitignored, so none of it survives a fresh clone. This file does. It will dri
 over time; where it drifts from the *code*, the code is right and this file is stale — file an
 issue against this document, not against the behavior.
 
-Everything below was checked against the source tree in `App~/`, `Shell~/`, and `Plugin~/`, not
+Everything below was checked against the source tree in `Core/`, `Mac/`, and `UnityPlugin/`, not
 copied from the specs. Several numbers were measured directly (a live `tools/list` call against a
 running core, the size of an actual Release build on disk) rather than assumed. Where the specs
 and the shipped code disagree, that is called out explicitly rather than smoothed over — this
 project corrects itself in writing (see the "Corrected 2026-08-0x" notes throughout the specs
 themselves), and this document follows that habit.
 
-Current version: `2.0.0` (`Shell~/HadesApp/scripts/build-app.sh`'s `Info.plist`). Treat
+Current version: `2.0.0` (`Mac/HadesApp/scripts/build-app.sh`'s `Info.plist`). Treat
 anything here as "true when written," not "true forever."
 
 ---
@@ -25,9 +25,9 @@ Hades indexes Unity projects into a SQLite knowledge graph and serves it to AI c
 MCP, with optional live control of a running Unity Editor. It is three cooperating processes, not
 one:
 
-- A **.NET core** (`App~/src/Hades.Server`) that owns all state and does all the deciding.
-- A **SwiftUI menu-bar app** (`Shell~/HadesApp`) that spawns, supervises, and displays the core.
-- A **Unity Editor plugin** (`Plugin~/Assets/Hades`) that the app installs into a project and that
+- A **.NET core** (`Core/src/Hades.Server`) that owns all state and does all the deciding.
+- A **SwiftUI menu-bar app** (`Mac/HadesApp`) that spawns, supervises, and displays the core.
+- A **Unity Editor plugin** (`UnityPlugin/Assets/Hades`) that the app installs into a project and that
   executes Editor-API work the core cannot do itself.
 
 This is a rewrite. v1.0–v1.2 shipped as a Unity Package Manager package with a Node.js stdio
@@ -49,7 +49,7 @@ idea that survives is memory (`.arcforge/memory/`), which v2 imports on sight �
                                   ▼
               ┌───────────────────────────────────────┐
               │  Hades core                           │
-              │  App~/src/Hades.Server                │
+              │  Core/src/Hades.Server                │
               │  (.NET 10, headless)                  │
               │                                       │
               │  MCP endpoint (32 tools)              │
@@ -67,7 +67,7 @@ idea that survives is memory (`.arcforge/memory/`), which v2 imports on sight �
 
                       ┌───────────────────────┐
                       │  Hades.app            │
-                      │  Shell~/HadesApp      │
+                      │  Mac/HadesApp      │
                       │  (Swift 6 / SwiftUI)  │
                       └───────────────────────┘
              spawns + supervises the core; reads it back
@@ -75,7 +75,7 @@ idea that survives is memory (`.arcforge/memory/`), which v2 imports on sight �
 
             ┌───────────────────────────────────────────┐
             │  Unity Editor plugin                      │
-            │  Plugin~/Assets/Hades                     │
+            │  UnityPlugin/Assets/Hades                     │
             │  (installed by the app into the project)  │
             └───────────────────────────────────────────┘
                dials out to the core over loopback TCP
@@ -88,14 +88,14 @@ idea that survives is memory (`.arcforge/memory/`), which v2 imports on sight �
                     graph.db · traces.db · memory/
 ```
 
-### 2.1 The core — `App~/src/Hades.Server`
+### 2.1 The core — `Core/src/Hades.Server`
 
-.NET 10, headless, ASP.NET Core minimal-API host (`App~/src/Hades.Server/Program.cs`). It is the
+.NET 10, headless, ASP.NET Core minimal-API host (`Core/src/Hades.Server/Program.cs`). It is the
 brain: every other process is a thin client of it. It owns the MCP endpoint, the knowledge graph,
 both indexers, memory, traces, the editor registry, the lease registry, and the control API.
 
 The MCP endpoint binds `127.0.0.1:7823` — fixed, not Kestrel's bare default. This is deliberate,
-not an oversight: `McpBinding.ResolveBindUrl` (`App~/src/Hades.Server/Mcp/McpBinding.cs`) picks
+not an oversight: `McpBinding.ResolveBindUrl` (`Core/src/Hades.Server/Mcp/McpBinding.cs`) picks
 7823 explicitly, because Kestrel's own default (`:5000`) is already bound by macOS ControlCenter's
 AirPlay Receiver out of the box on current Macs — a spawned core with no override would die on
 every launch. If 7823 is itself occupied, the core does not silently rebind: `McpBinding.Run`
@@ -107,7 +107,7 @@ nothing. `ASPNETCORE_URLS`, when a caller has already set one (tests, CI, `launc
 the E2E scripts), still overrides — the fixed default only applies absent an explicit choice.
 
 The **control API** is a second, separate loopback listener (`ControlListener`,
-`App~/src/Hades.Server/Control/ControlListener.cs`) for the Swift shell and a future `hades` CLI —
+`Core/src/Hades.Server/Control/ControlListener.cs`) for the Swift shell and a future `hades` CLI —
 not a second route on the MCP endpoint. Different consumer, different trust boundary, different
 lifecycle: it binds an OS-assigned ephemeral port (not 7823) and writes its own bearer token to a
 discovery file the shell reads. It is also started later than the MCP endpoint, on purpose —
@@ -117,22 +117,22 @@ every hosted service (including the real Kestrel bind) succeeding, closing a rac
 had actually failed.
 
 Storage root: `~/Library/Application Support/Hades/` (`AppPaths.DefaultRoot`,
-`App~/src/Hades.Core/Storage/AppPaths.cs`, via .NET's `Environment.SpecialFolder.ApplicationData` —
+`Core/src/Hades.Core/Storage/AppPaths.cs`, via .NET's `Environment.SpecialFolder.ApplicationData` —
 confirmed empirically on this machine rather than assumed, since that API resolves differently on
 other platforms). `HADES_HOME` overrides it end to end (`Program.cs`, `Hades.Cli/Program.cs`,
-`Shell~/HadesSupervision`'s `CoreSupervisor`), which is what lets tests and multiple local instances
+`Mac/HadesSupervision`'s `CoreSupervisor`), which is what lets tests and multiple local instances
 avoid sharing one project store. Per-project state lives under `projects/<productGUID>/` — see §7
 for what's authored versus derived there.
 
-### 2.2 The shell — `Shell~/HadesApp`
+### 2.2 The shell — `Mac/HadesApp`
 
 Swift 6 / SwiftUI, macOS 14+. It does not decide anything; it spawns, supervises, and renders the
 core (see the governing rule in §3). It is a menu-bar app (`LSUIElement`, no Dock icon) that also
 opens a full window for projects, memory, traces, and settings.
 
 Spawning goes through an intermediate process, not directly: `CoreSupervisor.spawnOnce`
-(`Shell~/HadesSupervision/Sources/HadesSupervision/CoreSupervisor.swift`) launches
-**`HadesCoreReaper`** (`Shell~/HadesSupervision/Sources/HadesCoreReaper/main.swift`) as its own
+(`Mac/HadesSupervision/Sources/HadesSupervision/CoreSupervisor.swift`) launches
+**`HadesCoreReaper`** (`Mac/HadesSupervision/Sources/HadesCoreReaper/main.swift`) as its own
 child, and the reaper launches the real core — `Hades.Server` in a Release build, or `dotnet run`
 in Debug (see §8) — as *its* own child. The reaper exists for one reason: if the app is
 force-quit (`SIGKILL`), nothing inside the app gets to run any cleanup code at all, so a spawned
@@ -167,19 +167,19 @@ Quitting `Hades.app` is safe from Claude Code's side: the MCP Streamable HTTP tr
 auto-reconnects with backoff on its own, so relaunching the app resumes a session Claude Code never
 needed to restart.
 
-### 2.3 The plugin — `Plugin~/Assets/Hades`
+### 2.3 The plugin — `UnityPlugin/Assets/Hades`
 
 A drop-in, Editor-only folder with zero third-party assemblies — confirmed structurally, not just
-by policy: there is no `HttpListener`, `TcpListener`, or bound socket anywhere under `Plugin~/`.
-`HadesClient` (`Plugin~/Assets/Hades/Transport/HadesClient.cs`) only ever constructs a `TcpClient`
+by policy: there is no `HttpListener`, `TcpListener`, or bound socket anywhere under `UnityPlugin/`.
+`HadesClient` (`UnityPlugin/Assets/Hades/Transport/HadesClient.cs`) only ever constructs a `TcpClient`
 and calls `.Connect(...)` — outbound only. **"Unity dials out; it never listens" is a structural
 property of this codebase, not a promise.**
 
 The app writes this folder; nothing else does. `PluginInstaller`
-(`App~/src/Hades.Core/Editors/PluginInstaller.cs`) installs or updates `Assets/Hades/` in a target
+(`Core/src/Hades.Core/Editors/PluginInstaller.cs`) installs or updates `Assets/Hades/` in a target
 project from resources **embedded inside the core's own compiled binary** — not read off disk at
 install time. `Hades.Core.csproj` embeds every file under
-`Plugin~/Assets/Hades/{Contract,Runtime,Tools}` plus the `.asmdef` as `<EmbeddedResource>` entries,
+`UnityPlugin/Assets/Hades/{Contract,Runtime,Tools}` plus the `.asmdef` as `<EmbeddedResource>` entries,
 and `PluginInstaller.Files` is the
 explicit, fixed manifest mapping each embedded resource back to its `Assets/Hades/...` destination
 path. This is why a notarized `.app` with no visible source checkout can still install a working
@@ -189,18 +189,18 @@ so they survive `dotnet publish`, a move to a different directory, or being bund
 GUIDs — Unity regenerates both on its next refresh.
 
 The `Contract/` sources specifically come from `Hades.Contract/Wire/` (the sources the *app itself*
-compiled against), not from the separately-maintained `Plugin~/Assets/Hades/Contract/` copy used
+compiled against), not from the separately-maintained `UnityPlugin/Assets/Hades/Contract/` copy used
 for day-to-day Unity-side development — confirmed byte-identical between the two locations today,
 but the embedding is what makes "the app always ships the contract it actually compiled" true by
 construction rather than by developer discipline. This is the "shared contract sources, compiled
 into each side, never shipped as a DLL" decision: `EditorConnectionInfo.cs`, `Hello.cs`,
 `JsonRpc.cs`, and `MiniJson.cs` are the same four files on both sides of the wire.
 
-On connect, the handshake (`EditorListener`, `App~/src/Hades.Core/Editors/EditorListener.cs`) is:
+On connect, the handshake (`EditorListener`, `Core/src/Hades.Core/Editors/EditorListener.cs`) is:
 one raw line carrying a token (read from a 0600 file the app writes fresh on every listener start;
 mismatch closes the connection before anything is parsed as JSON), one line of JSON `Hello`
 (project GUID, path, Unity version, plugin version, process id), then JSON-RPC one message per
-line for the rest of the session. `HadesBoot` (`Plugin~/Assets/Hades/Runtime/HadesBoot.cs`) is the
+line for the rest of the session. `HadesBoot` (`UnityPlugin/Assets/Hades/Runtime/HadesBoot.cs`) is the
 `[InitializeOnLoad]` entry point that builds and sends that `Hello` on every load — including every
 post-domain-reload reload, since `[InitializeOnLoad]` reruns its static constructor each time and a
 reload wipes all prior managed state anyway. It explicitly refuses to run inside Unity's asset-
@@ -224,8 +224,8 @@ supported list, and `2025-11-25` negotiates cleanly. (Not a lockfile gap: the SD
 handshake itself, replaced by `server/discover`, so `initialize`-based negotiation cannot reach it
 on any SDK version; `2025-11-25` is the newest revision still reachable that way.) Both listeners
 (MCP and control) bind loopback only and validate `Origin` per the MCP specification's requirement
-for local servers (`App~/src/Hades.Server/Mcp/OriginValidation.cs`,
-`App~/src/Hades.Server/Control/ControlAuth.cs`).
+for local servers (`Core/src/Hades.Server/Mcp/OriginValidation.cs`,
+`Core/src/Hades.Server/Control/ControlAuth.cs`).
 
 MCP *roots* — the mechanism a client uses to tell a server which folder it's working in — are real,
 fully wired in the SDK, and now part of per-call routing. Two of Hades's own artifacts used to
@@ -291,11 +291,11 @@ These are enforced, not aspirational — each has a concrete mechanism cited bel
 
 | Rule | What it means | Where |
 |---|---|---|
-| **Swift renders, .NET decides** | No business logic in the shell. Every piece of state it shows and every action it offers is served by the core's control API. | The shell's `Views/`, `MainWindow/`, and view models read `HadesControl` DTOs (`Shell~/HadesControl/Sources/HadesControl/DTOs.swift`) and nothing else. |
-| **…except OS facts only the shell can observe** | A headless .NET process cannot ask macOS about launch-at-login state or thermal pressure — a real API gap, not a design choice for convenience. | `Shell~/HadesApp/Sources/HadesApp/ShellFacts/` — `LaunchAtLoginService.swift` (`SMAppService.mainApp`), `ResourceGuardReader.swift` / `ThermalStateDisplay.swift` (`ProcessInfo.thermalState`, `isLowPowerModeEnabled`). Named, narrow, and commented as the one exception to the rule above. |
+| **Swift renders, .NET decides** | No business logic in the shell. Every piece of state it shows and every action it offers is served by the core's control API. | The shell's `Views/`, `MainWindow/`, and view models read `HadesControl` DTOs (`Mac/HadesControl/Sources/HadesControl/DTOs.swift`) and nothing else. |
+| **…except OS facts only the shell can observe** | A headless .NET process cannot ask macOS about launch-at-login state or thermal pressure — a real API gap, not a design choice for convenience. | `Mac/HadesApp/Sources/HadesApp/ShellFacts/` — `LaunchAtLoginService.swift` (`SMAppService.mainApp`), `ResourceGuardReader.swift` / `ThermalStateDisplay.swift` (`ProcessInfo.thermalState`, `isLowPowerModeEnabled`). Named, narrow, and commented as the one exception to the rule above. |
 | **Fixed port, never silently rebound** | 7823 or a loud, actionable failure — never a silent fallback to a different port. | `McpBinding.cs` (§2.1). This is a direct lesson from v1.2: dynamic ports are why `hub.json`, PID-liveness probes, and breadcrumb files had to exist at all. |
-| **Authored vs. derived data** | `memory/*.md` is authored and irreplaceable; `graph.db`, `traces.db`, `memory-index.db` are derived and freely rebuildable. | `App~/src/Hades.Core/Storage/AppPaths.cs` — each accessor's own doc comment states which class it is. `GraphSchema.Apply` (`App~/src/Hades.Core/Graph/GraphSchema.cs`) treats a schema bump as drop-and-recreate, exactly because nothing authored lives there. |
-| **Degrade, don't refuse, on Editor operations** | A version-mismatched plugin still connects and serves what it can, with a warning — never a hard refusal. | `PluginVersionSkew` / `PluginVersionComparison.Classify` (`App~/src/Hades.Core/Editors/PluginVersionSkew.cs`): `Same` / `Minor` / `Major` / `Unknown` buckets, all degrading; only the warning's wording changes. |
+| **Authored vs. derived data** | `memory/*.md` is authored and irreplaceable; `graph.db`, `traces.db`, `memory-index.db` are derived and freely rebuildable. | `Core/src/Hades.Core/Storage/AppPaths.cs` — each accessor's own doc comment states which class it is. `GraphSchema.Apply` (`Core/src/Hades.Core/Graph/GraphSchema.cs`) treats a schema bump as drop-and-recreate, exactly because nothing authored lives there. |
+| **Degrade, don't refuse, on Editor operations** | A version-mismatched plugin still connects and serves what it can, with a warning — never a hard refusal. | `PluginVersionSkew` / `PluginVersionComparison.Classify` (`Core/src/Hades.Core/Editors/PluginVersionSkew.cs`): `Same` / `Minor` / `Major` / `Unknown` buckets, all degrading; only the warning's wording changes. |
 | **Unity dials out; it never listens** | Deletes an entire failure class: a domain reload becomes a dropped socket and a reconnect, not an unreachable listener. | Structural — see §2.3. |
 | **No hanging state** | Every lock is a lease with a TTL; every lease has independent release paths; every spawned process has a death path. | The reload gate (§6) and `HadesCoreReaper` (§2.2) are the two clearest instances. |
 
@@ -304,7 +304,7 @@ These are enforced, not aspirational — each has a concrete mechanism cited bel
 ### 4.1 Storage and schema
 
 One SQLite database per project, `graph.db`, schema version 4
-(`App~/src/Hades.Core/Graph/GraphSchema.cs`): a `nodes` table, an `edges` table, and a `file_state`
+(`Core/src/Hades.Core/Graph/GraphSchema.cs`): a `nodes` table, an `edges` table, and a `file_state`
 table (per-file mtime + size, for incremental reindexing). Because the graph is entirely derived
 data, migration policy is "if the version differs, drop and recreate" — there is no incremental
 schema migration machinery, on purpose; nothing authored is ever at risk from it.
@@ -313,15 +313,15 @@ schema migration machinery, on purpose; nothing authored is ever at risk from it
 
 Three indexers, doing genuinely different jobs, feeding the same tables:
 
-**`ScriptIndexer`** (`App~/src/Hades.Core/Indexing/ScriptIndexer.cs`) walks `.cs` files through
-`RoslynScriptScanner` (`App~/src/Hades.Core/Scanning/RoslynScriptScanner.cs`). This is
+**`ScriptIndexer`** (`Core/src/Hades.Core/Indexing/ScriptIndexer.cs`) walks `.cs` files through
+`RoslynScriptScanner` (`Core/src/Hades.Core/Scanning/RoslynScriptScanner.cs`). This is
 **syntax-only** Roslyn — `CSharpSyntaxTree.ParseText`, no `CSharpCompilation`, no semantic model, no
 assembly references — which keeps it fast and independent of whether the project currently compiles.
 It walks the parsed tree for `BaseTypeDeclarationSyntax` nodes (class/struct/interface/enum/record)
 and writes **nodes only**; there is no call anywhere in this file to write an edge.
 
 Preprocessor state matters here, and is reconstructed rather than ignored, by `ProjectDefines`
-(`App~/src/Hades.Core/Projects/ProjectDefines.cs`), in four layers, cheapest and most certain first:
+(`Core/src/Hades.Core/Projects/ProjectDefines.cs`), in four layers, cheapest and most certain first:
 
 1. `UNITY_EDITOR` — unconditional; Hades only ever runs as an editor-time indexer.
 2. The Unity version ladder (`UNITY_6000`, `UNITY_6000_3`, …, `UNITY_6000_0_OR_NEWER` through the
@@ -340,13 +340,13 @@ so the whole resolved define set is unioned **project-wide** rather than applied
 symbol true for one assembly is treated as true everywhere. `ProjectSummary.AppliedDefines` reports
 the resolved set explicitly so this approximation is visible to a caller instead of silent.
 
-**`AssetIndexer`** (`App~/src/Hades.Core/Indexing/AssetIndexer.cs`) walks Unity's YAML formats
-through a hand-rolled reader (`App~/src/Hades.Core/Unity/UnityYamlReader.cs` and neighbors) and
+**`AssetIndexer`** (`Core/src/Hades.Core/Indexing/AssetIndexer.cs`) walks Unity's YAML formats
+through a hand-rolled reader (`Core/src/Hades.Core/Unity/UnityYamlReader.cs` and neighbors) and
 **does** write edges — `{fileID, guid, type}` reference triples, keyed on `to_guid`, covering
 scene/prefab hierarchy, `m_Script` → MonoBehaviour resolution, and prefab-variant/nested-prefab
 modification chains.
 
-**`BinaryAssetIndexer`** (`App~/src/Hades.Core/Indexing/BinaryAssetIndexer.cs`) walks binary/
+**`BinaryAssetIndexer`** (`Core/src/Hades.Core/Indexing/BinaryAssetIndexer.cs`) walks binary/
 imported assets — textures, models, audio, fonts, shaders, and animation clips, the exact
 extension-to-kind mapping owned by `Hades.Core.Unity.ImportedAssetKind` — and writes **one
 meta-only node per file**: path, name (the filename stem), kind (from the extension), and guid
@@ -360,7 +360,7 @@ and `IndexProject` each call straight into this indexer's own IndexFiles/IndexPr
 result, so both of `ProjectService`'s entry points — a full reindex and an incremental sync — pick
 up binary assets with no call-site changes of their own.
 
-`ProjectSweeper.IndexableExtensions` (`App~/src/Hades.Core/Observation/ProjectSweeper.cs`) now
+`ProjectSweeper.IndexableExtensions` (`Core/src/Hades.Core/Observation/ProjectSweeper.cs`) now
 lists 24 extensions: the original six YAML/script formats — **`.cs .unity .prefab .asset .mat
 .controller`** — plus the 18 binary ones `ImportedAssetKind` recognises (**`.png .tga .psd .jpg
 .jpeg .exr .fbx .obj .wav .mp3 .ogg .aiff .ttf .otf .shader .shadergraph .compute .anim`**).
@@ -381,14 +381,14 @@ that same habit. Stated plainly:
   their own structure (a texture's dimensions, a clip's curves, a shader's passes) is ever read;
   `inspect_asset` still cannot describe what is inside one of these.
 - **Registry packages resolved into `Library/PackageCache` are never scanned, regardless of
-  extension.** `ProjectWalker` (`App~/src/Hades.Core/Indexing/ProjectWalker.cs`) walks `Assets/`,
+  extension.** `ProjectWalker` (`Core/src/Hades.Core/Indexing/ProjectWalker.cs`) walks `Assets/`,
   the in-project `Packages/` folder, and local `"file:"` packages only — a registry package (the
   overwhelmingly common case, including Unity's own render pipelines) resolves to `Library/
   PackageCache` instead, deliberately excluded as third-party code that would swamp the graph. A
   reference into one — a built-in shader or texture bundled with a render pipeline package is the
   everyday example — stays unresolvable and is reported as `dangling`, not silently dropped, for
   exactly this reason rather than because its asset kind goes unindexed.
-- **No Addressables support.** There is no code anywhere in `App~/src` that reads an Addressables
+- **No Addressables support.** There is no code anywhere in `Core/src` that reads an Addressables
   group or entry.
 - **No C#-to-C# code references.** `ScriptIndexer` writes zero edges (above); `find_references_to`
   walks only the `edges` table `AssetIndexer` populates, so it answers "what Unity *assets*
@@ -405,7 +405,7 @@ that same habit. Stated plainly:
 ## 5. The tool surface
 
 Exactly **32** MCP tools — confirmed two independent ways: a `grep` over every
-`[McpServerTool(Name = "…")]` attribute in `App~/src/Hades.Server/Mcp/*.cs`, and a live
+`[McpServerTool(Name = "…")]` attribute in `Core/src/Hades.Server/Mcp/*.cs`, and a live
 `tools/list` call against the core actually running on this machine (port 7823), which returned 32
 tool names identical to the source-tree list.
 
@@ -435,7 +435,7 @@ group, one atomic-per-item result. `scene_apply` is the clearest example — it 
 one tool with an `op` field whose vocabulary is camelCase and validated before any wire call is
 made: `create`, `addComponent`, `setProperties`, `setReference`, `removeComponent`, `addListener`,
 `removeListener`, `delete`, `reparent`, `rename`, `select` (`SceneApplyTool.ValidOps`,
-`App~/src/Hades.Server/Mcp/SceneApplyTool.cs`). An unrecognized `op` rejects the whole call before
+`Core/src/Hades.Server/Mcp/SceneApplyTool.cs`). An unrecognized `op` rejects the whole call before
 any wire round trip; a recognized op with a missing required field is a per-operation failure the
 Unity-side plugin reports, with the rest of the batch still applying. Ordering is preserved within
 one call, so a later operation can act on a GameObject an earlier operation in the *same* call just
@@ -462,7 +462,7 @@ the code, expect this mismatch.
 
 ### 6.1 The reload gate
 
-`ReloadGate` (`Plugin~/Assets/Hades/Runtime/ReloadGate.cs`) is the sole permitted caller of
+`ReloadGate` (`UnityPlugin/Assets/Hades/Runtime/ReloadGate.cs`) is the sole permitted caller of
 `EditorApplication.Lock/UnlockReloadAssemblies` in this codebase — every other call site would be a
 bug. Held/released state is a single nullable lease, not a counter, which makes lock-nesting
 unrepresentable rather than merely discouraged (the previous, pre-rewrite implementation had ten
@@ -471,7 +471,7 @@ call sites, two locks against eight unlocks, and could drive Unity's native coun
 Four release paths, each independently sufficient:
 
 1. **Explicit release.** `script_editing_session` with `action='end'`
-   (`App~/src/Hades.Server/Mcp/EditorProjectTools.cs`) sends `project.end_script_editing`, which
+   (`Core/src/Hades.Server/Mcp/EditorProjectTools.cs`) sends `project.end_script_editing`, which
    calls `ReloadGate.Release`. Idempotent — calling `'end'` with nothing held, or after a lease has
    already expired, calls `Unlock()` zero times and still reports success.
 2. **Socket disconnect.** `ReloadGate.ReleaseOnDisconnect` is wired as `HadesClient`'s
@@ -491,7 +491,7 @@ Four release paths, each independently sufficient:
    mid-hold.
 
 App-side belief about what's held is tracked separately, in `LeaseRegistry`
-(`App~/src/Hades.Core/Editors/LeaseRegistry.cs`) — and only ever *believed*, never assumed: every
+(`Core/src/Hades.Core/Editors/LeaseRegistry.cs`) — and only ever *believed*, never assumed: every
 entry originates from the plugin's own answer to `lease.acquire`/`lease.renew`, never from what the
 app itself requested (the plugin might not honor a requested TTL verbatim). Entries self-expire on
 read — `Get`/`All` evict anything past its own recorded expiry with no network round trip — and are
@@ -501,13 +501,13 @@ reconciled against the plugin's live answer on every reconnect (`ReconcileAsync`
 
 The recompile path a released lease triggers, in order: release the lease, if held →
 `AssetDatabase.Refresh()` → `TriggerRecompile()` (`CompilationPipeline.RequestScriptCompilation()`) —
-`Plugin~/Assets/Hades/Tools/ProjectCommands.cs`. Refresh runs before recompile specifically so a
+`UnityPlugin/Assets/Hades/Tools/ProjectCommands.cs`. Refresh runs before recompile specifically so a
 brand-new `.cs` file with no `.meta` yet actually gets imported first.
 
 ### 6.2 Three states, never collapsed to one
 
 Before sending any command to an attached Editor, `ProjectService.GetCharonStatus` decides which of
-three states applies (`App~/src/Hades.Core/Editors/EditorProxy.cs`): **`no_editor`** (nothing
+three states applies (`Core/src/Hades.Core/Editors/EditorProxy.cs`): **`no_editor`** (nothing
 attached), **`editor_busy`** (attached, but the main thread hasn't answered a probe — reported with
 what Unity's doing and for how long), or the call simply executes. This distinction exists because
 the plugin's I/O loop runs on a background thread independent of Unity's main thread — a busy main
@@ -533,11 +533,11 @@ unverified, re-query before retrying."*
 markdown with YAML frontmatter, specifically so it stays hand-editable and a future repo-sync is a
 directory copy rather than an export pipeline (`AppPaths.MemoryDir`'s own doc comment). Search is
 served by a **derived**, rebuildable FTS5 index with BM25 ranking
-(`App~/src/Hades.Core/Memory/MemoryIndex.cs`) — replacing what was previously naive substring
+(`Core/src/Hades.Core/Memory/MemoryIndex.cs`) — replacing what was previously naive substring
 matching with no scoring.
 
 There is exactly one write path for a model, and it does not write to the authored files directly:
-`propose_memory_update` (`App~/src/Hades.Server/Mcp/MemoryTools.cs`) writes only to the proposal
+`propose_memory_update` (`Core/src/Hades.Server/Mcp/MemoryTools.cs`) writes only to the proposal
 queue. `get_memory_summary`, `recall_memory`, and `validate_memory` are the other three memory
 tools, and all three are reads. A human accepts a proposal into Tier-1 memory; nothing automated
 ever does.
@@ -558,7 +558,7 @@ Every MCP tool call is traced, success or failure — `Program.cs`'s `CallToolFi
 own dispatch to every registered tool, not just a fallback path. Retention runs on its own timer,
 off the request path entirely: an hourly sweep (`new Timer(_ => …, null, TimeSpan.FromMinutes(10),
 TimeSpan.FromHours(1))`) prunes anything older than 7 days (`TraceRetentionDays = 7`,
-`App~/src/Hades.Server/Program.cs`). A failed sweep — a locked file, a full disk — is logged and
+`Core/src/Hades.Server/Program.cs`). A failed sweep — a locked file, a full disk — is logged and
 swallowed, never brings the server down. The justification is in the code itself: unbounded growth
 isn't hypothetical, one real project's `traces.db` reached 1,631 spans under modest use.
 
@@ -566,7 +566,7 @@ isn't hypothetical, one real project's `traces.db` reached 1,631 spans under mod
 
 Three classes, each restricted to exactly what it's allowed to touch:
 
-- **`V12Detector`** (`App~/src/Hades.Core/Migration/V12Detector.cs`) — read-only, always. It never
+- **`V12Detector`** (`Core/src/Hades.Core/Migration/V12Detector.cs`) — read-only, always. It never
   opens `.arcforge/traces.db` or `.arcforge/graph.db` — existence alone (`File.Exists`) is the whole
   signal, because either can be a live SQLite file under a v1.2 install still running alongside
   migration. It classifies a project's `CLAUDE.md` into `Absent` / `Marked` (a well-formed
@@ -574,7 +574,7 @@ Three classes, each restricted to exactly what it's allowed to touch:
   try to tell "Hades wrote this file wholesale, pre-markers" apart from "the user wrote this file
   themselves," because nothing reliable distinguishes them; both get the identical "ask, never
   delete" treatment downstream.
-- **`V12Importer`** (`App~/src/Hades.Core/Migration/V12Importer.cs`) — additive only, never touches
+- **`V12Importer`** (`Core/src/Hades.Core/Migration/V12Importer.cs`) — additive only, never touches
   the source project. Memory import delegates to `MemoryStore.ImportFromArcforge` rather than
   reimplementing it, specifically to avoid the two-diverging-implementations bug class this
   project has already shipped once (a hand-duplicated `graph.db` schema and divergent C#/TypeScript
@@ -584,7 +584,7 @@ Three classes, each restricted to exactly what it's allowed to touch:
   same name is reported **skipped**, never silently overwritten. Traces import copies `traces.db`
   byte-for-byte, including `-wal`/`-shm` sidecars, and never opens it as a database. `graph.db` is
   never a migration target at all — schema and ownership differ; it's rebuilt instead.
-- **`V12Cleanup`** (`App~/src/Hades.Core/Migration/V12Cleanup.cs`) — the only one of the three
+- **`V12Cleanup`** (`Core/src/Hades.Core/Migration/V12Cleanup.cs`) — the only one of the three
   allowed to delete or rewrite anything, and only ever in the source project or the user's home
   directory, never in app storage. **Five independent methods** — `CleanClaudeMd`, `CleanManifest`,
   `CleanMcpConfig`, `CleanClaudeDesktopConfig`, `CleanHadesHub` — each takes its own `proceed`
@@ -608,7 +608,7 @@ the static MCP server declaration), and **`Assets/Hades/`** (written by the app 
 optional — §2.3). What is *not* an install unit anymore: the UPM package, `Packages/manifest.json`,
 `.mcp.json`, a `CLAUDE.md` block, `claude_desktop_config.json`, and Node.js.
 
-A Release build (`Shell~/HadesApp/scripts/build-app.sh Release`) publishes `Hades.Server`
+A Release build (`Mac/HadesApp/scripts/build-app.sh Release`) publishes `Hades.Server`
 self-contained for `osx-arm64` (`dotnet publish -r osx-arm64 --self-contained true`) into
 `Contents/Resources/HadesServer/`. Measured directly against an actual local Release build on this machine:
 376 files, 134 MB for `HadesServer/` alone, 137 MB for the whole `.app` bundle. It is deliberately
@@ -623,8 +623,8 @@ Signing today is **ad-hoc only**: `codesign --force --deep --sign -`, then verif
 Mach-O files inside `HadesServer/` (the apphost plus 14 native runtime dylibs, out of 376 total
 files) each need their own valid signature for the outer bundle's signature to hold at all.
 **Debug** builds carry no embedded core at all: `AppDelegate`
-(`Shell~/HadesApp/Sources/HadesApp/AppDelegate.swift`) falls back to `dotnet run --project
-<repo>/App~/src/Hades.Server --no-launch-profile` against a live source checkout, and logs exactly
+(`Mac/HadesApp/Sources/HadesApp/AppDelegate.swift`) falls back to `dotnet run --project
+<repo>/Core/src/Hades.Server --no-launch-profile` against a live source checkout, and logs exactly
 that fact and why — this path needs the .NET SDK and this exact source tree present, so it's never
 what a distributed `Hades.app` does.
 

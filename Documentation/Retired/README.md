@@ -26,7 +26,7 @@ anything in this folder as current.
   v1.2 Unity-package install path.
 - **`interpreting-results.md`** — documents a `confidence` block (`level`, `result_status`,
   `factors`, plus signals like `nested_by` and `scan_health`) on tool responses. Verified against
-  the current app: `App~/src` has no such fields anywhere in the MCP tool surface, and a live
+  the current app: `Core/src` has no such fields anywhere in the MCP tool surface, and a live
   call to a v2 tool returns no `confidence` block. v1.2-only; does not describe the current app.
 
 ## Superseded by

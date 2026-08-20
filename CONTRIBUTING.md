@@ -15,10 +15,10 @@ git clone https://github.com/TheArcForge/Hades.git
 cd Hades
 
 # Build the .NET core
-dotnet build App~
+dotnet build Core
 
 # Build the macOS app (builds the Swift shell and embeds the published .NET server)
-Shell~/HadesApp/scripts/build-app.sh
+Mac/HadesApp/scripts/build-app.sh
 ```
 
 The Unity plugin is optional (only needed for live-Editor features) and isn't added via Package Manager anymore — install it from the running app via **Projects → Install Plugin**.
@@ -27,20 +27,23 @@ The Unity plugin is optional (only needed for live-Editor features) and isn't ad
 
 | Path | Contents |
 |---|---|
-| `Shell~/` | SwiftUI macOS app (`HadesApp`) + Swift packages `HadesControl`, `HadesSupervision` |
-| `App~/` | .NET 10 core — `Hades.Server`, `Hades.Core`, `Hades.Contract`, `Hades.Cli` (tests under `App~/tests`) |
-| `Plugin~/` | Unity Editor plugin (C#, v1.4.0) — optional, dials out to the app over a local socket |
-| `skills/` | 22 Claude Code skills (Markdown) |
-| `commands/` | 6 slash commands (Markdown) |
-| `Plugin-ClaudeCode~/` | The Claude Code plugin — manifest, `.mcp.json`, and copies of the skills and commands above |
-| `Legacy~/` | Retired v1.2 delivery files, kept for reference only (see its README) |
+| `Mac/` | SwiftUI macOS app (`HadesApp`) + Swift packages `HadesControl`, `HadesSupervision` |
+| `Core/` | .NET 10 core — `Hades.Server`, `Hades.Core`, `Hades.Contract`, `Hades.Cli` (tests under `Core/tests`) |
+| `UnityPlugin/` | Unity Editor plugin (C#, v1.4.0) — optional, dials out to the app over a local socket |
+| `ClaudeCodePlugin/` | The Claude Code plugin — manifest, `.mcp.json`, 22 skills, 6 commands. Source of truth for the `hades-plugin` repo, which is generated from it |
 | `Documentation/` | Architecture docs, install guides, release pipeline. `Retired/` holds retired v1.2 docs (see its README) |
 
-Directories with a tilde suffix (`Shell~/`, `App~/`, `Plugin~/`, `Plugin-ClaudeCode~/`, `Legacy~/`) are invisible to Unity's asset pipeline by design.
+These directories used to carry a `~` suffix, which hides them from Unity's asset pipeline. That
+mattered while the repo was itself a Unity package; it no longer is — Hades is a macOS app, and the
+Unity plugin reaches a project by being installed into it, not by the project consuming this repo.
+The suffixes were dropped accordingly, and with them the last `.meta` files: **this repository now
+contains none at all.** The Unity plugin ships source only — `PluginInstaller` writes no `.meta`
+(it says so in its own doc comment), and Unity generates them in the user's project on import,
+which is where they belong.
 
 **The repository root is deliberately not an installable Claude Code plugin.** Its manifest and
 `.mcp.json` used to live here and pointed at the retired in-Editor server, so pointing Claude Code
-at this checkout silently loaded the wrong generation of Hades. Install `Plugin-ClaudeCode~/`
+at this checkout silently loaded the wrong generation of Hades. Install `ClaudeCodePlugin/`
 instead; a test enforces that the root stays un-installable.
 
 ## Running Tests
@@ -49,9 +52,9 @@ All tests must pass before submitting a PR.
 
 ```bash
 # .NET core (~1863 tests; isolate with HADES_HOME=$(mktemp -d))
-dotnet test App~
+dotnet test Core
 
-# Swift — run in each of Shell~/HadesControl, Shell~/HadesSupervision, Shell~/HadesApp (70 / 14 / 211 tests)
+# Swift — run in each of Mac/HadesControl, Mac/HadesSupervision, Mac/HadesApp (70 / 14 / 211 tests)
 swift test
 
 # Unity plugin EditMode, batchmode (384 tests)
@@ -78,11 +81,10 @@ ship in, and in the merge commit. You don't need to add this yourself.
 ## What NOT to Do
 
 - **Never edit the plugin repo** (`TheArcForge/hades-plugin`) directly — it is auto-synced from this repo and any changes will be overwritten
-- **Never hand-write `.meta` files or invent GUIDs** — let Unity generate them. Unity-generated
-  `.meta` files **are** committed, and should be included in your PR alongside the `.cs` files they
-  belong to: the app copies `Plugin~/Assets/Hades` into a user's Unity project, and stable GUIDs
-  are what keep their scene and prefab references intact across installs and upgrades.
-  (`.gitignore` excludes only `*.pidb.meta`, `*.pdb.meta`, `*.mdb.meta`, and `docs.meta`.)
+- **Never hand-write `.meta` files or invent GUIDs, and do not commit `.meta` files at all.** This
+  repository ships none. The app writes `UnityPlugin/Assets/Hades` into a user's project as source,
+  and Unity generates the `.meta` files there on import — the only place they should exist.
+  `PluginInstaller` states the same rule in its own doc comment.
 - **Never commit `node_modules/`**
 
 ## Contributing Skills

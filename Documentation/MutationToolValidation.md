@@ -3,7 +3,7 @@
 ## Why this document exists
 
 An external tester's single recurring structural criticism, rediscovered every review round, was
-that validation and reporting in `Plugin~/Assets/Hades/Tools/` are implemented **per tool** rather
+that validation and reporting in `UnityPlugin/Assets/Hades/Tools/` are implemented **per tool** rather
 than in a shared layer: `prefab_apply` refused a bad target type while `material_apply` overwrote a
 tracked prefab; `animation_apply` refused a duplicate create while the others silently replaced;
 `asset_manage` refused a self-move while `scene_apply` accepted a self-parent. Each instance was a
@@ -23,14 +23,14 @@ fix the citation, not just the prose. If a cell says "guarded", the guard it nam
 at that citation; if you delete or bypass it, this document is now lying and must be updated in the
 same change. Treat a stale citation here the same as a stale code comment: a bug, not a nit.
 
-**Scope.** This covers every mutating command registered in `Plugin~/Assets/Hades/Tools/`
-(`CommandTable.cs`'s own dispatch table - see Table 0). It does not cover `Shell~/*`, `App~/src/
+**Scope.** This covers every mutating command registered in `UnityPlugin/Assets/Hades/Tools/`
+(`CommandTable.cs`'s own dispatch table - see Table 0). It does not cover `Mac/*`, `Core/src/
 Hades.Core/*` (the server-side knowledge graph - `find_references_to`/`trace_dependencies` and
 similar read-side inconsistencies belong to a separate audit of that layer), or `scripts/
 regression/*`.
 
 **As of:** 2026-08-17. Baseline before this pass: a shared `AssetPathGuard` already existed
-(`Plugin~/Assets/Hades/Tools/AssetPathGuard.cs`) and several individual findings from an earlier
+(`UnityPlugin/Assets/Hades/Tools/AssetPathGuard.cs`) and several individual findings from an earlier
 internal test round (tagged `F16`/`F17`/`F20`/`F21` in code comments) were already fixed - this
 document does not re-litigate those; it records where the SAME class of check is still missing on a
 sibling tool that was never revisited.
@@ -268,7 +268,7 @@ the two rows above.
 **Only ONE of the "four vocabularies" was reachable through a live, purpose-built MCP tool - and it
 is now converged.** `scene.setup`, `component.set_properties`, `asset.set_import_settings`, and
 `asset.set_clip_import_settings` are invoked by none of the 32 tools `Program.cs:123-138` registers -
-confirmed by `grep -rl '"scene.setup"' App~/src/` (and the same grep for the other three), each
+confirmed by `grep -rl '"scene.setup"' Core/src/` (and the same grep for the other three), each
 returning zero files, versus one file each for a reachable command like `"scene.apply"`. Both
 `asset_set_import_settings`/`asset_set_clip_import_settings` and `scene_setup`/
 `component_set_properties` were deliberately removed as standalone MCP tools - the first pair
@@ -300,7 +300,7 @@ to `scene.setup`/`component.set_properties` - see Table 0's reuse map, `SceneApp
 But they are not unreachable at the wire-protocol level: both remain registered
 `CommandTable.Handlers` entries (`CommandTable.cs:46,52`), and `hades_regression`
 (`EditorProjectTools.cs:457`, one of the 32 registered tools) accepts a `replay` `calls` array where
-any entry with no `'format'` field is forwarded as a Plugin~ wire method name with NO allowlist
+any entry with no `'format'` field is forwarded as a UnityPlugin wire method name with NO allowlist
 restricting it to a currently-documented command (`EditorProjectTools.cs:520-536` routes exactly this
 shape to `ReplayLegacyBatchAsync`, `EditorProjectTools.cs:580-598`, which sends whatever `Method`
 string the caller supplied straight into one `hades.regression_replay` wire call -
@@ -366,7 +366,7 @@ didn't happen) > **Consistency/messaging** (safe but differs from a sibling for 
 | 1 | Correctness | `layer.create` checked its target SLOT for a name collision but never the NAME itself across other slots - two layers could silently share a name (sibling `tag.create`, same file, already refuses this for tags) | `layer.create` (+ `projectSettings.apply`'s `createLayer` op, which calls it directly) | **FIXED** - `TagLayerCommands.cs:103-113`; test `CreateLayer_DuplicateNameAtDifferentIndex_ThrowsActionableError` in `TagLayerCommandsTests.cs` |
 | 2 | Destructive (defense-in-depth) | `asset.import`/`asset.set_import_settings`/`asset.set_clip_import_settings`'s `path` was never routed through `AssetPathGuard` - `asset.import` specifically reached a raw, unconfined `File.Exists`/`Directory.Exists` filesystem check before anything refused a traversal path | `asset.import`, `asset.set_import_settings`, `asset.set_clip_import_settings` (+ `asset.manage`'s `import` op and `projectSettings.apply`'s `setImportSettings`/`setClipImportSettings` ops, all three of which call the same now-fixed core) | **FIXED** - `AssetCommands.cs:108,166,239`; tests `ImportAsset_TraversalPath_RefusedBeforeAnyFilesystemCheck_StillReleasesLease`, `SetImportSettings_TraversalPath_RefusedBeforeAnyWork_StillReleasesLease`, `SetClipImportSettings_TraversalPath_RefusedBeforeAnyWork_StillReleasesLease` in `AssetCommandsTests.cs` |
 | 3 | Destructive | `asset.move` never checked whether `destPath` was the source itself or a path nested inside it - the exact same hierarchy-cycle hazard the `F21` scene-reparent fix closed for GameObjects, never extended to the AssetDatabase folder hierarchy | `asset.move` (+ `asset.manage`'s `move` op, which calls it directly) | **FIXED** - `AssetCommands.cs:56-68`; tests `MoveAsset_SourceEqualsDestination_RefusedBeforeAnyWrite_NoLeaseTouched`, `MoveAsset_FolderIntoOwnDescendant_RefusedBeforeAnyWrite_OriginalFolderIntact`, `MoveAsset_SiblingWithSimilarPrefix_NotTreatedAsDescendant_MovesNormally` (false-positive guard) in `AssetCommandsTests.cs` |
-| 4 | Consistency/messaging | Partial-batch-success vocabulary diverges across mutating tools (see Table 6) - originally scoped as "four genuinely different vocabularies" reachable side by side; measured this pass as ONE reachable divergence (now fixed) plus one orphaned, not-purpose-built-but-not-dead residue | `asset.set_import_settings`/`asset.set_clip_import_settings` - now converged, both as `project_settings_apply`'s nested `results[].result` payload (the only live, documented path to either) and as their own orphaned standalone wire commands, since both forms share one core - vs. `scene.setup`/`component.set_properties`, still divergent from each other and from the batch families, wrapped by none of the 32 registered MCP tools but still dispatchable via `hades_regression`'s generic legacy-wire replay (no allowlist) | **NARROWED AND PARTIALLY CLOSED.** The one instance reachable through the documented 32-tool surface - `setImportSettings`/`setClipImportSettings`'s nested result inside `project_settings_apply` - is FIXED: both now answer `{path, applied, failed}` with `failed` as `{property\|clip, error}` objects - `AssetCommands.cs:234-299`; `ProjectSettingsApplyTool.cs:53-62`; `ProjectSettingsApplyTests.cs:102-105`. `scene.setup`/`component.set_properties`'s own vocabulary is UNCHANGED, left open, and recommended NOT to touch this pass: no purpose-built tool exposes it (zero `App~/src/` grep hits for either wire method name, against `Program.cs:123-138`'s 32 registered tools), so converging it is optional busywork on internal-only surface, not a caller-facing fix - but it is not dead code (`EditorProjectTools.cs:520-598`'s legacy replay path can still dispatch either by wire method name, no allowlist, no recording required). Converging it would in fact BREAK that path: replay compares responses to recorded `expected` by exact member count (`ProjectCommands.cs:432`), so any key rename or addition fails replay of every recording holding the old shape. Whether to delete the four orphaned `CommandTable` entries, close the `hades_regression` side channel, or keep both as documented legacy-internal surface is a product-timing call this audit defers to the product owner, not an engineering decision to make unilaterally days before a release. |
+| 4 | Consistency/messaging | Partial-batch-success vocabulary diverges across mutating tools (see Table 6) - originally scoped as "four genuinely different vocabularies" reachable side by side; measured this pass as ONE reachable divergence (now fixed) plus one orphaned, not-purpose-built-but-not-dead residue | `asset.set_import_settings`/`asset.set_clip_import_settings` - now converged, both as `project_settings_apply`'s nested `results[].result` payload (the only live, documented path to either) and as their own orphaned standalone wire commands, since both forms share one core - vs. `scene.setup`/`component.set_properties`, still divergent from each other and from the batch families, wrapped by none of the 32 registered MCP tools but still dispatchable via `hades_regression`'s generic legacy-wire replay (no allowlist) | **NARROWED AND PARTIALLY CLOSED.** The one instance reachable through the documented 32-tool surface - `setImportSettings`/`setClipImportSettings`'s nested result inside `project_settings_apply` - is FIXED: both now answer `{path, applied, failed}` with `failed` as `{property\|clip, error}` objects - `AssetCommands.cs:234-299`; `ProjectSettingsApplyTool.cs:53-62`; `ProjectSettingsApplyTests.cs:102-105`. `scene.setup`/`component.set_properties`'s own vocabulary is UNCHANGED, left open, and recommended NOT to touch this pass: no purpose-built tool exposes it (zero `Core/src/` grep hits for either wire method name, against `Program.cs:123-138`'s 32 registered tools), so converging it is optional busywork on internal-only surface, not a caller-facing fix - but it is not dead code (`EditorProjectTools.cs:520-598`'s legacy replay path can still dispatch either by wire method name, no allowlist, no recording required). Converging it would in fact BREAK that path: replay compares responses to recorded `expected` by exact member count (`ProjectCommands.cs:432`), so any key rename or addition fails replay of every recording holding the old shape. Whether to delete the four orphaned `CommandTable` entries, close the `hades_regression` side channel, or keep both as documented legacy-internal surface is a product-timing call this audit defers to the product owner, not an engineering decision to make unilaterally days before a release. |
 | 5 | Consistency/messaging | `scene.apply`'s `reparent` op and `prefab.apply`'s `createVariant` op both correctly inherit their F21 cycle guards via delegation, but neither was pinned by a regression test at the batch-tool layer - a future "inline this for performance" refactor could silently reintroduce the exact regression class the external tester originally reported | `scene.apply` (reparent op), `prefab.apply` (createVariant op) | **FIXED (coverage only, no behaviour change)** - `ReparentOp_UnderItself_RecordedAsOperationFailure_NotSilentlyAccepted` in `SceneApplyCommandsTests.cs`; `CreateVariantOp_BaseEqualsVariant_RecordedAsOperationFailure_BasePrefabUntouched` in `PrefabApplyCommandsTests.cs` |
 
 No gap was found in Table 2 (target type), Table 5 (lease/undo claim-vs-code), or Table 7
@@ -392,8 +392,8 @@ were audited with the same rigor and came back clean.
   genuinely different vocabularies... side by side" - overstated reachability. Measured directly,
   only `setImportSettings`/`setClipImportSettings`'s shape disagreement inside `project_settings_apply`
   was reachable through the documented 32-tool MCP surface, and it is now fixed with a coordinated
-  `Plugin~` + `App~` change (`AssetCommands.cs`, `ProjectSettingsApplyTool.cs`,
-  `ProjectSettingsApplyTests.cs`) - the "needs a coordinated App~-side change outside this audit's
+  `UnityPlugin` + `Core` change (`AssetCommands.cs`, `ProjectSettingsApplyTool.cs`,
+  `ProjectSettingsApplyTests.cs`) - the "needs a coordinated Core-side change outside this audit's
   scope" blocker below no longer applies to that piece. `scene.setup`/`component.set_properties`'s
   own vocabulary is intentionally left UNconverged: no purpose-built MCP tool exposes either, so
   standardising them now is optional busywork on internal-only surface, not a caller-facing fix -

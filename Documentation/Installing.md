@@ -19,11 +19,11 @@ If you were handed a `.dmg`, skip to the next section. Otherwise, from a checkou
 the .NET SDK):
 
 ```
-Shell~/HadesApp/scripts/build-dmg.sh Release --allow-unsigned
+Mac/HadesApp/scripts/build-dmg.sh Release --allow-unsigned
 ```
 
 That builds the app, embeds the self-contained core, ad-hoc signs it, and stages a DMG at
-`Shell~/HadesApp/DerivedData/dmg/Hades-<version>-unsigned.dmg`.
+`Mac/HadesApp/DerivedData/dmg/Hades-<version>-unsigned.dmg`.
 
 ## Installing Hades.app
 
@@ -92,7 +92,7 @@ this is not a bug.
 
 ## Install the Claude Code plugin
 
-The plugin is `Plugin-ClaudeCode~/` in the repo — skills, commands, and a plugin-root
+The plugin is `ClaudeCodePlugin/` in the repo — skills, commands, and a plugin-root
 `.mcp.json` pointing straight at `http://127.0.0.1:7823/mcp` (the app itself; no separate Node
 hub process this time, unlike v1.2).
 
@@ -109,14 +109,14 @@ Hades" below.
 Working from a clone instead — contributors, or anyone wanting the exact tree they checked out:
 
 ```
-claude --plugin-dir <path-to-your-Hades-checkout>/Plugin-ClaudeCode~
+claude --plugin-dir <path-to-your-Hades-checkout>/ClaudeCodePlugin
 ```
 
 This is **per-session** — pass it every time you start `claude`. It won't appear in
 `/plugin list` (that's expected for a `--plugin-dir` install, not a bug). Worth an alias:
 
 ```
-alias claude-hades='claude --plugin-dir <path-to-your-Hades-checkout>/Plugin-ClaudeCode~'
+alias claude-hades='claude --plugin-dir <path-to-your-Hades-checkout>/ClaudeCodePlugin'
 ```
 
 ---
@@ -135,7 +135,7 @@ Check both:
 1. **Tool count.** In Claude Code, run `/mcp`. Find `hades` in the list — it shows a tool
    count next to each server.
    - **New app: 32 tools.** (counted directly from `[McpServerTool]` attributes in
-     `App~/src/Hades.Server/Mcp/*.cs` — also stated in `ReleasePipeline.md` §6.9 and the
+     `Core/src/Hades.Server/Mcp/*.cs` — also stated in `ReleasePipeline.md` §6.9 and the
      ~90→32 consolidation noted in `docs/backlog/mutation-tool-defects.md`)
    - **Old v1.2 package: ~90 tools.** (counted directly from `[MCPTool]` attributes in
      `Editor/MCP/Tools/*.cs`; the old plugin manifest's own description also says "90 MCP
@@ -183,7 +183,7 @@ of the migration flow below.
 
 The Unity side is no longer a package dependency — it's a plugin the app writes directly into
 your project at `Assets/Hades/`, from resources embedded in the app binary
-(`App~/src/Hades.Core/Editors/PluginInstaller.cs`). It's optional: graph queries, memory, and
+(`Core/src/Hades.Core/Editors/PluginInstaller.cs`). It's optional: graph queries, memory, and
 traces all work without it. You only need it for live-Editor features — scene/prefab editing,
 play mode, console, test running.
 
@@ -222,7 +222,7 @@ project has no Hades at all in between.
 It's the decisions and conventions your project has accumulated — nothing regenerates it if
 it's lost. Migration copies it into the app's own storage; the source is **never modified or
 deleted**, and an existing copy on the app side is never silently overwritten — a collision is
-reported, not clobbered (`App~/src/Hades.Core/Migration/V12Importer.cs`). After migrating,
+reported, not clobbered (`Core/src/Hades.Core/Migration/V12Importer.cs`). After migrating,
 confirm your project's `.arcforge/memory/` is still sitting there untouched.
 
 Everything else is optional and confirmed individually — never one "migrate everything"

@@ -28,12 +28,12 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          # Pinned to App~/global.json's own SDK (10.0.301, rollForward: latestFeature) rather
+          # Pinned to Core/global.json's own SDK (10.0.301, rollForward: latestFeature) rather
           # than a dotnet-version input here - Directory.Build.props sets
           # TreatWarningsAsErrors=true, so a rolled-forward SDK shipping new analyzer warnings
           # would turn this job red for reasons unrelated to whatever it was actually meant to
           # check.
-          global-json-file: App~/global.json
+          global-json-file: Core/global.json
 
       - name: Create HADES_HOME
         run: mkdir -p "$HADES_HOME"
@@ -49,5 +49,5 @@ jobs:
       # files' own comments) but it means the number below overstates what this job actually
       # exercised - do not quote it as full coverage of this suite.
       - name: dotnet test
-        working-directory: App~
+        working-directory: Core
         run: dotnet test

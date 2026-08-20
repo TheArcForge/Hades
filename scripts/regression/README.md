@@ -17,9 +17,9 @@ default `http://127.0.0.1:7823/mcp`, override with `--url` or the `HADES_URL` en
 variable to point at a rebuilt core on another port — so it does **not** depend on the Claude
 Code plugin and is unaffected by F1.
 
-## Running Plugin~'s own EditMode tests
+## Running UnityPlugin's own EditMode tests
 
-`hades_suite.py` above never touches `Plugin~/Tests/Editor` — those tests only compile inside a
+`hades_suite.py` above never touches `UnityPlugin/Tests/Editor` — those tests only compile inside a
 Unity Editor, so `dotnet test` cannot run them either. `run-plugin-editmode.sh` closes that gap:
 
 ```
@@ -27,7 +27,7 @@ scripts/regression/run-plugin-editmode.sh
 ```
 
 It builds a throwaway, minimal Unity project in a `mktemp` scratch directory (never inside this
-checkout), copies `Plugin~/Assets/Hades` and `Plugin~/Tests/Editor` into it, and runs
+checkout), copies `UnityPlugin/Assets/Hades` and `UnityPlugin/Tests/Editor` into it, and runs
 `-batchmode -runTests -testPlatform EditMode` against it — no Hades.app, no MCP endpoint, and no
 live project needed. Unity is located automatically (newest version under the Hub's install
 location); override with `$UNITY_BIN`. Exits `2` if no Unity install can be found, non-zero if
@@ -89,7 +89,7 @@ cases assert something structural — "this must error", "this must not be empty
 change" — which survives a project change that a recorded value would not.
 
 Note the recorder now keys calls by **MCP tool name** (`project_settings_apply`) rather than the
-Plugin~ wire name (`projectSettings.apply`) it used at 0.1.0. The existing fixture still replays
+UnityPlugin wire name (`projectSettings.apply`) it used at 0.1.0. The existing fixture still replays
 6/6, so replay accepts both.
 
 ## Cases

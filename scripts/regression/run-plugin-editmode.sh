@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
 #
-# Runs Plugin~'s own EditMode test suite (Plugin~/Tests/Editor/*.cs - PrefabCommandsTests,
+# Runs UnityPlugin's own EditMode test suite (UnityPlugin/Tests/Editor/*.cs - PrefabCommandsTests,
 # SceneManageCommandsTests, ReloadGateCriticalSuite, etc.) in a real, throwaway Unity Editor
-# batchmode process. These tests exercise Plugin~/Assets/Hades' own C# directly through Unity's
+# batchmode process. These tests exercise UnityPlugin/Assets/Hades' own C# directly through Unity's
 # Test Framework/NUnit - no Hades.Server app, no MCP wire protocol, no live project involved -
-# but nothing in `dotnet test` can run them (Plugin~ only compiles inside a Unity Editor), so
-# without this script every pin inside Plugin~/Tests/Editor is a regression test nobody runs.
+# but nothing in `dotnet test` can run them (UnityPlugin only compiles inside a Unity Editor), so
+# without this script every pin inside UnityPlugin/Tests/Editor is a regression test nobody runs.
 #
 # Usage:
 #   scripts/regression/run-plugin-editmode.sh
 #
 # Unity is located automatically (newest version under the Hub's install location); override with
 # $UNITY_BIN if you want a specific one. macOS only, matching the rest of Hades' Unity tooling
-# (see App~/scripts/e2e-editor-attach.sh's own note on this).
+# (see Core/scripts/e2e-editor-attach.sh's own note on this).
 #
 # What it does:
 #   1. Creates a throwaway scratch directory (mktemp) and builds a MINIMAL Unity project skeleton
 #      directly inside it - Assets/, Assets/Tests/ (see below for why this exact name matters),
 #      and a hand-written Packages/manifest.json. No `-createProject` pass; the skeleton is built
 #      by hand so the manifest can stay minimal instead of inheriting Unity's full default set.
-#   2. Copies Plugin~/Assets/Hades (the plugin source under test) into the scratch project's own
-#      Assets/Hades, and Plugin~/Tests/Editor (the tests themselves - SceneCommandsTests,
+#   2. Copies UnityPlugin/Assets/Hades (the plugin source under test) into the scratch project's own
+#      Assets/Hades, and UnityPlugin/Tests/Editor (the tests themselves - SceneCommandsTests,
 #      PrefabApplyCommandsTests, ReloadGateCriticalSuite, ...) into Assets/Tests/Editor, mirroring
 #      their real relative layout so Hades.Tests.Editor.asmdef's own reference to the "Hades"
 #      assembly still resolves. Plain file copies - Unity mints its own .meta files for both on
@@ -37,8 +37,8 @@
 set -u
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PLUGIN_ASSETS="$REPO_ROOT/Plugin~/Assets/Hades"
-PLUGIN_TESTS="$REPO_ROOT/Plugin~/Tests/Editor"
+PLUGIN_ASSETS="$REPO_ROOT/UnityPlugin/Assets/Hades"
+PLUGIN_TESTS="$REPO_ROOT/UnityPlugin/Tests/Editor"
 
 RUN_TIMEOUT_SECS="${HADES_PLUGIN_EDITMODE_TIMEOUT_SECS:-1800}"
 
@@ -111,7 +111,7 @@ mkdir -p "$SCRATCH/Packages"
 # built-in engine modules (Physics, Animation, UI, ...) need NO separate `com.unity.modules.*`
 # manifest entry on this Unity version - they are implicitly available - so "the modules Unity
 # needs" beyond the two packages below turned out to be none. com.unity.ugui is required
-# explicitly (Plugin~ code uses UnityEngine.UI); com.unity.test-framework is required to run
+# explicitly (UnityPlugin code uses UnityEngine.UI); com.unity.test-framework is required to run
 # EditMode tests at all. Both versions below are the exact ones bundled with this Unity release's
 # own default template, so they resolve from Unity's local package cache with no network access.
 #
@@ -122,7 +122,7 @@ mkdir -p "$SCRATCH/Packages"
 # detection, never meant to compile again) AND, far worse, makes Unity start writing .meta files
 # throughout the REAL checkout, not just this scratch copy - silently violating the one hard rule
 # every Hades tool in this repo shares (never generate .meta files outside a throwaway scratch
-# project). The explicit file-copy step below (Plugin~/Assets/Hades -> Assets/Hades) is the only
+# project). The explicit file-copy step below (UnityPlugin/Assets/Hades -> Assets/Hades) is the only
 # sanctioned way to get the plugin source into this scratch project.
 cat > "$SCRATCH/Packages/manifest.json" << 'EOF'
 {
@@ -134,23 +134,23 @@ cat > "$SCRATCH/Packages/manifest.json" << 'EOF'
 EOF
 
 if [ ! -d "$PLUGIN_ASSETS" ]; then
-    fail "Missing $PLUGIN_ASSETS - is Plugin~ present alongside App~ in this checkout?"
+    fail "Missing $PLUGIN_ASSETS - is UnityPlugin present alongside Core in this checkout?"
 fi
 if [ ! -d "$PLUGIN_TESTS" ]; then
-    fail "Missing $PLUGIN_TESTS - is Plugin~/Tests/Editor present in this checkout?"
+    fail "Missing $PLUGIN_TESTS - is UnityPlugin/Tests/Editor present in this checkout?"
 fi
 
 mkdir -p "$SCRATCH/Assets/Hades"
 cp -R "$PLUGIN_ASSETS/." "$SCRATCH/Assets/Hades/"
-log "copied Plugin~/Assets/Hades -> $SCRATCH/Assets/Hades"
+log "copied UnityPlugin/Assets/Hades -> $SCRATCH/Assets/Hades"
 
-# Mirrors Plugin~/Tests/Editor's own relative position (a sibling of Assets/Hades in the real
+# Mirrors UnityPlugin/Tests/Editor's own relative position (a sibling of Assets/Hades in the real
 # repo) so Hades.Tests.Editor.asmdef's reference to the "Hades" assembly (Hades.asmdef's own
-# `name`) still resolves unchanged - only the common ancestor (Plugin~/... vs this scratch
+# `name`) still resolves unchanged - only the common ancestor (UnityPlugin/... vs this scratch
 # project's Assets/...) differs, never the relative shape between the two asmdefs.
 mkdir -p "$SCRATCH/Assets/Tests/Editor"
 cp -R "$PLUGIN_TESTS/." "$SCRATCH/Assets/Tests/Editor/"
-log "copied Plugin~/Tests/Editor -> $SCRATCH/Assets/Tests/Editor"
+log "copied UnityPlugin/Tests/Editor -> $SCRATCH/Assets/Tests/Editor"
 
 # ------------------------------------------------------------------------------- run EditMode tests
 

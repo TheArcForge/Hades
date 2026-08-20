@@ -15,10 +15,10 @@ Three GitHub Actions workflows across two repositories.
 **`ci.yml`** — runs on every push and PR to `main`.
 
 One job:
-- **`dotnet-tests`** ("App (.NET) Tests") — runs `dotnet test` against the .NET core in `App~/`.
+- **`dotnet-tests`** ("App (.NET) Tests") — runs `dotnet test` against the .NET core in `Core/`.
   The former Bridge and Scanner jobs went with the v1.2 tree (section 7).
 
-The Swift (`swift test` in `Shell~/HadesControl`, `Shell~/HadesSupervision`, `Shell~/HadesApp`),
+The Swift (`swift test` in `Mac/HadesControl`, `Mac/HadesSupervision`, `Mac/HadesApp`),
 Unity plugin EditMode (`scripts/regression/run-plugin-editmode.sh`), and e2e
 (`scripts/regression/hades_suite.py`) suites all run outside `ci.yml` — see §5 for the current
 verification commands.
@@ -28,7 +28,7 @@ Purpose: catch regressions before merging.
 **`release.yml`** — runs when a version tag (`v*`) is pushed.
 
 Sequential steps:
-1. Runs `scripts/sync-plugin.sh` to assemble `Plugin-ClaudeCode~/` — the current Claude Code
+1. Runs `scripts/sync-plugin.sh` to assemble `ClaudeCodePlugin/` — the current Claude Code
    plugin — into the plugin repo content. No build step: the plugin is a static manifest,
    skills, commands, and an HTTP `.mcp.json`, so there is nothing to compile first.
 2. Validates the output: 22 skills, 6 commands, a valid `plugin.json`, an `.mcp.json` with a
@@ -40,7 +40,7 @@ Sequential steps:
 6. Commits, tags, and pushes to the plugin repo.
 
 Purpose: one tag push on the main repo automatically ships the current Claude Code plugin
-(`Plugin-ClaudeCode~/`) — not the retired v1.2 shape (Bridge dist, Scanner source, a
+(`ClaudeCodePlugin/`) — not the retired v1.2 shape (Bridge dist, Scanner source, a
 stdio-launcher `.mcp.json`) it shipped before `sync-plugin.sh` and this workflow were repointed.
 
 **Secret required:** `PLUGIN_REPO_TOKEN` — a GitHub Personal Access Token with `repo` scope, stored in the main repo's GitHub Settings > Secrets > Actions. This gives the CI runner write access to the plugin repo. The token is never stored in files — GitHub injects it at runtime and masks it in logs.
@@ -60,7 +60,7 @@ Purpose: guard rail against sync bugs or accidental direct edits.
 
 > **Required follow-up, not done here.** The checks above describe the *retired v1.2* shape —
 > Bridge dist, Scanner source, and a `${CLAUDE_PLUGIN_ROOT}`-relative `.mcp.json` (the stdio
-> launcher form). Now that this repo's `release.yml` ships `Plugin-ClaudeCode~/` instead, the
+> launcher form). Now that this repo's `release.yml` ships `ClaudeCodePlugin/` instead, the
 > synced content has no `Bridge~`/`Scanner~` directories at all, and `.mcp.json` is a
 > plugin-root HTTP entry (`http://127.0.0.1:7823/mcp`) with no `${CLAUDE_PLUGIN_ROOT}`
 > substitution anywhere in it. The next real sync will make `validate.yml` fail red, checking
@@ -83,10 +83,10 @@ These are the sites that carry the shipped version. They must stay in lockstep o
 
 | Location | Reports as | Notes |
 |---|---|---|
-| `App~/src/Hades.Server/Mcp/HadesTools.cs` → `ServerVersion` | MCP server version (`hades_status`, `initialize`) | plain constant — bump manually |
-| `Shell~/HadesApp/scripts/build-app.sh` → Info.plist `CFBundleShortVersionString` / `CFBundleVersion` | App bundle version | kept in lockstep with `ServerVersion` above; `build-dmg.sh` derives the DMG's filename from this plist |
+| `Core/src/Hades.Server/Mcp/HadesTools.cs` → `ServerVersion` | MCP server version (`hades_status`, `initialize`) | plain constant — bump manually |
+| `Mac/HadesApp/scripts/build-app.sh` → Info.plist `CFBundleShortVersionString` / `CFBundleVersion` | App bundle version | kept in lockstep with `ServerVersion` above; `build-dmg.sh` derives the DMG's filename from this plist |
 | `install.sh` → `VERSION` / `SHA256` | What the documented install downloads and verifies | `SHA256` must match the DMG attached to the release (section 8.4) |
-| `Plugin~/Assets/Hades/Runtime/HadesBoot.cs` → `PluginVersion` | Unity plugin version (sent in the `Hello` handshake) | independent version line from the app; two test mirrors (`CharonStatusTests.cs`, `Control/ProjectsTests.cs`) kept in sync with it |
+| `UnityPlugin/Assets/Hades/Runtime/HadesBoot.cs` → `PluginVersion` | Unity plugin version (sent in the `Hello` handshake) | independent version line from the app; two test mirrors (`CharonStatusTests.cs`, `Control/ProjectsTests.cs`) kept in sync with it |
 
 ---
 
@@ -97,14 +97,13 @@ Complete all items before creating a release tag.
 ### Code
 
 - [ ] All changes committed and pushed to `main`
-- [ ] CI passes on `main` (both Bridge and Scanner tests)
+- [ ] CI passes on `main` (`dotnet-tests`)
 - [ ] No known regressions from prior phases
 
 ### Versions
 
-- [ ] `package.json` version bumped
-- [ ] `.claude-plugin/plugin.json` version bumped
-- [ ] Both match the intended release tag (e.g., `1.0.0` for tag `v1.0.0`)
+- [ ] Every version site in section 2 bumped and matching the intended tag
+      (`HadesTools.ServerVersion`, `build-app.sh`'s Info.plist, `install.sh`, `HadesBoot.PluginVersion`)
 
 ### Documentation
 
@@ -121,7 +120,7 @@ Complete all items before creating a release tag.
 
 ### Plugin sync
 
-- [ ] `Plugin-ClaudeCode~/` content is current (static skills/commands — no build step)
+- [ ] `ClaudeCodePlugin/` content is current (static skills/commands — no build step)
 - [ ] Sync script runs cleanly: `bash scripts/sync-plugin.sh /path/to/hades-plugin`
 - [ ] Plugin repo validation passes (all checks from plugin-publish-pipeline.md §2)
 
@@ -176,7 +175,7 @@ Complete all items before creating a release tag.
 > self-hosted marketplace (`TheArcForge/hades-plugin`) has not been resynced to the current
 > plugin — it still serves the retired v1.2 plugin (Node stdio launcher, closer to 90 tools
 > than 32). Do not point testers or users at `/plugin marketplace add` today. The working path
-> is `claude --plugin-dir <path>/Plugin-ClaudeCode~` — see
+> is `claude --plugin-dir <path>/ClaudeCodePlugin` — see
 > `Documentation/Installing.md`.
 
 Before marketplace acceptance, the plan is for users to install via the self-hosted marketplace:
@@ -203,12 +202,12 @@ When asked to prepare a release, follow these steps exactly. Report each result 
 
 ```bash
 # .NET (~1863 tests)
-cd App~ && HADES_HOME=$(mktemp -d) dotnet test
+cd Core && HADES_HOME=$(mktemp -d) dotnet test
 
 # Swift (70 / 14 / 211 tests)
-cd Shell~/HadesControl && swift test
-cd Shell~/HadesSupervision && swift test
-cd Shell~/HadesApp && swift test
+cd Mac/HadesControl && swift test
+cd Mac/HadesSupervision && swift test
+cd Mac/HadesApp && swift test
 
 # Unity plugin EditMode (384 tests, batchmode)
 scripts/regression/run-plugin-editmode.sh
@@ -222,10 +221,10 @@ Report: which suites passed, which failed, any warnings or deviations.
 ### Step 2: Check version consistency
 
 ```bash
-PACKAGE_V=$(python3 -c "import json; print(json.load(open('package.json'))['version'])")
-PLUGIN_V=$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
-echo "package.json: $PACKAGE_V"
-echo "plugin.json:  $PLUGIN_V"
+grep -n 'ServerVersion = ' Core/src/Hades.Server/Mcp/HadesTools.cs
+grep -n 'CFBundleShortVersionString' -A1 Mac/HadesApp/scripts/build-app.sh
+grep -n '^VERSION=' install.sh
+grep -n 'PluginVersion = ' UnityPlugin/Assets/Hades/Runtime/HadesBoot.cs
 ```
 
 Report: current versions, whether they match, whether they match the intended release version.
@@ -235,7 +234,6 @@ If versions need bumping, update both files and report the change.
 ### Step 3: Verify plugin sync
 
 ```bash
-npm run build --prefix Bridge~
 bash scripts/sync-plugin.sh /path/to/hades-plugin
 ```
 
@@ -250,9 +248,6 @@ test -f .mcp.json && echo "PASS: .mcp.json" || echo "FAIL: .mcp.json"
 test -f README.md && echo "PASS: README" || echo "FAIL: README"
 test -f LICENSE && echo "PASS: LICENSE" || echo "FAIL: LICENSE"
 test -f CLAUDE.md && echo "PASS: CLAUDE.md" || echo "FAIL: CLAUDE.md"
-test -f Bridge~/launcher/dist/index.js && echo "PASS: launcher dist" || echo "FAIL: launcher dist"
-test -f Bridge~/hub/dist/index.js && echo "PASS: hub dist" || echo "FAIL: hub dist"
-test -f Scanner~/index.js && echo "PASS: Scanner" || echo "FAIL: Scanner"
 
 # Counts
 SKILLS=$(find skills -name "SKILL.md" | wc -l | tr -d ' ')
@@ -306,13 +301,15 @@ Present a summary:
 ## Release readiness report for vX.Y.Z
 
 ### Tests
-- Bridge: PASS/FAIL
-- Scanner: PASS/FAIL
+- .NET: PASS/FAIL
+- Swift: PASS/FAIL
+- Unity plugin (EditMode): PASS/FAIL
 
 ### Versions
-- package.json: X.Y.Z ✓/✗
-- plugin.json: X.Y.Z ✓/✗
-- marketplace.json: X.Y.Z ✓/✗
+- ServerVersion: X.Y.Z ✓/✗
+- Info.plist: X.Y.Z ✓/✗
+- install.sh: X.Y.Z + sha256 ✓/✗
+- PluginVersion: X.Y.Z ✓/✗
 
 ### Plugin validation
 - Required files: N/N ✓
@@ -339,10 +336,10 @@ Do NOT create tags or push without explicit user approval.
 
 ---
 
-## 6. Hades.app distribution (Shell~/HadesApp)
+## 6. Hades.app distribution (Mac/HadesApp)
 
 A separate pipeline from sections 1-5 above: this covers the macOS menu-bar shell app
-(`Shell~/HadesApp`), not the Bridge/Scanner/plugin units. Plan 14 ("Distribution, Phase One")
+(`Mac/HadesApp`), not the Bridge/Scanner/plugin units. Plan 14 ("Distribution, Phase One")
 Tasks 7 and 9.
 
 ### 6.1 Current signing status - measured, not assumed
@@ -434,19 +431,19 @@ certificates, so an unsigned app hits the same flow whether or not it carries an
 
 ### 6.4 Building the DMG
 
-`Shell~/HadesApp/scripts/build-dmg.sh` builds `Hades.app` (via the existing `build-app.sh` - run
-from any directory; `build-dmg.sh` handles the `cd` to `Shell~/HadesApp` that `build-app.sh`'s own
+`Mac/HadesApp/scripts/build-dmg.sh` builds `Hades.app` (via the existing `build-app.sh` - run
+from any directory; `build-dmg.sh` handles the `cd` to `Mac/HadesApp` that `build-app.sh`'s own
 `xcodebuild -scheme` resolution requires internally), stages it with an `Applications` symlink for
-drag-to-install, and produces a DMG under `Shell~/HadesApp/DerivedData/dmg/`.
+drag-to-install, and produces a DMG under `Mac/HadesApp/DerivedData/dmg/`.
 
 It never emits an unsigned DMG silently. Exactly one of two flags is required:
 
 ```
 # Phase 1, today - explicit, loudly labeled unsigned build:
-Shell~/HadesApp/scripts/build-dmg.sh Release --allow-unsigned
+Mac/HadesApp/scripts/build-dmg.sh Release --allow-unsigned
 
 # Phase 2, once a certificate exists - signs, notarizes, staples, and re-verifies:
-Shell~/HadesApp/scripts/build-dmg.sh Release \
+Mac/HadesApp/scripts/build-dmg.sh Release \
   --sign "Developer ID Application: NAME (TEAMID)" \
   --notarize-profile hades-notary
 ```
@@ -638,13 +635,13 @@ and the unsigned build's own README: **a Hades.app built today will not run on a
 paying it on every `build-app.sh Debug` during ordinary Swift-side iteration would tax the dev loop
 for a step Debug does not need. So the publish/embed step is Release-only; a Debug build's
 `Contents/Resources` has no `HadesServer/` at all, and `AppDelegate.makeConfiguration()` falls back
-to the original `dotnet run --project <repo>/App~/src/Hades.Server --no-launch-profile`, exactly as
+to the original `dotnet run --project <repo>/Core/src/Hades.Server --no-launch-profile`, exactly as
 before. That fallback is never silent: an `os.Logger` (subsystem `com.arcforge.hades.shell`,
 category `CoreLaunch`) logs which branch ran, on every launch - confirmed with `log show`:
 
 ```
 [com.arcforge.hades.shell:CoreLaunch] No bundled core at Contents/Resources/HadesServer/Hades.Server
-(looked in <path>) - falling back to `dotnet run --project <repo>/App~/src/Hades.Server
+(looked in <path>) - falling back to `dotnet run --project <repo>/Core/src/Hades.Server
 --no-launch-profile`. This needs the .NET SDK and this exact source checkout on THIS machine;
 expected for a build-app.sh Debug build or an unbundled swift run, never for a distributed
 Hades.app.
@@ -697,8 +694,8 @@ root - so as not to disturb anything already running:
   `<copied bundle>/Contents/Resources/HadesServer/Hades.Server` directly, by absolute path - no
   `dotnet`, no `/usr/bin/env`, no `PATH` search of any kind, exactly what `posix_spawn` requires.
 - The running `Hades.Server` process's own image path (`ps`) was inside the copied bundle - nowhere
-  near `App~/src` - the concrete, observable difference from the OLD `dotnet run --project
-  <checkout>/App~/src/Hades.Server` invocation, which always names the checkout explicitly in its
+  near `Core/src` - the concrete, observable difference from the OLD `dotnet run --project
+  <checkout>/Core/src/Hades.Server` invocation, which always names the checkout explicitly in its
   own argv.
 - The discovery file (`<HADES_HOME>/control.token`) appeared quickly after launch; `/control/ping`
   and `/control/settings` both answered `200 OK` using the real bearer token read back from that
@@ -719,7 +716,7 @@ state deliberately excluded, whose `HadesCoreReaper` argv never names the checko
 strongest test available without that risk, and directly shows the shipped path has no runtime
 dependency on the checkout: the fallback code that WOULD reference it is never even reached.
 
-**Test baselines - unchanged.** `swift test` in all three `Shell~` packages, run after every change
+**Test baselines - unchanged.** `swift test` in all three `Mac` packages, run after every change
 above: HadesControl 70, HadesSupervision 14, HadesApp 211 - all passing, exactly matching the
 pre-existing baseline.
 
@@ -735,8 +732,8 @@ working v1.2 reference for testing migration (spec #4 §5) against a real instal
 chose to end that install rather than hold the release for it.
 
 Every path was checked for live references first. The one that mattered: `ThirdParty/`'s
-`Gilzoide.SqliteNet` was referenced only by the two asmdefs deleted alongside it - `App~` uses the
-`Microsoft.Data.Sqlite` NuGet package, and `Plugin~` does not use SQLite at all.
+`Gilzoide.SqliteNet` was referenced only by the two asmdefs deleted alongside it - `Core` uses the
+`Microsoft.Data.Sqlite` NuGet package, and `UnityPlugin` does not use SQLite at all.
 
 **What broke, and how each was handled in the same change:**
 
@@ -777,31 +774,31 @@ Bump these together to the release version (`X.Y.Z`, e.g. `2.0.0`):
 
 | Site | Field |
 |---|---|
-| `App~/src/Hades.Server/Mcp/HadesTools.cs` | `ServerVersion` constant |
-| `Shell~/HadesApp/scripts/build-app.sh` | Info.plist `CFBundleShortVersionString` |
-| `Shell~/HadesApp/scripts/build-app.sh` | Info.plist `CFBundleVersion` (build number - bump too) |
+| `Core/src/Hades.Server/Mcp/HadesTools.cs` | `ServerVersion` constant |
+| `Mac/HadesApp/scripts/build-app.sh` | Info.plist `CFBundleShortVersionString` |
+| `Mac/HadesApp/scripts/build-app.sh` | Info.plist `CFBundleVersion` (build number - bump too) |
 
 `build-dmg.sh` (8.3 below) reads `CFBundleShortVersionString` back out of the already-built `.app`
 to name the DMG - rebuild the app after bumping `build-app.sh`, before running `build-dmg.sh`, or
 the DMG filename carries the stale version.
 
 The Unity plugin carries its own, independent version line (section 2 above documents this - it is
-not the product version and is not expected to match it). Bump it only if `Plugin~` itself changed
+not the product version and is not expected to match it). Bump it only if `UnityPlugin` itself changed
 this release; if you do, its two test mirrors must move with it or their own pinning tests fail:
 
 | Site | Field |
 |---|---|
-| `Plugin~/Assets/Hades/Runtime/HadesBoot.cs` | `PluginVersion` constant |
-| `App~/tests/Hades.Server.Tests/CharonStatusTests.cs` | `RealAppPluginVersion` mirror constant |
-| `App~/tests/Hades.Server.Tests/Control/ProjectsTests.cs` | `RealAppPluginVersion` mirror constant |
+| `UnityPlugin/Assets/Hades/Runtime/HadesBoot.cs` | `PluginVersion` constant |
+| `Core/tests/Hades.Server.Tests/CharonStatusTests.cs` | `RealAppPluginVersion` mirror constant |
+| `Core/tests/Hades.Server.Tests/Control/ProjectsTests.cs` | `RealAppPluginVersion` mirror constant |
 
 ### 8.2 Full verification gate
 
 ```bash
-cd App~ && HADES_HOME=$(mktemp -d) dotnet test
-cd Shell~/HadesControl && swift test
-cd Shell~/HadesSupervision && swift test
-cd Shell~/HadesApp && swift test
+cd Core && HADES_HOME=$(mktemp -d) dotnet test
+cd Mac/HadesControl && swift test
+cd Mac/HadesSupervision && swift test
+cd Mac/HadesApp && swift test
 scripts/regression/run-plugin-editmode.sh
 python3 scripts/regression/hades_suite.py --url http://127.0.0.1:7823/mcp
 ```
@@ -815,10 +812,10 @@ only and skips those). Expected counts per suite and what each one actually pins
 ### 8.3 Build
 
 ```bash
-Shell~/HadesApp/scripts/build-dmg.sh Release --allow-unsigned
+Mac/HadesApp/scripts/build-dmg.sh Release --allow-unsigned
 ```
 
-→ `Shell~/HadesApp/DerivedData/dmg/Hades-X.Y.Z-unsigned.dmg`. `--allow-unsigned` is deliberate, not
+→ `Mac/HadesApp/DerivedData/dmg/Hades-X.Y.Z-unsigned.dmg`. `--allow-unsigned` is deliberate, not
 a placeholder flag - v1 has no Apple Developer ID certificate, so this is the only build this repo
 can produce today (6.1, 6.4 above).
 
@@ -836,7 +833,7 @@ can produce today (6.1, 6.4 above).
 ### 8.5 Plugin / marketplace sync
 
 1. Pushing tag `vX.Y.Z` runs `.github/workflows/release.yml`, which runs `scripts/sync-plugin.sh`
-   and pushes the current `Plugin-ClaudeCode~/` content to `TheArcForge/hades-plugin` (section 1
+   and pushes the current `ClaudeCodePlugin/` content to `TheArcForge/hades-plugin` (section 1
    above).
 2. **Known blocker - handle this as its own step, before or immediately after the push, not as a
    footnote discovered later:** `TheArcForge/hades-plugin`'s own `.github/workflows/validate.yml`
@@ -856,7 +853,7 @@ can produce today (6.1, 6.4 above).
 1. Once 8.5.3 confirms the marketplace is current, flip install guidance from "local `--plugin-dir`
    only" back to the marketplace path everywhere it currently says otherwise: `scripts/plugin-README.md`,
    `Documentation/Installing.md`, this file's own section 4 "Current install paths",
-   and `Shell~/HadesApp/Sources/HadesApp/Onboarding/Views/OnboardingClaudeCodeStepView.swift`.
+   and `Mac/HadesApp/Sources/HadesApp/Onboarding/Views/OnboardingClaudeCodeStepView.swift`.
 2. Re-verify the marketplace install end to end: `/plugin marketplace add TheArcForge/hades-plugin`
    → `/plugin install hades` → `/mcp` reports `hades` at 32 tools over the HTTP URL, not a `node`
    command.

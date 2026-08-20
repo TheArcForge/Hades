@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [2.0.0] — Standalone macOS App — 2026-08-17
 
-Hades is now a **standalone macOS menu-bar app** rather than an in-Unity-Editor package. A .NET 10 core builds and serves the knowledge graph over MCP; the Unity plugin is optional and dials out to the app only for live-Editor features. The v1.x architecture (in-Editor MCP server, Node.js Bridge/Scanner, browser dashboard, Charon/Asphodel) is **retired** — its code and docs live under `Legacy~/` and `Documentation/Retired/`.
+Hades is now a **standalone macOS menu-bar app** rather than an in-Unity-Editor package. A .NET 10 core builds and serves the knowledge graph over MCP; the Unity plugin is optional and dials out to the app only for live-Editor features. The v1.x architecture (in-Editor MCP server, Node.js Bridge/Scanner, browser dashboard, Charon/Asphodel) is **retired** — its docs live under `Documentation/Retired/`, and its code only in git history.
 
 This entry covers the whole standalone-app rewrite, released as `2.0.0`; the internal beta.1–beta.3 builds were not separately logged.
 
@@ -22,7 +22,7 @@ This entry covers the whole standalone-app rewrite, released as `2.0.0`; the int
 
 ### Changed
 
-- The Unity plugin (`Plugin~`, version **1.4.0**) dials out to the app over a local socket instead of hosting the MCP server in-Editor; a plugin-version skew warning surfaces when the installed plugin lags the app.
+- The Unity plugin (`UnityPlugin`, version **1.4.0**) dials out to the app over a local socket instead of hosting the MCP server in-Editor; a plugin-version skew warning surfaces when the installed plugin lags the app.
 - Memory conventions and proposals surface through the app's Memory window and the `/hades:*` commands rather than a browser dashboard.
 
 ### Fixed

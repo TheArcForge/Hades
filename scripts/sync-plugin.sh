@@ -5,9 +5,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="${1:-$REPO_ROOT/../hades-plugin}"
 TARGET="$(cd "$(dirname "$TARGET")" 2>/dev/null && pwd)/$(basename "$TARGET")"
 
-PLUGIN_SRC="$REPO_ROOT/Plugin-ClaudeCode~"
+PLUGIN_SRC="$REPO_ROOT/ClaudeCodePlugin"
 
-# Validate the plugin source is present. Nothing to build — Plugin-ClaudeCode~ is a static
+# Validate the plugin source is present. Nothing to build — ClaudeCodePlugin is a static
 # manifest, skills, commands, and an HTTP .mcp.json; there's no compile step before syncing it.
 if [[ ! -f "$PLUGIN_SRC/.claude-plugin/plugin.json" ]] || \
    [[ ! -f "$PLUGIN_SRC/.mcp.json" ]]; then
@@ -35,18 +35,18 @@ if [[ -d "$TARGET" ]]; then
 fi
 mkdir -p "$TARGET"
 
-# Plugin manifest, .mcp.json, skills, and commands — all sourced from Plugin-ClaudeCode~/, the
+# Plugin manifest, .mcp.json, skills, and commands — all sourced from ClaudeCodePlugin/, the
 # current Claude Code plugin. It is already a complete, tested, installable plugin in its own
 # right (internal testers point `claude --plugin-dir` straight at it — see
 # Documentation/Installing.md), so syncing it is just copying that same tree into
 # the separate hades-plugin repo checkout for marketplace distribution.
 #
-# This used to assemble from four different places instead: a manifest relocated to Legacy~/
+# This used to assemble from four different places instead: a manifest since removed (see
 # (see its README), Bridge~ dist, Scanner~ source, and scripts/plugin-mcp.json - which packaged
 # the retired v1.2 plugin shape (a stdio launcher spawning a local Node process, matched by a
-# generated .mcp.json with an "mcpServers" wrapper). Plugin-ClaudeCode~/ replaces all four: it
+# generated .mcp.json with an "mcpServers" wrapper). ClaudeCodePlugin/ replaces all four: it
 # has no local process to build or ship, only a static HTTP .mcp.json pointing at the standalone
-# app - so Legacy~/ is no longer read by this script at all.
+# Documentation/Retired/root-plugin-manifest.md) - none of which this script reads any more.
 rsync -a --exclude='*.meta' "$PLUGIN_SRC/" "$TARGET/"
 
 # Restore plugin-repo-only files
@@ -62,7 +62,7 @@ if [[ -n "$PRESERVE_DIR" ]]; then
   rm -rf "$PRESERVE_DIR"
 fi
 
-# Root files (not part of Plugin-ClaudeCode~/ itself)
+# Root files (not part of ClaudeCodePlugin/ itself)
 cp "$REPO_ROOT/LICENSE" "$TARGET/"
 cp "$REPO_ROOT/scripts/plugin-README.md" "$TARGET/README.md"
 cp "$REPO_ROOT/scripts/plugin-CLAUDE.md" "$TARGET/CLAUDE.md"
@@ -72,4 +72,4 @@ echo ""
 echo "Plugin synced:"
 echo "  Skills:   $(ls -d "$TARGET/skills/"*/ 2>/dev/null | wc -l | tr -d ' ')"
 echo "  Commands: $(ls "$TARGET/commands/"*.md 2>/dev/null | wc -l | tr -d ' ')"
-echo "  MCP:      HTTP, no local process (Plugin-ClaudeCode~/.mcp.json)"
+echo "  MCP:      HTTP, no local process (ClaudeCodePlugin/.mcp.json)"

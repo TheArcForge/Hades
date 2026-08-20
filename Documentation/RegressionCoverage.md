@@ -13,12 +13,12 @@ not fixed; the decision is the artifact (location given). No issue below is unma
 
 ```
 # .NET unit + integration (Contract, Cli, Core, Server suites; ~1863 total)
-cd App~ && HADES_HOME=$(mktemp -d) dotnet test
+cd Core && HADES_HOME=$(mktemp -d) dotnet test
 
 # Swift shell packages (HadesControl 70, HadesSupervision 14, HadesApp 211)
-cd Shell~/HadesControl && swift test
-cd Shell~/HadesSupervision && swift test
-cd Shell~/HadesApp && swift test
+cd Mac/HadesControl && swift test
+cd Mac/HadesSupervision && swift test
+cd Mac/HadesApp && swift test
 
 # Unity plugin EditMode suite (384 tests) in a throwaway batchmode project
 scripts/regression/run-plugin-editmode.sh

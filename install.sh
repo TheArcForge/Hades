@@ -28,7 +28,7 @@
 set -euo pipefail
 
 VERSION="2.0.0"
-SHA256="9d6fa06318bc99e6c2eb6458e3c7958fc50d2abb927d46654683b75f71753c27"
+SHA256="001623dae48ce8a48c8703c656a5841036078055b67a13b88009c296680dd296"
 
 REPO="TheArcForge/Hades"
 DMG_NAME="Hades-${VERSION}-unsigned.dmg"
@@ -135,14 +135,17 @@ $(printf '\033[1;32m✓\033[0m') Hades ${VERSION} installed to ${TARGET}
 Next:
   1. Open Hades from /Applications or Spotlight. It lives in the menu bar.
   2. Add your Unity project when it asks.
-  3. Connect Claude Code:  claude --plugin-dir <your-Hades-checkout>/Plugin-ClaudeCode~
+  3. Connect Claude Code. In a claude session:
+       /plugin marketplace add TheArcForge/hades-plugin
+       /plugin install hades
      Then run /mcp and confirm 'hades' reports 32 tools.
 
 To uninstall:
-  rm -rf ${TARGET}
-  rm -rf ~/Library/"Application Support"/Hades          # app data (graph, traces, settings)
-  rm -f  ~/Library/Preferences/com.arcforge.hades.shell.plist
+  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/uninstall.sh | bash
 
-Your Unity projects' own .arcforge/ directories are never touched by any of the above -
-that is your authored memory, and it lives in your repositories, not here.
+  It removes the app, its data, the macOS sidecars, and the launch-at-login item - which a
+  plain "drag to Trash" leaves behind, pointing at an app that no longer exists. Pass
+  --dry-run first to see exactly what it would remove. Your Unity projects' own .arcforge/
+  directories are never touched: that is your authored memory, and it lives in your
+  repositories, not here.
 EOF
