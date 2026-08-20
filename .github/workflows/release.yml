@@ -88,6 +88,22 @@ jobs:
             --exclude='.claude-plugin/marketplace.json' \
             ./plugin-output/ ./plugin-clone/
 
+      - name: Verify the plugin manifest matches the tag
+        run: |
+          # marketplace.json (below) lives in the PLUGIN repo and is derived, so it is rewritten.
+          # plugin.json lives HERE and is a source-of-truth version site (ReleasePipeline section 2),
+          # so a mismatch means someone tagged without bumping it - fail loudly instead of papering
+          # over it. This gate exists because plugin.json shipped at 0.1.0 through the whole 2.0.0
+          # cycle: it was absent from the lockstep table, so nothing ever compared it to anything.
+          VERSION="${TAG#v}"
+          MANIFEST_V=$(python3 -c "import json; print(json.load(open('ClaudeCodePlugin/.claude-plugin/plugin.json'))['version'])")
+          if [ "$MANIFEST_V" != "$VERSION" ]; then
+            echo "FAIL: ClaudeCodePlugin/.claude-plugin/plugin.json is $MANIFEST_V but the tag is $VERSION."
+            echo "Bump it (and every other site in ReleasePipeline.md section 2) and re-tag."
+            exit 1
+          fi
+          echo "plugin.json matches the tag: $VERSION"
+
       - name: Update marketplace version
         run: |
           VERSION="${TAG#v}"

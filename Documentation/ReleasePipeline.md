@@ -86,6 +86,7 @@ These are the sites that carry the shipped version. They must stay in lockstep o
 | `Core/src/Hades.Server/Mcp/HadesTools.cs` → `ServerVersion` | MCP server version (`hades_status`, `initialize`) | plain constant — bump manually |
 | `Mac/HadesApp/scripts/build-app.sh` → Info.plist `CFBundleShortVersionString` / `CFBundleVersion` | App bundle version | kept in lockstep with `ServerVersion` above; `build-dmg.sh` derives the DMG's filename from this plist |
 | `install.sh` → `VERSION` / `SHA256` | What the documented install downloads and verifies | `SHA256` must match the DMG attached to the release (section 8.4) |
+| `ClaudeCodePlugin/.claude-plugin/plugin.json` → `version` | The version `/plugin` shows a user | Was missing from this table until 2.0.0, which is exactly why it sat at `0.1.0` while everything else moved. `release.yml` now REFUSES to publish on a mismatch rather than rewriting it. |
 | `UnityPlugin/Assets/Hades/Runtime/HadesBoot.cs` → `PluginVersion` | Unity plugin version (sent in the `Hello` handshake) | independent version line from the app; two test mirrors (`CharonStatusTests.cs`, `Control/ProjectsTests.cs`) kept in sync with it |
 
 ---

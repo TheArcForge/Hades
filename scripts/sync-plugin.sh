@@ -47,7 +47,10 @@ mkdir -p "$TARGET"
 # generated .mcp.json with an "mcpServers" wrapper). ClaudeCodePlugin/ replaces all four: it
 # has no local process to build or ship, only a static HTTP .mcp.json pointing at the standalone
 # Documentation/Retired/root-plugin-manifest.md) - none of which this script reads any more.
-rsync -a --exclude='*.meta' "$PLUGIN_SRC/" "$TARGET/"
+# .DS_Store is gitignored here but sync-plugin.sh copies from the WORKING TREE, not from git - a
+# local run would otherwise push Finder's droppings into the plugin repo. CI checks out clean, so
+# this only ever matters for a human running the sync by hand, which is exactly when it is missed.
+rsync -a --exclude='*.meta' --exclude='.DS_Store' "$PLUGIN_SRC/" "$TARGET/"
 
 # Restore plugin-repo-only files
 if [[ -n "$PRESERVE_DIR" ]]; then
