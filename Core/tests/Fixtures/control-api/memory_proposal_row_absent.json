@@ -1,0 +1,1 @@
+{"fileName":"20260601-observation.md","targetFile":"project_hades_overview.md","rationale":"Captures a durable fact worth remembering.","status":"pending","content":"Observed: the control API omits null fields rather than writing them as null."}

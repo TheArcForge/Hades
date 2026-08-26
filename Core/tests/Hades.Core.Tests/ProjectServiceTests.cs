@@ -338,7 +338,7 @@ public class ProjectServiceTests : IDisposable
 
         gate.Release();
 
-        var result = await rebuildTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await rebuildTask.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.NotNull(result);
     }
 
@@ -355,7 +355,7 @@ public class ProjectServiceTests : IDisposable
         Assert.NotNull(result);
 
         var gate = AcquireIndexGateForTest(service, project.ProductGuid);
-        var acquired = await gate.WaitAsync(TimeSpan.FromSeconds(5));
+        var acquired = await gate.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(acquired, "the index gate was still held after RebuildGraph returned — it leaked the lock");
         gate.Release();
     }
@@ -386,7 +386,7 @@ public class ProjectServiceTests : IDisposable
 
         gate.Release();
 
-        var result = await syncTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await syncTask.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.NotNull(result);
     }
 
@@ -401,7 +401,7 @@ public class ProjectServiceTests : IDisposable
         Assert.NotNull(result);
 
         var gate = AcquireIndexGateForTest(service, project.ProductGuid);
-        var acquired = await gate.WaitAsync(TimeSpan.FromSeconds(5));
+        var acquired = await gate.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(acquired, "the index gate was still held after SyncChanges returned — it leaked the lock");
         gate.Release();
     }

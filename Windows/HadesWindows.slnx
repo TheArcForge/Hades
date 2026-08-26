@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="../Core/src/Hades.Control.Client/Hades.Control.Client.csproj" />
+  <Project Path="FakeCore/FakeCore.csproj" />
+  <Project Path="Hades.Supervision.Tests/Hades.Supervision.Tests.csproj" />
+  <Project Path="Hades.Supervision/Hades.Supervision.csproj" />
+</Solution>

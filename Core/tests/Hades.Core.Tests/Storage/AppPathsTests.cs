@@ -79,6 +79,24 @@ public class AppPathsTests : IDisposable
         Assert.Throws<ArgumentException>(() => paths.ProjectDir(productGuid!));
     }
 
+    [Fact, Trait(PlatformTraits.Key, PlatformTraits.Windows)]
+    public void DefaultRootIsMachineLocalOnWindows()
+    {
+        var expected = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Hades");
+
+        Assert.Equal(expected, new AppPaths().Root);
+    }
+
+    [Fact, Trait(PlatformTraits.Key, PlatformTraits.Unix)]
+    public void DefaultRootIsApplicationSupportOnMac()
+    {
+        var expected = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Hades");
+
+        Assert.Equal(expected, new AppPaths().Root);
+    }
+
     [Fact]
     public void EnsureProjectDir_CreatesTheDirectory()
     {

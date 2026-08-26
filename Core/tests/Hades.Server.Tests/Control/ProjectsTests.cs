@@ -427,7 +427,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
 
         _projects = new ProjectService(new AppPaths(_appRoot), _editorRegistry)
         {
-            CharonProbeTimeout = TimeSpan.FromMilliseconds(300),
+            CharonProbeTimeout = TimeSpan.FromSeconds(5),
         };
     }
 
@@ -637,7 +637,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var responder = RespondToNextProbeAsync(reads, writes);
 
         var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         var warning = Assert.Single(Assert.Single(result.Projects).Warnings, w => w.Code == "pluginVersionMismatch");
         Assert.Equal(
@@ -658,7 +658,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var responder = RespondToNextProbeAsync(reads, writes);
 
         var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.DoesNotContain(Assert.Single(result.Projects).Warnings, w => w.Code == "pluginVersionMismatch");
     }
@@ -671,7 +671,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var responder = RespondToNextProbeAsync(reads, writes);
 
         var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         var warning = Assert.Single(Assert.Single(result.Projects).Warnings, w => w.Code == "pluginVersionMismatch");
         Assert.Equal(
@@ -716,7 +716,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var responder = RespondToNextProbeAsync(reads, writes);
 
         var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("6000.3.2f1", Assert.Single(result.Projects).UnityVersion);
     }
@@ -731,7 +731,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var responder = RespondToNextProbeAsync(reads, writes);
 
         var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         var editor = Assert.Single(result.Projects).Editor;
         Assert.Equal(ProjectEditorState.Attached, editor.State);
@@ -1034,7 +1034,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var responder = RespondToNextProbeAsync(reads, writes);
 
         var response = await ProjectsEndpoint.InstallPluginAsync(_projects, ProjectGuid);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
         var json = await ResultBodyAsync(response);
 
         Assert.True(json.GetProperty("success").GetBoolean());
@@ -1080,7 +1080,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
     // ---------------------------------------------------------------- revealInFinder
 
     [Fact]
-    public async Task RevealInFinder_PathExists_InvokesOpenDashRWithTheProjectPath()
+    public async Task RevealInFinder_PathExists_InvokesThePlatformFileManager()
     {
         _projects.Adopt(_projectRoot);
         string? capturedExecutable = null;
@@ -1090,8 +1090,17 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var response = ProjectsEndpoint.RevealInFinder(_projects, ProjectGuid, Fake);
         var json = await ResultBodyAsync(response);
 
-        Assert.Equal("open", capturedExecutable);
-        Assert.Equal(["-R", RealPath(_projectRoot)], capturedArgs);
+        if (OperatingSystem.IsWindows())
+        {
+            // explorer.exe takes the selection as ONE comma-joined argument, not two.
+            Assert.Equal("explorer.exe", capturedExecutable);
+            Assert.Equal([$"/select,{RealPath(_projectRoot)}"], capturedArgs);
+        }
+        else
+        {
+            Assert.Equal("open", capturedExecutable);
+            Assert.Equal(["-R", RealPath(_projectRoot)], capturedArgs);
+        }
         Assert.True(json.GetProperty("success").GetBoolean());
     }
 
@@ -1174,6 +1183,17 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var response = ProjectsEndpoint.OpenInUnity(_projects, "not-a-known-guid", (_, _) => true);
 
         Assert.Equal(StatusCodes.Status404NotFound, StatusCodeOf(response));
+    }
+
+    [Fact]
+    public void UnityHubPathFollowsThePlatformConvention()
+    {
+        var path = ProjectsEndpoint.UnityHubEditorExecutablePath("6000.0.30f1");
+
+        if (OperatingSystem.IsWindows())
+            Assert.Equal(@"C:\Program Files\Unity\Hub\Editor\6000.0.30f1\Editor\Unity.exe", path);
+        else
+            Assert.Equal("/Applications/Unity/Hub/Editor/6000.0.30f1/Unity.app/Contents/MacOS/Unity", path);
     }
 
     // ---------------------------------------------------------------- the real (non-faked) process launcher

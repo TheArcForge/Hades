@@ -1,5 +1,5 @@
-using System.Net.Http.Headers;
 using System.Reflection;
+using Hades.Control.Client;
 using Hades.Core;
 using Hades.Core.Editors;
 using Hades.Core.Projects;
@@ -12,11 +12,15 @@ namespace Hades.Cli.Tests;
 /// <see cref="Commands"/> against a real <see cref="ControlListener"/> over real loopback HTTP -
 /// the same "direct construction, real socket, no mocking" technique
 /// ControlAuthTests/ProjectsEndpointHttpTests already use for this exact listener - never a mocked
-/// HttpClient. This is the CLI's whole reason for existing (Plan 11 Task 7): every value asserted
-/// below must appear VERBATIM, because <see cref="Commands"/> is only ever supposed to read a JSON
-/// field and print it - never format, sum, compare, or map one. A test here that had to compute an
-/// expected string from more than one response field would itself be evidence the endpoint under-
-/// specifies its surface (see this project's own README-equivalent: Commands' class doc comment).
+/// HttpClient, and never a mocked <see cref="ControlClient"/> either: this builds a real
+/// <c>ControlClient</c> over the listener's own <see cref="ControlConnection"/> (port and token),
+/// so every request still crosses a real loopback socket exactly as it did when this test built a
+/// bare <see cref="HttpClient"/> directly. This is the CLI's whole reason for existing (Plan 11
+/// Task 7): every value asserted below must appear VERBATIM, because <see cref="Commands"/> is only
+/// ever supposed to read a JSON field and print it - never format, sum, compare, or map one. A test
+/// here that had to compute an expected string from more than one response field would itself be
+/// evidence the endpoint under-specifies its surface (see this project's own README-equivalent:
+/// Commands' class doc comment).
 /// </summary>
 public sealed class CommandsTests : IDisposable
 {
@@ -62,15 +66,14 @@ public sealed class CommandsTests : IDisposable
         return (string)method.Invoke(null, [path])!;
     }
 
-    (ControlListener Listener, HttpClient Client) StartListener()
+    (ControlListener Listener, ControlClient Client) StartListener()
     {
         var listener = new ControlListener(ConnectionFilePath, projects: _projects, leases: _leases);
         listener.Start();
         _toDispose.Add(listener);
 
-        var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{listener.Port}") };
-        _toDispose.Add(client);
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", listener.Token);
+        var connection = new ControlConnection { Port = listener.Port, Token = listener.Token };
+        var client = new ControlClient(connection);
 
         return (listener, client);
     }

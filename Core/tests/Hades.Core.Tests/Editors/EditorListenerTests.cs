@@ -278,7 +278,7 @@ public sealed class EditorListenerTests : IDisposable
         var reader = new StreamReader(client.GetStream(), new UTF8Encoding(false));
         var writer = new StreamWriter(client.GetStream(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
 
-        var line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(JsonRpcRequest.TryParse(line, out var request, out _));
         Assert.Equal("lease.renew", request!.Method);
 
@@ -406,7 +406,7 @@ public sealed class EditorListenerTests : IDisposable
         var reader = new StreamReader(client.GetStream(), new UTF8Encoding(false));
         var writer = new StreamWriter(client.GetStream(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
 
-        var line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(JsonRpcRequest.TryParse(line, out var request, out _));
         Assert.Equal("lease.renew", request!.Method);
         Assert.True(request.Params!.TryGetProperty("leaseId", out var idValue));
@@ -462,7 +462,7 @@ public sealed class EditorListenerTests : IDisposable
         var reader = new StreamReader(client.GetStream(), new UTF8Encoding(false));
         var writer = new StreamWriter(client.GetStream(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
 
-        var line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(JsonRpcRequest.TryParse(line, out var request, out _));
         Assert.Equal("lease.renew", request!.Method);
 

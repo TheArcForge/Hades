@@ -1,0 +1,23 @@
+bin/
+obj/
+*.user
+
+# Un-ignore .NET project files, exactly as Core/.gitignore does and for the same reason: the
+# repo-root .gitignore excludes *.csproj and *.sln because Unity regenerates those for the Unity
+# project, but this tree's project files are real, hand-authored source.
+#
+# *.slnx is the newer solution format .NET 10's `dotnet new sln` produces by default, which the
+# root ignore does not cover at all - listed here so it is obvious this tree's solution is tracked
+# on purpose rather than by omission.
+!*.csproj
+!*.sln
+!*.slnx
+
+TestResults/
+*.nupkg
+.vscode/
+
+# Installer output. The MSIs are release artifacts built by CI (or by Installer/build-msi.ps1 on a
+# Windows machine), never checked in.
+*.msi
+*.wixpdb

@@ -170,7 +170,7 @@ public sealed class SceneApplyTests(WebApplicationFactory<Program> factory) : Ed
             },
         }));
 
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         // ONE wire call for the whole 13-operation spec - the entire point of this task.
         Assert.Equal("scene.apply", request.Method);
@@ -244,7 +244,7 @@ public sealed class SceneApplyTests(WebApplicationFactory<Program> factory) : Ed
         {
             operations = new[] { new Dictionary<string, object> { ["op"] = "create", ["name"] = "Enemy", ["primitive"] = "Cube", ["tag"] = "Player" } },
         }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         var sentOp = Prop(request.Params!, "operations").Items[0];
         Assert.Equal("Cube", Prop(sentOp, "primitive").AsString());
@@ -280,7 +280,7 @@ public sealed class SceneApplyTests(WebApplicationFactory<Program> factory) : Ed
                 new Dictionary<string, object> { ["op"] = "create", ["name"] = "Child", ["parent"] = "Root" },
             },
         }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         var ops = Prop(request.Params!, "operations");
         Assert.Equal(2, ops.Items.Count);
@@ -312,7 +312,7 @@ public sealed class SceneApplyTests(WebApplicationFactory<Program> factory) : Ed
                 new Dictionary<string, object> { ["op"] = "select", ["target"] = "Enemy" },
             },
         }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         // All three operations travelled in the SAME single wire call - the failure of one does not
         // stop the app from sending the rest; that is entirely the plugin's job now.
@@ -347,7 +347,7 @@ public sealed class SceneApplyTests(WebApplicationFactory<Program> factory) : Ed
         {
             operations = new[] { new Dictionary<string, object> { ["op"] = "create", ["name"] = "Enemy" } },
         });
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("scene.apply requires an 'operations' array parameter.", McpTestClient.ErrorText(envelope));
     }

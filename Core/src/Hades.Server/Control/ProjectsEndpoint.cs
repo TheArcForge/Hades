@@ -1,10 +1,16 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using Hades.Core;
 using Hades.Core.Editors;
 using Hades.Core.Projects;
 using Hades.Core.Reading;
+
+// No dedicated AssemblyInfo.cs in this project, so this lives on the one method it exists for:
+// lets Hades.Server.Tests exercise UnityHubEditorExecutablePath (internal, not public - see that
+// method's own doc comment) directly instead of only through OpenInUnity's public surface.
+[assembly: InternalsVisibleTo("Hades.Server.Tests")]
 
 namespace Hades.Server.Control;
 
@@ -655,7 +661,15 @@ public static class ProjectsEndpoint
             return Results.Json(new ActionResult { Success = false, Message = PathMissingMessage });
         }
 
-        var launched = launch("open", ["-R", project.Path]);
+        // The route keeps its macOS-flavoured name deliberately: renaming
+        // /control/projects/{id}/revealInFinder would break the shipped Swift client for a
+        // cosmetic gain. Route verbs stay platform-neutral in NAME; platform-specific behaviour
+        // lives here.
+        //
+        // explorer.exe takes the selection as one comma-joined argument, not two.
+        var launched = OperatingSystem.IsWindows()
+            ? launch("explorer.exe", [$"/select,{project.Path}"])
+            : launch("open", ["-R", project.Path]);
 
         return Results.Json(new ActionResult
         {
@@ -711,9 +725,14 @@ public static class ProjectsEndpoint
         });
     }
 
-    /// <summary>Unity Hub's own default per-version macOS install location - see this class's own
-    /// "design decisions" note on why this convention, rather than real Hub discovery, is what
-    /// backs <see cref="OpenInUnity"/>.</summary>
-    static string UnityHubEditorExecutablePath(string version) =>
-        $"/Applications/Unity/Hub/Editor/{version}/Unity.app/Contents/MacOS/Unity";
+    /// <summary>Unity Hub's own default per-version install location on each platform - see this
+    /// class's own "design decisions" note on why this convention, rather than real Hub discovery,
+    /// is what backs <see cref="OpenInUnity"/>. The cost of the convention is higher on Windows,
+    /// where users relocate editors to another drive far more often than Mac users move
+    /// /Applications - so a miss here is expected more often, and OpenInUnity's existing
+    /// "not found at the default location, open from Unity Hub instead" message carries it.</summary>
+    internal static string UnityHubEditorExecutablePath(string version) =>
+        OperatingSystem.IsWindows()
+            ? $@"C:\Program Files\Unity\Hub\Editor\{version}\Editor\Unity.exe"
+            : $"/Applications/Unity/Hub/Editor/{version}/Unity.app/Contents/MacOS/Unity";
 }

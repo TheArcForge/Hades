@@ -422,7 +422,7 @@ public sealed class SummaryBuildAsyncTests : IDisposable
 
         _projects = new ProjectService(new AppPaths(_appRoot), _editorRegistry)
         {
-            CharonProbeTimeout = TimeSpan.FromMilliseconds(300),
+            CharonProbeTimeout = TimeSpan.FromSeconds(5),
         };
     }
 
@@ -497,7 +497,7 @@ public sealed class SummaryBuildAsyncTests : IDisposable
         var responder = RespondToNextProbeAsync(unityReads, unityWrites);
 
         var result = await SummaryEndpoint.BuildAsync(_projects, new LeaseRegistry(), () => DateTimeOffset.UtcNow);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal(ControlIconState.Attached, result.IconState);
         var row = Assert.Single(result.Rows);

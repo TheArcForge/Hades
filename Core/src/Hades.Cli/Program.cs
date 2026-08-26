@@ -1,27 +1,36 @@
 // hades - a small console client over the control API (Plan 11 Task 7). NOT a product deliverable:
 // its purpose is diagnostic - proof that the API is complete and usable without a UI. See Commands.cs
 // for the actual command bodies and the "deliberately dumb" rule they follow; this file is only
-// discovery (find the port/token exactly as the Swift shell will - never hardcoded, see Discovery.cs)
-// and argument dispatch.
-using System.Net.Http.Headers;
+// discovery (find the port/token exactly as the Swift shell will - never hardcoded, see
+// Hades.Control.Client.Discovery) and argument dispatch.
 using Hades.Cli;
-using Hades.Core.Storage;
+using Hades.Control.Client;
 
-var appPaths = new AppPaths(Environment.GetEnvironmentVariable("HADES_HOME"));
-var connection = Discovery.Read(appPaths.ControlTokenFile);
+// The application-data root, resolved without Hades.Core: HADES_HOME wins, else the same
+// per-platform default AppPaths.DefaultRoot() computes - LocalApplicationData on Windows
+// (machine-local: the databases under it are derived, and the tokens name ports meaningless on
+// another machine), ApplicationData elsewhere. Kept in step with the core by the conformance and
+// fixture suites, not by a shared reference.
+var root = Environment.GetEnvironmentVariable("HADES_HOME")
+           ?? Path.Combine(
+               Environment.GetFolderPath(OperatingSystem.IsWindows()
+                   ? Environment.SpecialFolder.LocalApplicationData
+                   : Environment.SpecialFolder.ApplicationData),
+               "Hades");
+
+var connection = Discovery.Read(root);
 
 if (connection is null)
 {
-    Console.Error.WriteLine($"No Hades control API found at {appPaths.ControlTokenFile} — is Hades running?");
+    Console.Error.WriteLine($"No Hades control API found at {Path.Combine(root, "control.token")} — is Hades running?");
     return 1;
 }
 
-using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{connection.Port}") };
-client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", connection.Token);
+var client = new ControlClient(connection);
 
 return await DispatchAsync(args, client);
 
-static async Task<int> DispatchAsync(string[] args, HttpClient client)
+static async Task<int> DispatchAsync(string[] args, ControlClient client)
 {
     if (args.Length == 0) return Usage();
 

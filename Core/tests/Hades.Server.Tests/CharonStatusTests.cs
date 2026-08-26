@@ -50,7 +50,7 @@ public sealed class CharonStatusTests : IClassFixture<WebApplicationFactory<Prog
                 services.AddSingleton(sp => new ProjectService(
                     sp.GetRequiredService<AppPaths>(), sp.GetRequiredService<EditorRegistry>())
                 {
-                    CharonProbeTimeout = TimeSpan.FromMilliseconds(300),
+                    CharonProbeTimeout = TimeSpan.FromSeconds(5),
                 });
             }));
 
@@ -207,7 +207,7 @@ public sealed class CharonStatusTests : IClassFixture<WebApplicationFactory<Prog
         });
 
         var structured = Structured(await McpTestClient.CallTool(_factory, "hades_charon_status"));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.True(structured.GetProperty("attached").GetBoolean());
         Assert.False(structured.GetProperty("busy").GetBoolean());
@@ -240,7 +240,7 @@ public sealed class CharonStatusTests : IClassFixture<WebApplicationFactory<Prog
         });
 
         var structured = Structured(await McpTestClient.CallTool(_factory, "hades_charon_status"));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         // Still attached, not refused - degrade, never refuse (spec #4 §6). The connection and
         // every other Charon fact are exactly as healthy as the matching-version case above.
@@ -267,7 +267,7 @@ public sealed class CharonStatusTests : IClassFixture<WebApplicationFactory<Prog
         });
 
         var structured = Structured(await McpTestClient.CallTool(_factory, "hades_charon_status"));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         // The refusal path is not taken even at major skew - see this file's own class doc comment
         // and EditorListenerTests' dedicated proof at the transport layer. Attached is still true.

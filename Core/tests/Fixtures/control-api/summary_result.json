@@ -1,0 +1,1 @@
+{"iconState":"leaseHeld","headline":"1 project holds a reload lease","rows":[{"project":"Hades-Unity-Client","productGuid":"15c012f27331e49229cef25e74537816","status":"Indexed, 1204 nodes","severity":"ok"}],"lease":{"project":"Hades-Unity-Client","leaseId":"15c012f27331e49229cef25e74537816","heldForSeconds":42,"expiresInSeconds":18,"releasable":true}}

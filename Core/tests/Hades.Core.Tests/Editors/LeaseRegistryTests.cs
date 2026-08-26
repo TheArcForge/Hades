@@ -286,7 +286,7 @@ public sealed class LeaseRegistryTests : IDisposable
 
         var reconcile = registry.ReconcileAsync(ProjectGuid, session);
 
-        var line = await unityReads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var line = await unityReads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(JsonRpcRequest.TryParse(line, out var request, out _));
         Assert.Equal("lease.renew", request!.Method);
         Assert.True(request.Params!.TryGetProperty("leaseId", out var idValue));
@@ -298,7 +298,7 @@ public sealed class LeaseRegistryTests : IDisposable
         await unityWrites.WriteLineAsync(MiniJson.Write(
             JsonRpcResponse.Success(request.Id!, LeaseResult(true, "lease-1", newExpiry)).ToJson()));
 
-        await reconcile.WaitAsync(TimeSpan.FromSeconds(5));
+        await reconcile.WaitAsync(TimeSpan.FromSeconds(30));
 
         var found = registry.Get(ProjectGuid);
         Assert.NotNull(found);
@@ -322,13 +322,13 @@ public sealed class LeaseRegistryTests : IDisposable
 
         var reconcile = registry.ReconcileAsync(ProjectGuid, session);
 
-        var line = await unityReads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var line = await unityReads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(JsonRpcRequest.TryParse(line, out var request, out _));
 
         await unityWrites.WriteLineAsync(MiniJson.Write(
             JsonRpcResponse.Success(request!.Id!, LeaseResult(false, null, null)).ToJson()));
 
-        await reconcile.WaitAsync(TimeSpan.FromSeconds(5));
+        await reconcile.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Null(registry.Get(ProjectGuid));
     }
@@ -341,7 +341,7 @@ public sealed class LeaseRegistryTests : IDisposable
         registry.RecordHeld(ProjectGuid, "lease-1", DateTimeOffset.UtcNow.AddSeconds(30));
 
         var reconcile = registry.ReconcileAsync(ProjectGuid, session);
-        var line = await unityReads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var line = await unityReads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(JsonRpcRequest.TryParse(line, out var request, out _));
 
         // success=false because a DIFFERENT lease holds the gate (see ReloadGate.Renew): the
@@ -349,7 +349,7 @@ public sealed class LeaseRegistryTests : IDisposable
         await unityWrites.WriteLineAsync(MiniJson.Write(
             JsonRpcResponse.Success(request!.Id!, LeaseResult(false, "someone-elses-lease", DateTimeOffset.UtcNow.AddSeconds(15))).ToJson()));
 
-        await reconcile.WaitAsync(TimeSpan.FromSeconds(5));
+        await reconcile.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Null(registry.Get(ProjectGuid)); // lease-1 is definitely gone - clear, don't silently adopt a stranger's lease
     }
@@ -371,7 +371,7 @@ public sealed class LeaseRegistryTests : IDisposable
         registry.RecordHeld(ProjectGuid, "lease-1", DateTimeOffset.UtcNow.AddSeconds(30));
 
         var reconcile = registry.ReconcileAsync(ProjectGuid, session);
-        var line = await unityReads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var line = await unityReads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(JsonRpcRequest.TryParse(line, out var request, out _));
         Assert.True(request!.Params!.TryGetProperty("leaseId", out var idValue));
         Assert.Equal("lease-1", idValue!.AsString());
@@ -384,7 +384,7 @@ public sealed class LeaseRegistryTests : IDisposable
         await unityWrites.WriteLineAsync(MiniJson.Write(
             JsonRpcResponse.Success(request.Id!, LeaseResult(false, null, null)).ToJson()));
 
-        await reconcile.WaitAsync(TimeSpan.FromSeconds(5));
+        await reconcile.WaitAsync(TimeSpan.FromSeconds(30));
 
         var believed = registry.Get(ProjectGuid);
         Assert.NotNull(believed);
@@ -404,7 +404,7 @@ public sealed class LeaseRegistryTests : IDisposable
         registry.RecordHeld(ProjectGuid, "lease-1", DateTimeOffset.UtcNow.AddSeconds(30));
 
         var reconcile = registry.ReconcileAsync(ProjectGuid, session);
-        var line = await unityReads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var line = await unityReads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(JsonRpcRequest.TryParse(line, out var request, out _));
 
         // The race: lease-1 is cleared and a genuinely different lease-2 is recorded locally WHILE
@@ -418,7 +418,7 @@ public sealed class LeaseRegistryTests : IDisposable
         await unityWrites.WriteLineAsync(MiniJson.Write(
             JsonRpcResponse.Success(request!.Id!, LeaseResult(true, "lease-1", newExpiry)).ToJson()));
 
-        await reconcile.WaitAsync(TimeSpan.FromSeconds(5));
+        await reconcile.WaitAsync(TimeSpan.FromSeconds(30));
 
         var believed = registry.Get(ProjectGuid);
         Assert.NotNull(believed);

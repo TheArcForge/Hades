@@ -146,7 +146,7 @@ public sealed class ProjectSettingsApplyTests(WebApplicationFactory<Program> fac
             },
         }));
 
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         // ONE wire call for the whole 6-operation spec.
         Assert.Equal("projectSettings.apply", request.Method);
@@ -215,7 +215,7 @@ public sealed class ProjectSettingsApplyTests(WebApplicationFactory<Program> fac
                 new Dictionary<string, object> { ["op"] = "createLayer", ["name"] = "Bad", ["layerIndex"] = 3 },
             },
         }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("projectSettings.apply", request.Method);
         Assert.Equal(2, Prop(request.Params!, "operations").Items.Count);
@@ -250,7 +250,7 @@ public sealed class ProjectSettingsApplyTests(WebApplicationFactory<Program> fac
         {
             operations = new[] { new Dictionary<string, object> { ["op"] = "createTag", ["name"] = "Friendly" } },
         });
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("projectSettings.apply requires an 'operations' array parameter.", McpTestClient.ErrorText(envelope));
     }

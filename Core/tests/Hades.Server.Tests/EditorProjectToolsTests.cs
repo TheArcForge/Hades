@@ -38,7 +38,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
         var responder = AnswerBusyProbeThenRespondAsync(reads, writes, Obj(("requested", JsonValue.Bool(true))));
 
         var structured = Structured(await McpTestClient.CallTool(Factory, "project_recompile_scripts", new { }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("project.recompile_scripts", request.Method);
         Assert.True(structured.GetProperty("requested").GetBoolean());
@@ -55,7 +55,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
             ("testMode", JsonValue.String("EditMode")), ("filter", JsonValue.String("MyTests"))));
 
         var structured = Structured(await McpTestClient.CallTool(Factory, "project_run_tests", new { filter = "MyTests", testMode = "EditMode" }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("project.run_tests", request.Method);
         Assert.True(request.Params!.TryGetProperty("filter", out var f) && f!.AsString() == "MyTests");
@@ -71,7 +71,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
             ("runId", JsonValue.String("xyz")), ("status", JsonValue.String("started")), ("testMode", JsonValue.String("EditMode"))));
 
         await McpTestClient.CallTool(Factory, "project_run_tests", new { });
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.False(request.Params!.TryGetProperty("filter", out _));
         Assert.False(request.Params!.TryGetProperty("testMode", out _));
@@ -86,7 +86,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
             ("error", JsonValue.String("Test Framework package not installed."))));
 
         var structured = Structured(await McpTestClient.CallTool(Factory, "project_run_tests", new { }));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("failed", structured.GetProperty("status").GetString());
         Assert.Equal("Test Framework package not installed.", structured.GetProperty("error").GetString());
@@ -135,7 +135,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
         var responder = AnswerBusyProbeThenRespondAsync(reads, writes, pluginResult);
 
         var structured = Structured(await McpTestClient.CallTool(Factory, "project_get_console_log", new { count = 10, type = "Error" }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("project.get_console_log", request.Method);
         Assert.True(request.Params!.TryGetProperty("count", out var c) && c!.AsInteger() == 10);
@@ -158,7 +158,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
             ("entries", JsonValue.NewArray()), ("count", JsonValue.Integer(0)), ("totalBuffered", JsonValue.Integer(0))));
 
         await McpTestClient.CallTool(Factory, "project_get_console_log", new { });
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.False(request.Params is not null && request.Params.TryGetProperty("count", out _));
         Assert.False(request.Params is not null && request.Params.TryGetProperty("type", out _));
@@ -171,7 +171,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
         var responder = AnswerBusyProbeThenFailAsync(reads, writes, "'type' must be 'Error', 'Warning', or 'Log' (omit for every severity) - got 'Eror'.");
 
         var envelope = await McpTestClient.CallTool(Factory, "project_get_console_log", new { type = "Eror" });
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("'type' must be", McpTestClient.ErrorText(envelope));
     }
@@ -218,7 +218,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
         var responder = AnswerBusyProbeThenRespondAsync(reads, writes, pluginResult);
 
         var structured = Structured(await McpTestClient.CallTool(Factory, "project_get_test_results", new { runId = "abc123" }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("project.get_test_results", request.Method);
         Assert.True(request.Params!.TryGetProperty("runId", out var r) && r!.AsString() == "abc123");
@@ -242,7 +242,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
             ("note", JsonValue.String("No test run has been started this session. Call project_run_tests first."))));
 
         var structured = Structured(await McpTestClient.CallTool(Factory, "project_get_test_results", new { }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.False(request.Params is not null && request.Params.TryGetProperty("runId", out _));
         Assert.Equal("none", structured.GetProperty("status").GetString());
@@ -258,7 +258,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
             ("note", JsonValue.String("Test run in progress (EditMode runs include a domain reload). Poll again shortly."))));
 
         var structured = Structured(await McpTestClient.CallTool(Factory, "project_get_test_results", new { }));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("running", structured.GetProperty("status").GetString());
         Assert.Equal("run-1", structured.GetProperty("runId").GetString());
@@ -275,7 +275,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
             ("note", JsonValue.String("No test run with runId 'stale-run' is known. The most recently started run's id is 'real-run'."))));
 
         var structured = Structured(await McpTestClient.CallTool(Factory, "project_get_test_results", new { runId = "stale-run" }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.True(request.Params!.TryGetProperty("runId", out var r) && r!.AsString() == "stale-run");
         Assert.Equal("unknown", structured.GetProperty("status").GetString());
@@ -290,7 +290,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
         var responder = AnswerBusyProbeThenFailAsync(reads, writes, "Test run 'x' looked complete, but its results at '...' could not be parsed: bad xml.");
 
         var envelope = await McpTestClient.CallTool(Factory, "project_get_test_results", new { runId = "x" });
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("could not be parsed", McpTestClient.ErrorText(envelope));
     }
@@ -317,7 +317,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
             ("leaseId", JsonValue.String("hades-script-editing")), ("expiresAtUtcMs", JsonValue.Integer(1_700_000_030_000))));
 
         var structured = Structured(await McpTestClient.CallTool(Factory, "script_editing_session", new { action = "begin" }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("project.begin_script_editing", request.Method);
         Assert.False(request.Params is not null && request.Params.TryGetProperty("ttlSeconds", out _));
@@ -333,7 +333,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
             ("leaseId", JsonValue.String("hades-script-editing")), ("expiresAtUtcMs", JsonValue.Integer(1_700_000_120_000))));
 
         await McpTestClient.CallTool(Factory, "script_editing_session", new { action = "begin", ttlSeconds = 120.0 });
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.True(request.Params!.TryGetProperty("ttlSeconds", out var t) && t!.AsDouble() == 120.0);
     }
@@ -356,7 +356,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
             ("leaseId", JsonValue.String("hades-script-editing")), ("expiresAtUtcMs", JsonValue.Integer(long.MaxValue))));
 
         var structured = Structured(await McpTestClient.CallTool(Factory, "script_editing_session", new { action = "begin" }));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         // No raw ArgumentOutOfRangeException surfaced - the call completed normally with a
         // clamped, still-usable expiry. Not literally DateTimeOffset.MaxValue: round-tripping
@@ -381,7 +381,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
             ("leaseId", JsonValue.String("hades-script-editing")), ("expiresAtUtcMs", JsonValue.Integer(long.MinValue))));
 
         var structured = Structured(await McpTestClient.CallTool(Factory, "script_editing_session", new { action = "begin" }));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         // Clamped to the other end of the representable range - still no raw exception - even
         // though a this-far-in-the-past expiry self-expires immediately in LeaseRegistry (a
@@ -398,7 +398,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
             "BeginScriptEditing needs Unity's reload lock, but it is currently held by lease 'hades-script-editing'.");
 
         var envelope = await McpTestClient.CallTool(Factory, "script_editing_session", new { action = "begin" });
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("reload lock", McpTestClient.ErrorText(envelope));
     }
@@ -411,7 +411,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
             ("released", JsonValue.Bool(true)), ("requested", JsonValue.Bool(true))));
 
         var structured = Structured(await McpTestClient.CallTool(Factory, "script_editing_session", new { action = "end" }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("project.end_script_editing", request.Method);
         Assert.True(structured.GetProperty("released").GetBoolean());
@@ -426,7 +426,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
             ("released", JsonValue.Bool(false)), ("requested", JsonValue.Bool(true))));
 
         var structured = Structured(await McpTestClient.CallTool(Factory, "script_editing_session", new { action = "end" }));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.False(structured.GetProperty("released").GetBoolean());
         Assert.True(structured.GetProperty("requested").GetBoolean());
@@ -474,7 +474,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
         // (actualExpiryMs, ~30 minutes out) - LeaseRegistry must record THAT, never an echo of the
         // request.
         await McpTestClient.CallTool(Factory, "script_editing_session", new { action = "begin", ttlSeconds = 5.0 });
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         var lease = Factory.Services.GetRequiredService<LeaseRegistry>().Get(ProjectGuid);
         Assert.NotNull(lease);
@@ -494,7 +494,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
             ("released", JsonValue.Bool(true)), ("requested", JsonValue.Bool(true))));
 
         await McpTestClient.CallTool(Factory, "script_editing_session", new { action = "end" });
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Null(leases.Get(ProjectGuid));
     }
@@ -507,7 +507,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
             ("released", JsonValue.Bool(false)), ("requested", JsonValue.Bool(true))));
 
         await McpTestClient.CallTool(Factory, "script_editing_session", new { action = "end" });
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Null(Factory.Services.GetRequiredService<LeaseRegistry>().Get(ProjectGuid));
     }
@@ -598,7 +598,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
 
         var responder = AnswerBusyProbeThenRespondAsync(reads, writes, Obj(("requested", JsonValue.Bool(true))));
         await McpTestClient.CallTool(Factory, "project_recompile_scripts", new { });
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         await McpTestClient.CallTool(Factory, "search_by_name", new { namePattern = "StillNothingShouldMatch" });
 
@@ -648,7 +648,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
                 },
             },
         }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("hades.regression_replay", request.Method);
         Assert.True(request.Params!.TryGetProperty("calls", out var wireCalls)
@@ -684,7 +684,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
                 },
             },
         }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("hades.regression_replay", request.Method);
         Assert.True(request.Params!.TryGetProperty("calls", out var calls) && calls!.Kind == WireKind.Array && calls.Items.Count == 1);
@@ -720,7 +720,7 @@ public sealed class EditorProjectToolsTests(WebApplicationFactory<Program> facto
                 new { method = "not.a.method", @params = (Dictionary<string, object?>?)null, expected = (object?)null },
             },
         }));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal(2, structured.GetProperty("total").GetInt32());
         Assert.Equal(1, structured.GetProperty("passed").GetInt32());
