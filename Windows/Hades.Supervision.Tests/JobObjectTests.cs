@@ -10,14 +10,14 @@ namespace Hades.Supervision.Tests;
 // Windows/FakeCore/Program.cs — a stand-in for the actual Hades core, built exactly for use by
 // this test project).
 //
-// HONESTY NOTE: these tests P/Invoke real Win32 APIs that do not exist on macOS, and Hades has no
-// windows-latest CI job wired up for the Windows/ tree yet (.github/workflows/ci.yml only runs
-// `Core`, on macOS and windows-latest, neither of which touches Windows/HadesWindows.slnx). As of
-// this writing, none of the code below has ever executed anywhere — it is compile-and-review
-// verified only. They are gated with [Trait(PlatformTraits.Key, PlatformTraits.Windows)] rather
-// than an early-return specifically so that stays true honestly: `dotnet test` on this machine
-// (or any non-Windows CI runner) must EXCLUDE them outright rather than report a vacuous pass —
-// see PlatformTraits.cs for why traits, not skips.
+// HONESTY NOTE: these tests P/Invoke real Win32 APIs that do not exist on macOS. Until 2026-08-29
+// none of the code below had executed anywhere and it was compile-and-review verified only; on
+// that date all three ran on a real Windows 11 machine and passed. ci.yml's `dotnet test (Windows
+// solution)` step runs them on windows-latest as well, though as of this writing that job has
+// never actually completed a run. They are gated with
+// [Trait(PlatformTraits.Key, PlatformTraits.Windows)] rather than an early-return specifically so
+// that stays honest: `dotnet test` on macOS (or any non-Windows CI runner) must EXCLUDE them
+// outright rather than report a vacuous pass — see PlatformTraits.cs for why traits, not skips.
 [SupportedOSPlatform("windows")]
 public class JobObjectTests
 {
@@ -63,8 +63,17 @@ public class JobObjectTests
         // against however fast the process happens to start running.
         job.Assign(launched.ProcessHandle);
 
+        // KNOWN WEAKNESS, recorded rather than silently relied upon: passing NULL asks "is this
+        // process in ANY job?", not "is it in OUR job?" — JobObject._handle is private, so asking
+        // the precise question would mean widening production API surface purely for a test. A
+        // process created by a process that is itself in a job is auto-assigned to that job, so on
+        // a host where the test runner is already jobbed (CI runners and some terminals do this)
+        // this assertion can pass without job.Assign having done anything. What keeps the suite
+        // honest is Closing_the_job_terminates_a_healthy_member_process: kill-on-close can only
+        // fire on a genuine member of the job we created, so that test proves the assignment this
+        // one merely observes. If this pair ever disagrees, believe that test, not this one.
         Assert.True(
-            NativeTestInterop.IsProcessInJob(launched.ProcessHandle, jobHandle: null, out var isMember),
+            NativeTestInterop.IsProcessInJob(launched.ProcessHandle, jobHandle: IntPtr.Zero, out var isMember),
             "IsProcessInJob should succeed");
         Assert.True(isMember, "the process must already be a job member while still suspended, before Resume is ever called");
 
@@ -196,7 +205,13 @@ public class JobObjectTests
 [SupportedOSPlatform("windows")]
 internal static partial class NativeTestInterop
 {
+    // jobHandle is IntPtr rather than SafeFileHandle because Win32 documents it as [in, optional]
+    // and the caller passes NULL to ask "is this process in ANY job?". [LibraryImport]'s generated
+    // stub marshals a SafeHandle through SafeHandleMarshaller<T>.ManagedToUnmanagedIn.FromManaged,
+    // which dereferences unconditionally and throws NullReferenceException on null; the `?`
+    // annotation is not honoured by the generator. IntPtr.Zero is the only way to express the
+    // documented NULL here.
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    public static partial bool IsProcessInJob(SafeFileHandle processHandle, SafeFileHandle? jobHandle, [MarshalAs(UnmanagedType.Bool)] out bool result);
+    public static partial bool IsProcessInJob(SafeFileHandle processHandle, IntPtr jobHandle, [MarshalAs(UnmanagedType.Bool)] out bool result);
 }

@@ -7,9 +7,11 @@ namespace Hades.Control.Client.Dtos;
 [JsonConverter(typeof(UnknownFallbackConverter<ProjectEditorState>))]
 public enum ProjectEditorState { Unknown, Attached, Busy, Absent }
 
-/// <summary>Mirrors Hades.Server.Control.ProjectIndexState.</summary>
+/// <summary>Mirrors Hades.Server.Control.ProjectIndexState. <c>Indexing</c> means work is running
+/// right now; <c>NeverIndexed</c> means no index has ever completed and none is running. Those were
+/// one member until 2026-09-01 - see the server-side enum for what conflating them cost.</summary>
 [JsonConverter(typeof(UnknownFallbackConverter<ProjectIndexState>))]
-public enum ProjectIndexState { Unknown, Indexed, Indexing }
+public enum ProjectIndexState { Unknown, Indexed, Indexing, NeverIndexed }
 
 /// <summary>Mirrors Hades.Server.Control.ProjectWarning.</summary>
 public sealed record ProjectWarning
@@ -43,6 +45,10 @@ public sealed record ProjectRow
     [JsonPropertyName("edgeCount")] public required int EdgeCount { get; init; }
     [JsonPropertyName("editor")] public required ProjectEditorInfo Editor { get; init; }
     [JsonPropertyName("warnings")] public required IReadOnlyList<ProjectWarning> Warnings { get; init; }
+
+    /// <summary>The operation indexing this project, when this row came back from an add. Null on
+    /// every row from GET /control/projects. Mirrors Hades.Server.Control.ProjectRow.</summary>
+    [JsonPropertyName("indexOperationId")] public string? IndexOperationId { get; init; }
 }
 
 /// <summary>Mirrors Hades.Server.Control.ProjectsResult, the response of GET /control/projects.</summary>

@@ -26,7 +26,7 @@ namespace Hades.Supervision;
 /// backoff-sleeping restart cycle depends on - see <c>SpawnWithRetriesAsync</c>'s own comment),
 /// while each individual read-modify-write of <see cref="_state"/> and friends stays atomic.
 /// </summary>
-public sealed class CoreSupervisor
+public sealed class CoreSupervisor : ICoreSupervisor
 {
     /// <summary>
     /// Everything <see cref="CoreSupervisor"/> needs to adopt-or-spawn and supervise the core. The
@@ -540,8 +540,19 @@ public sealed class CoreSupervisor
             ["HADES_HOME"] = _configuration.Home,
         };
 
+        // The core's OWN directory, never null. A null working directory makes CreateProcess give
+        // the child the PARENT's current directory - the shell's - and ASP.NET Core takes its
+        // content root from the current directory, so the core would look for appsettings.json
+        // beside Hades.Shell.exe, not find it, and silently run on framework defaults.
+        //
+        // That is not only log noise, though that is how it was noticed: a console window full of
+        // Information-level request logs, because the file that sets Microsoft.AspNetCore to Warning
+        // was never read. AllowedHosts is in the same file and was being ignored too. Configuration
+        // that is silently absent is worse than configuration that fails loudly.
+        var workingDirectory = Path.GetDirectoryName(Path.GetFullPath(_configuration.CoreExecutable));
+
         return new CoreProcessStartInfo(
-            _configuration.CoreExecutable, _configuration.CoreArguments, WorkingDirectory: null, environment);
+            _configuration.CoreExecutable, _configuration.CoreArguments, workingDirectory, environment);
     }
 
     /// <summary>

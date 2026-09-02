@@ -157,7 +157,7 @@ public class IncrementalIndexTests : IDisposable
         File.WriteAllText(Path.Combine(external, "Runtime", "Packaged.cs"), "public class Packaged { }");
 
         MakeProject();
-        Write("Packages/manifest.json", $"{{\"dependencies\":{{\"com.example.pkg\":\"file:{external}\"}}}}");
+        Write("Packages/manifest.json", ManifestJson.WithLocalPackage("com.example.pkg", external));
 
         var service = NewService();
         service.AdoptAndIndex(_projectRoot);

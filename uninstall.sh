@@ -107,15 +107,47 @@ TARGETS=(
     "$HOME/Library/Saved Application State/$BUNDLE_ID.savedState"
 )
 
+# The 'hades' symlink install.sh may have made. Handled separately from TARGETS above for two
+# reasons, both of which would otherwise be silent bugs:
+#
+#   1. TARGETS is tested with `-e`, which is FALSE for a dangling symlink - and $APP is removed
+#      first, which is exactly what makes it dangle. It would be listed, then never removed.
+#   2. /usr/local/bin/hades might not be ours. A real file there belongs to someone else and must
+#      not be touched, so this removes the link ONLY if it is a symlink pointing into the bundle
+#      we are uninstalling. readlink works on a dangling link, so this is correct either way.
+CLI_LINK="/usr/local/bin/hades"
+if [[ -L "$CLI_LINK" ]]; then
+    CLI_TARGET="$(readlink "$CLI_LINK" 2>/dev/null || true)"
+    if [[ "$CLI_TARGET" == "$APP"/* ]]; then
+        if [[ $DRY_RUN -eq 1 ]]; then
+            note "would remove  $CLI_LINK"
+        elif rm -f "$CLI_LINK" 2>/dev/null; then
+            note "removed  $CLI_LINK"
+        else
+            warn "Could not remove $CLI_LINK - remove it yourself with:
+  sudo rm '$CLI_LINK'"
+        fi
+    else
+        # Someone else's hades, or a link a user pointed elsewhere on purpose. Say so rather than
+        # deleting it or staying silent about why it was left.
+        note "left alone  $CLI_LINK (does not point into $APP)"
+    fi
+elif [[ -e "$CLI_LINK" ]]; then
+    note "left alone  $CLI_LINK (a real file, not our symlink)"
+fi
+
+# `\~`, not a bare `~`: the REPLACEMENT half of ${var/pattern/string} undergoes tilde expansion,
+# so `~` expands straight back to $HOME and the substitution prints the full path it was written
+# to shorten. Measured with HOME=/ZZZ, where the output followed HOME rather than printing "~".
 info "Removing Hades' own files"
 removed=0
 for t in "${TARGETS[@]}"; do
     if [[ -e "$t" ]]; then
         if [[ $DRY_RUN -eq 1 ]]; then
-            note "would remove  ${t/#$HOME/~}"
+            note "would remove  ${t/#$HOME/\~}"
         else
             rm -rf "$t"
-            note "removed  ${t/#$HOME/~}"
+            note "removed  ${t/#$HOME/\~}"
         fi
         removed=$((removed + 1))
     fi

@@ -164,6 +164,8 @@ fi
 CORE_RID="osx-arm64"
 CORE_PUBLISH_DIR="$DERIVED_DATA/PublishedCore/$CORE_RID"
 CORE_BINARY="$CORE_PUBLISH_DIR/Hades.Server"
+CLI_PUBLISH_DIR="$DERIVED_DATA/PublishedCli/$CORE_RID"
+CLI_BINARY="$CLI_PUBLISH_DIR/hades"
 if [[ "$CONFIGURATION" == "Release" ]]; then
     REPO_ROOT="$(dirname "$SHELL_DIR")"
     HADES_SERVER_PROJECT="$REPO_ROOT/Core/src/Hades.Server/Hades.Server.csproj"
@@ -178,6 +180,32 @@ if [[ "$CONFIGURATION" == "Release" ]]; then
 
     if [[ ! -x "$CORE_BINARY" ]]; then
         echo "build-app.sh: expected dotnet publish to produce $CORE_BINARY" >&2
+        exit 1
+    fi
+
+    # The `hades` CLI, published the same way and for the same reason the core above is. Spec #5
+    # §5.4 promotes it from a diagnostic to a product surface ON BOTH PLATFORMS, and Windows gets it
+    # on PATH from its MSI - this is macOS's half of that promise.
+    #
+    # Self-contained and the same RID as the core: a CLI that needed a separately installed .NET
+    # runtime would be a support burden on exactly the machines least able to answer for it, and
+    # a user who has installed a GUI app has not agreed to install a runtime.
+    #
+    # Contents/Resources/HadesCli/, its own directory rather than loose in Resources/: like the core
+    # it is a whole runtime tree, not one file, and install.sh symlinks the single executable out of
+    # it. Signed by the same `codesign --deep` pass below that already covers HadesServer/.
+    echo "== Publishing Hades.Cli self-contained ($CORE_RID) via dotnet publish =="
+    dotnet publish "$REPO_ROOT/Core/src/Hades.Cli/Hades.Cli.csproj" \
+        -c Release \
+        -r "$CORE_RID" \
+        --self-contained true \
+        -o "$CLI_PUBLISH_DIR" \
+        | { grep -Ev '^\s*$' || true; }
+
+    # Hades.Cli.csproj sets <AssemblyName>hades</AssemblyName>, so the apphost is `hades`, not
+    # `Hades.Cli` - the name install.sh symlinks and the name a user types.
+    if [[ ! -x "$CLI_BINARY" ]]; then
+        echo "build-app.sh: expected dotnet publish to produce $CLI_BINARY" >&2
         exit 1
     fi
 fi
@@ -199,6 +227,13 @@ if [[ "$CONFIGURATION" == "Release" ]]; then
     echo "== Embedding self-contained core into Contents/Resources/HadesServer =="
     mkdir -p "$APP_BUNDLE/Contents/Resources/HadesServer"
     cp -R "$CORE_PUBLISH_DIR/." "$APP_BUNDLE/Contents/Resources/HadesServer/"
+
+    # Same placement, same signing pass. install.sh symlinks Contents/Resources/HadesCli/hades into
+    # /usr/local/bin; `hades serve` then finds the core relative to its own location - see
+    # Hades.Cli/CoreLocator.cs, which looks for ../HadesServer/Hades.Server from here.
+    echo "== Embedding self-contained CLI into Contents/Resources/HadesCli =="
+    mkdir -p "$APP_BUNDLE/Contents/Resources/HadesCli"
+    cp -R "$CLI_PUBLISH_DIR/." "$APP_BUNDLE/Contents/Resources/HadesCli/"
 fi
 
 # App icon: generated here from the single 1024x1024 master in Resources/ rather than checking a

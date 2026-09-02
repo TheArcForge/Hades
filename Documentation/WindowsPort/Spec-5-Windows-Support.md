@@ -1,7 +1,7 @@
 # Hades Windows Support — Design (Spec #5)
 
-**Status:** Design approved (revision 2, post-review), pending implementation plan
-**Date:** 2026-08-23 · **Revised:** 2026-08-23 after a four-topic review pass
+**Status:** **Implemented — slices 1–6.** Per-task record in `Plan-Steps-1-3-DONE.md` and `Plan-Steps-4-6-TODO.md`, each task carrying its own Outcome section. Remaining gaps are named in "What implementation corrected" below and are hand-runs and a CI dry run, not unimplemented design.
+**Date:** 2026-08-23 · **Revised:** 2026-08-23 after a four-topic review pass · **Implementation notes added:** 2026-08-30
 **Parent:** `2026-08-01-hades-standalone-overview-design.md`
 **Siblings:** `2026-08-01-hades-mac-shell-design.md` (Spec #3), `2026-08-01-hades-distribution-design.md` (Spec #4)
 
@@ -33,6 +33,20 @@ A four-topic review (general, correctness, architecture, long-term support) foun
 | Unsigned position recorded as dated debt | §8.2 | "Symmetric with macOS" is false: macOS unsigned is a stable plateau, Windows unsigned is a slow decline |
 
 One review finding was **rejected on evidence.** The architecture review argued the conformance test is unworkable because "many server records have no `JsonPropertyName`", citing `ProjectSnapshot`. Every `public sealed record` under `Control/` was scripted: exactly six have unattributed properties — `EditorStateSnapshot`, `ProjectStateSnapshot`, `SettingsSnapshot`, `ProjectSnapshot`, `TraceRecordSnapshot`, `OperationRecord` — and **none of the six is a wire type**. They are the plain-data inputs to each endpoint's `Resolve`, plus the operations registry record whose wire counterpart `OperationResult` is separately defined and fully attributed. (They *are* declared `public` — for testability — so "not a wire type" is a statement about their role, not their C# accessibility; §2.2 carve-out 3 gives the mechanical rule that separates them, precisely because a public-type walk would otherwise pick them up.) Every actual wire record is 100% attribute-pinned, which is what makes §2.2 viable. The finding's *secondary* points were correct and are incorporated.
+
+### What implementation corrected
+
+Slices 1–3 corrected the spec four times; slices 4–6 did so twice more, which is this document working rather than failing. Both corrections below are **measured**, and both replace claims this spec previously made in the voice of reasoning.
+
+| Claim, as written | What implementation found | Where |
+|---|---|---|
+| §8 (~"the MSI enforces what it actually can: a `LaunchCondition` on `VersionNT`/build number") | **Wrong, and it would have shipped broken.** `VersionNT` and `WindowsBuild` are frozen at Windows 8.1's values for unmanifested packages: a verbose install log on Windows 11 build 26200 records `Property(S): WindowsBuild = 9600`. A condition written against them is false on *every* supported Windows, and the first MSI built from this spec failed to install with 1603 for exactly that reason. The floor now reads `HKLM\…\CurrentVersion\CurrentBuildNumber`, which is not shimmed. The **edition** point the same paragraph makes is unaffected and still correct | `Windows/Installer/Hades.wxs`; Plan Task 17 Outcome |
+| §8.2 (~"Windows PowerShell 5.1's behaviour is contested… that verification is a step-6 gate, not an assumption") | **Settled, and the spec was right to refuse to assume it.** Measured on Windows PowerShell **5.1** (`Desktop`, 5.1.26100.9168) — the contested case itself — on an NTFS volume, with a control file carrying a hand-written `Zone.Identifier` proving the check could see a mark: `Invoke-WebRequest` wrote **none**. Nor did `curl.exe` 8.21.0 or `System.Net.WebClient`. `install.ps1` still uses `curl.exe`, but now for the reason §8.2 gives rather than for lack of a verified alternative — and `Invoke-WebRequest` is a genuine fallback below Windows 10 1803, where `curl.exe` does not exist | `install.ps1`; Plan Task 19 Outcome |
+
+Two spec expectations resolved rather than corrected:
+
+- **§4.1's arm64 requirement** — "executed on real ARM64 hardware, **or** explicitly shipped labelled untested". No ARM64 hardware was available, so the second branch applies. Every binary's PE machine type was read from its header to establish the payload is genuinely native rather than silently x64 (which would install fine and fail at the first database open), but **nothing arm64 has been executed**, and README, LIMITATIONS and Installing all say so.
+- **§9.1's environmental classes** — none are testable here, so they ship as named, individually-labelled unknowns in `LIMITATIONS.md` rather than as a general disclaimer, with `hades diagnose` as the mitigation §9.1 itself proposes.
 
 ---
 

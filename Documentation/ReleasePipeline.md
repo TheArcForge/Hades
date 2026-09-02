@@ -106,9 +106,36 @@ These are the sites that carry the shipped version. They must stay in lockstep o
 |---|---|---|
 | `Core/src/Hades.Server/Mcp/HadesTools.cs` → `ServerVersion` | MCP server version (`hades_status`, `initialize`) | plain constant — bump manually |
 | `Mac/HadesApp/scripts/build-app.sh` → Info.plist `CFBundleShortVersionString` / `CFBundleVersion` | App bundle version | kept in lockstep with `ServerVersion` above; `build-dmg.sh` derives the DMG's filename from this plist |
-| `install.sh` → `VERSION` / `SHA256` | What the documented install downloads and verifies | `SHA256` must match the DMG attached to the release (section 8.4) |
+| `install.sh` → `VERSION` / `SHA256` | What the documented macOS install downloads and verifies | `SHA256` must match the DMG attached to the release (section 8.4) |
+| `install.ps1` → `$Version` / `$Sha256['win-x64']` / `$Sha256['win-arm64']` | What the documented Windows install downloads and verifies | **Two checksums**, because an MSI carries one architecture and Windows ships two artifacts (section 9). Both start as the sentinel `REPLACE_AT_RELEASE` and the script refuses to run until they are pinned to the *published* MSIs |
 | `ClaudeCodePlugin/.claude-plugin/plugin.json` → `version` | The version `/plugin` shows a user | Was missing from this table until 2.0.0, which is exactly why it sat at `0.1.0` while everything else moved. `release.yml` now REFUSES to publish on a mismatch rather than rewriting it. |
 | `UnityPlugin/Assets/Hades/Runtime/HadesBoot.cs` → `PluginVersion` | Unity plugin version (sent in the `Hello` handshake) | independent version line from the app; two test mirrors (`CharonStatusTests.cs`, `Control/ProjectsTests.cs`) kept in sync with it |
+
+**Check it with the gate, not by eye:**
+
+```bash
+bash scripts/check-version-lockstep.sh 2.1.0
+```
+
+It reads every row above, prints site → found → status, and exits non-zero on any disagreement. A
+table in a document is not a gate — that is the whole lesson of `plugin.json` shipping at `0.1.0`
+through the 2.0.0 cycle, and `release.yml`'s check covers only that one file.
+
+Three things about it worth knowing before you trust it:
+
+- **The Unity plugin row is deliberately not compared to the release version.** It is an independent
+  version line, and the skew between plugin and app is something the code reasons about
+  (`PluginVersionSkewTests`). What the gate checks instead is that its two hand-copied test mirrors
+  still agree with the constant they pin.
+- **A renamed constant fails as `NOT FOUND`,** rather than passing silently. That was verified by
+  renaming `ServerVersion` and watching the gate refuse — an extraction that quietly matches nothing
+  is the failure mode that would make the whole gate decorative.
+- **It is red during ordinary development, by design.** The installer checksums cannot be right
+  before the artifacts are published, so they read `NOT PINNED` until section 8.4 / 9 pins them.
+
+Not a file, so not in the table and not checkable by the gate: **the MSI's own version is passed on
+the command line** (`build-msi.ps1 -Version X.Y.Z`) and is stamped into the package at build time.
+It must match the same version, and nothing but the release procedure enforces that.
 
 ---
 
@@ -846,6 +873,19 @@ Mac/HadesApp/scripts/build-dmg.sh Release --allow-unsigned
 a placeholder flag - v1 has no Apple Developer ID certificate, so this is the only build this repo
 can produce today (6.1, 6.4 above).
 
+**The Windows MSIs are not built here.** `release.yml`'s `windows` job builds both of them on the
+tag and attaches them itself (section 9). You do not run `build-msi.ps1` as part of a release - only
+when testing locally. That asymmetry between the two platforms is deliberate for now and recorded as
+debt in 9.5.
+
+Before running the gate, note that it checks the version sites only:
+
+```bash
+bash scripts/check-version-lockstep.sh X.Y.Z --skip-checksums
+```
+
+The unflagged run belongs in 8.4, after the MSI checksums exist.
+
 ### 8.4 Publish
 
 **Order matters here, and an earlier version of this section had it wrong.** It said to create the
@@ -889,7 +929,22 @@ pin it *before* merging, not after publishing.
    **Confirm the checksum of the PUBLISHED file**, not the local one:
    `curl -fsSL <asset-url> | shasum -a 256` against `install.sh`'s `SHA256`. Matching the artifact
    you built proves nothing about what GitHub actually stored.
-6. **Update the GitHub repo description.** It is the first line anyone reads, and it long advertised
+6. **Pin the Windows checksums and close the gate.** The `windows` job prints both MSI SHA-256s in a
+   paste-ready form. Put them into `install.ps1`'s `$Sha256`, then run the gate **without**
+   `--skip-checksums`:
+
+   ```bash
+   bash scripts/check-version-lockstep.sh X.Y.Z
+   ```
+
+   It must be green before you publish. Until this lands on `main`, `install.ps1` refuses to run -
+   which is the safe failure, but it is still a broken install command for Windows users in that
+   window. Why this cannot happen before the tag, and what the alternatives are, is 9.5.
+
+   Then verify `install.ps1` end to end against the published release, as step 5 does for
+   `install.sh` - and **confirm the checksum of the PUBLISHED MSI**, not the local one.
+
+7. **Update the GitHub repo description.** It is the first line anyone reads, and it long advertised
    the retired tool count. Confirm it matches what this release actually ships.
 
 ### 8.4b Replacing an already-published asset
@@ -938,3 +993,138 @@ When you do it:
 2. Re-verify the marketplace install end to end: `/plugin marketplace add TheArcForge/hades-plugin`
    → `/plugin install hades` → `/mcp` reports `hades` at 32 tools over the HTTP URL, not a `node`
    command.
+
+## 9. Windows distribution (Windows/Installer)
+
+Two MSIs, one per architecture — an MSI carries a single architecture in its Template summary, which
+is precisely what stops an arm64 package installing on x64 and vice versa.
+
+```powershell
+Windows\Installer\build-msi.ps1 -Rid win-x64   -Version X.Y.Z
+Windows\Installer\build-msi.ps1 -Rid win-arm64 -Version X.Y.Z
+```
+
+Built with **WiX Toolset 7.0.0**. `UpgradeCode` is `CE41CF62-CFE0-4F72-93B5-2E4E33E3A0FF` and must
+**never change** — it is the identity Windows uses to decide whether a new MSI replaces this product
+or installs a second copy beside it, and changing it strands every existing install.
+
+### 9.1 What is verified, and what is not
+
+**x64 — verified on real hardware** (Windows 11 Home, build 26200, 25H2): unelevated silent install
+succeeds with **no UAC prompt** (`AssignmentType = 0` confirms per-user scope; a per-machine install
+would fail 1925); 862/862 files land; `Get-Package` reports it, so it appears in Settings → Apps; the
+per-user PATH entry resolves `hades` from a new session and is exactly one entry, placed last; the
+Start Menu shortcut has the correct target and working directory; a `2.1.1` package **upgrades in
+place** (one product registered afterwards, `RemoveExistingProducts` ran, ProductCode rotated while
+the UpgradeCode held); uninstall removes the install directory, the PATH entry and the shortcut.
+
+**`%LOCALAPPDATA%\Hades` survives uninstall — measured, 7 files before and after.** That directory
+holds the graph, trace and memory-index databases *and* the user's authored memory documents. This is
+the same promise `uninstall.sh` makes on macOS (6.x, and its own header), and it is the one
+irreversible thing this installer could do. Nothing in `Hades.wxs` removes it, deliberately.
+
+**arm64 — built, never executed.** No ARM64 Windows hardware was available. Every binary's PE machine
+type was read from its header (`Hades.Shell.exe`, `hades.exe`, `core\Hades.Server.exe`,
+`core\e_sqlite3.dll` — all **ARM64**, with the x64 publish as a control), which establishes the
+payload is genuinely native rather than silently x64. It does **not** establish that it runs.
+Ship it **labelled untested in the release notes**; do not describe it as verified, and do not
+quietly drop it either. The native SQLite check is not ceremony: a silently-x64 `e_sqlite3.dll` would
+install fine and fail at the first database open, and x64 emulation is Windows 11 only — a Windows 10
+ARM64 machine has no fallback.
+
+### 9.2 Three traps, all hit for real
+
+**Installing the same version twice used to register a SECOND product — fixed, and worth
+understanding.** WiX regenerates the `ProductCode` on every build, and `MajorUpgrade` by default
+removes only products with a *strictly lower* version. So every rebuild of `2.1.0` was a brand-new
+product that did not replace the last: three "Hades" entries ended up registered at once, three rows
+in Settings → Apps, and an install directory whose files belonged to whichever product wrote last.
+An install that "succeeded" left binaries from hours earlier in place and the app served old
+behaviour.
+
+`Hades.wxs` now sets `AllowSameVersionUpgrades="yes"`, and a second same-version install replaces
+rather than accumulates — verified: one product, 862 files, fresh binaries.
+
+**The 2.1.0 → 2.1.1 upgrade test passed throughout**, which is exactly why this survived: those
+versions differ, so `MajorUpgrade` did its job. The same-version case was the one nobody ran, and it
+is the case every developer hits on their second build.
+
+Two consequences worth keeping:
+
+- **Section 8.4b, "replacing an already-published asset", is riskier for the MSI than the DMG.**
+  Swapping bytes is enough for a DMG. For an MSI, anyone who already installed is relying on
+  `AllowSameVersionUpgrades` to replace their files — which now works, but bumping the version is
+  still the honest fix, and what `CFBundleVersion` already does on the Mac.
+- If an install ever looks like it succeeded but the app behaves as before, **check the product
+  count first**, not the files: `Get-Package -Name '*Hades*'`. More than one is this bug returning.
+
+
+
+**MSI's `WindowsBuild` and `VersionNT` are frozen at Windows 8.1's values.** The first MSI failed to
+install with 1603; the verbose log showed `Property(S): WindowsBuild = 9600` on a machine running
+build 26200. A launch condition written against `WindowsBuild` is false on *every* supported Windows
+— that package would have refused to install for every user. The OS floor now reads
+`HKLM\...\CurrentVersion\CurrentBuildNumber`, which is not shimmed. See `Hades.wxs` for the measured
+detail, including why the `REG_SZ` comparison is safe.
+
+**`wix build` reports success for an empty payload.** A wrong `StagingDir` produces `WIX8601`/`WIX8600`
+as *warnings*, exit code **0**, and a 0.04 MB MSI that installs cleanly and delivers nothing. WiX
+7.0.0 has no warnings-as-errors switch. `build-msi.ps1` therefore counts rows in the built MSI's
+`File` table and requires an exact match against the staged file count — which catches a partial
+harvest as well as a total one. Do not remove that check.
+
+### 9.3 Signing
+
+Both MSIs are **unsigned**. SmartScreen will warn, and that warning is correct — nothing here has
+been signed by anyone. This is the same dated position section 6.1 takes for macOS, and
+`Documentation/Installing.md` must describe what users will actually see rather than let them
+discover it. On Windows 11 machines with **Smart App Control** enabled (clean installs only),
+unsigned code is blocked outright with no override available.
+
+### 9.4 Version lockstep
+
+Two MSIs and an `install.ps1` extend the section 2 table. That table has already failed twice in one
+release cycle, so treat additions to it as load-bearing rather than bookkeeping.
+
+`release.yml` runs `scripts/check-version-lockstep.sh` in its own `lockstep` job, which both the
+plugin sync and the Windows build depend on. It runs **before** anything is built, pushed or
+uploaded — a mismatch found after the plugin repo has been updated is a mismatch that already
+shipped.
+
+### 9.5 Known debt
+
+**Two artifacts, two provenances.** The MSIs are built and attached by CI (`windows` job); the DMG is
+still built by hand on a Mac and attached by hand (8.3, 8.4). That is a drift risk in both
+directions: the MSIs get whatever the runner has, the DMG gets whatever the maintainer's machine has,
+and only one of the two is reproducible by anyone else. **The fix is to move the DMG build into CI**
+on a `macos-latest` runner, at which point 8.3 and 8.4's manual steps collapse into the same shape
+section 9 already has. Not done, and not blocking — but the longer the two paths diverge, the more
+the release procedure has to describe two ways of doing one thing.
+
+**The icons are committed, not built, so a changed master would ship the old icon silently.**
+`Windows/Hades.Shell/Icons/*.ico` are generated by hand (`generate-icons.ps1`) and checked in, and
+that is deliberate: an icon is judged by looking at it, and a build step would let a bad-looking
+change ship unseen. The cost is that `app.ico` can drift from the artwork it came from —
+`Mac/HadesApp/Resources/AppIcon-source-fullbleed.png`, the same master the Mac app uses, which
+`build-app.sh` re-converts into `AppIcon.icns` on *every* Mac build. So the two platforms disagree
+about when the icon is regenerated. **If that master ever changes, re-run the script and commit the
+result**: nothing in CI, and nothing in the version-lockstep gate, will notice that it did not
+happen.
+
+**The Windows checksums cannot be pinned before the tag exists.** `install.ps1` pins a SHA256 per
+architecture, exactly as `install.sh` does — but `install.sh` works because the DMG is built locally
+*before* tagging, and the MSIs are built by the tag run itself. An MSI is not byte-reproducible
+(fresh package code and cab timestamps per build), so a locally-built MSI's hash will not match CI's.
+That is a genuine deadlock, and it is currently resolved by splitting the gate:
+
+- CI runs the gate with `--skip-checksums` at tag time, because it *cannot* know them yet.
+- The `windows` job prints both checksums in a paste-ready form.
+- **The maintainer pins them and runs the gate without the flag before publishing the release.**
+
+So there is a real window in which `main` carries unpinned checksums while the release exists. It
+fails safe — `install.ps1` refuses to run rather than installing unverified bytes — but it is the
+same class of hazard 8.4 documents for `install.sh`, and it is not fixed, only made loud. **The
+options if it becomes painful**, none of them taken yet: have CI commit the pinned checksums back to
+`main`; publish a `SHA256SUMS` release asset and have `install.ps1` fetch it (weaker — the checksum
+would then share the artifact's provenance); or make the MSI build reproducible and pin from a local
+build. This wants a maintainer's decision, not a default.

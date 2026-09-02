@@ -53,9 +53,26 @@ public sealed class ControlClientException : Exception
     /// <summary>Which of the four ways this call failed.</summary>
     public ControlClientError Error { get; }
 
-    public ControlClientException(ControlClientError error, string message, Exception? innerException = null)
+    /// <summary>
+    /// The HTTP status, for <see cref="ControlClientError.Server"/> only; null for every other case,
+    /// which never had a status to report.
+    ///
+    /// Swift's original case is <c>.server(status:message:)</c> and callers switch on the status -
+    /// this port dropped it, which made one real caller impossible to write: the Projects section
+    /// has to tell a 404 ("unknown operation - it may have completed and been pruned") apart from
+    /// any other server error, because a pruned operation is an ORDINARY outcome for a rebuild that
+    /// finished a while ago, not a failure. Without the status the two are indistinguishable.
+    /// </summary>
+    public int? StatusCode { get; }
+
+    public ControlClientException(
+        ControlClientError error,
+        string message,
+        Exception? innerException = null,
+        int? statusCode = null)
         : base(message, innerException)
     {
         Error = error;
+        StatusCode = statusCode;
     }
 }

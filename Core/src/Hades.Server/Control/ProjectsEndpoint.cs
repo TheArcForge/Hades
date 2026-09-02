@@ -25,16 +25,33 @@ public enum ProjectEditorState
     [JsonStringEnumMemberName("absent")] Absent,
 }
 
-/// <summary>One project's index state - see <see cref="ProjectsEndpoint.Resolve"/>.
-/// <see cref="Indexing"/> is the same honest proxy <see cref="SummaryEndpoint"/> uses for
-/// <see cref="ControlIconState.Indexing"/>: "never completed an index in this process", not a
-/// live progress signal nothing in <see cref="Hades.Core.Observation.ObservationService"/> exposes
-/// yet.</summary>
+/// <summary>
+/// One project's index state - see <see cref="ProjectsEndpoint.Resolve"/>.
+///
+/// <para>THERE USED TO BE TWO MEMBERS, and <see cref="Indexing"/> meant "never completed an index in
+/// this process" - a stand-in for a live progress signal that did not exist when it was written. It
+/// conflated two different facts, and the conflation was user-visible: because the timestamp behind
+/// it was per-process, a restarted core reported every project as indexing forever, which the shells
+/// rendered as a blue tray icon and "Indexing X…" over a finished graph with nothing running.</para>
+///
+/// <para>The two facts are now separate and come from separate sources. "Has an index ever
+/// completed" is <see cref="Hades.Core.Projects.UnityProject.LastIndexedUtc"/>, persisted beside the
+/// graph. "Is one running right now" is <see cref="OperationRegistry.IsRunningFor"/>, asked of work
+/// that actually exists. A live operation wins: a rebuild of an already-indexed project is
+/// <see cref="Indexing"/>, which the old shape could not express at all.</para>
+/// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ProjectIndexState
 {
     [JsonStringEnumMemberName("indexed")] Indexed,
+
+    /// <summary>An index or rebuild operation is running for this project right now.</summary>
     [JsonStringEnumMemberName("indexing")] Indexing,
+
+    /// <summary>No index has ever completed for this project, and none is running. A new member:
+    /// both shells decode an unrecognised value to their own <c>unknown</c> case, so an older build
+    /// degrades rather than failing to parse.</summary>
+    [JsonStringEnumMemberName("neverIndexed")] NeverIndexed,
 }
 
 /// <summary>One resolved, human-readable warning about a project - see this file's own class doc
@@ -89,6 +106,12 @@ public sealed record ProjectRow
     [JsonPropertyName("edgeCount")] public required int EdgeCount { get; init; }
     [JsonPropertyName("editor")] public required ProjectEditorInfo Editor { get; init; }
     [JsonPropertyName("warnings")] public required IReadOnlyList<ProjectWarning> Warnings { get; init; }
+
+    /// <summary>Set only by <see cref="ProjectsEndpoint.AddAsync"/>: the operation indexing this
+    /// project right now, pollable at <c>GET /control/operations/{id}</c>. Null everywhere else,
+    /// including every row from <c>GET /control/projects</c> - additive so a client that does not
+    /// poll it is unaffected.</summary>
+    [JsonPropertyName("indexOperationId")] public string? IndexOperationId { get; init; }
 }
 
 /// <summary>The full <c>GET /control/projects</c> response.</summary>
@@ -169,7 +192,16 @@ public sealed record ProjectStateSnapshot
     public string? EditorUnityVersion { get; init; }
     public long? EditorProcessId { get; init; }
     public TimeSpan? ConnectionAge { get; init; }
+    /// <summary>When an index of this project last COMPLETED - persisted, so it survives a restart.
+    /// Null means no index has ever finished, which is NOT the same as one being in progress: see
+    /// <see cref="IsIndexing"/> and <see cref="ProjectIndexState"/>.</summary>
     public DateTimeOffset? LastIndexedUtc { get; init; }
+
+    /// <summary>Whether an index or rebuild operation is running for this project right now, asked
+    /// of <see cref="OperationRegistry.IsRunningFor"/>. Defaults to false so a hand-built snapshot
+    /// (every Resolve test) describes a project at rest unless it says otherwise.</summary>
+    public bool IsIndexing { get; init; }
+
     public required int NodeCount { get; init; }
     public required int EdgeCount { get; init; }
 
@@ -328,21 +360,44 @@ public static class ProjectsEndpoint
     /// version, fanned out concurrently across projects (same reasoning as
     /// <see cref="SummaryEndpoint.BuildAsync"/> - one stuck Editor's probe timeout must not stall
     /// every other project's row) and fed to the pure <see cref="Resolve"/>.</summary>
-    public static async Task<ProjectsResult> BuildAsync(ProjectService projects, Func<DateTimeOffset> utcNow)
+    /// <param name="operations">Where "is this project indexing right now" is answered from. Optional
+    /// because the many fixture-driven tests of this method describe projects at rest, and null
+    /// truthfully means "no operation information available, so nothing is running" - the same answer
+    /// an empty registry gives. The production route always passes the listener's shared registry,
+    /// and <c>ProjectsBuildAsyncTests.RebuildInFlight_IsReportedAsIndexing</c> pins that it does.</param>
+    public static async Task<ProjectsResult> BuildAsync(
+        ProjectService projects, Func<DateTimeOffset> utcNow, OperationRegistry? operations = null)
     {
         var appPluginVersion = PluginInstaller.AppPluginVersion();
         var known = projects.KnownProjects();
 
         var snapshots = await Task.WhenAll(
-            known.Select(project => BuildSnapshotAsync(projects, project, appPluginVersion))
+            known.Select(project => BuildSnapshotAsync(projects, project, appPluginVersion, operations))
         ).ConfigureAwait(false);
 
         return Resolve(snapshots, utcNow());
     }
 
-    static async Task<ProjectStateSnapshot> BuildSnapshotAsync(ProjectService projects, UnityProject project, string? appPluginVersion)
+    static async Task<ProjectStateSnapshot> BuildSnapshotAsync(
+        ProjectService projects, UnityProject project, string? appPluginVersion, OperationRegistry? operations)
     {
         var charon = await projects.GetCharonStatus(project.ProductGuid).ConfigureAwait(false);
+
+        // ORDER MATTERS, and the other way round is a bug. "Is an index running" is sampled BEFORE
+        // the summary that carries "when did one last finish", because the two are read at different
+        // instants and an index can complete between them.
+        //
+        // Reading the timestamp first loses that race: a fast index (a small project finishes in
+        // milliseconds) can be unfinished when the summary is read and already done when the
+        // registry is asked, giving a null timestamp AND a false running flag - which resolves to
+        // NeverIndexed for a project that has just finished indexing. Observed: `hades add-project`
+        // on a small project answered "not yet indexed", while the same call on a 2,500-file project
+        // correctly answered "indexing…".
+        //
+        // Sampled this way the race is harmless: if the index finishes in the gap, the flag is false
+        // and the summary read afterwards DOES see the fresh timestamp, so the row says "indexed",
+        // which is true.
+        var isIndexing = operations?.IsRunningFor(project.ProductGuid) ?? false;
         var summary = projects.Summary(project.ProductGuid);
         var pathExists = Directory.Exists(project.Path);
 
@@ -359,6 +414,7 @@ public static class ProjectsEndpoint
             EditorProcessId = charon?.ProcessId,
             ConnectionAge = charon?.ConnectionAge,
             LastIndexedUtc = summary?.LastIndexedUtc,
+            IsIndexing = isIndexing,
             NodeCount = summary?.TotalNodes ?? 0,
             EdgeCount = summary?.TotalEdges ?? 0,
             SerializationMode = pathExists ? TryReadSerializationMode(project.Path) : null,
@@ -378,8 +434,21 @@ public static class ProjectsEndpoint
         Path = p.Path,
         ProductGuid = p.ProductGuid,
         UnityVersion = p.UnityVersion,
-        IndexState = p.LastIndexedUtc is null ? ProjectIndexState.Indexing : ProjectIndexState.Indexed,
-        IndexStatus = p.LastIndexedUtc is { } lastIndexedUtc ? $"indexed {FormatAge(now - lastIndexedUtc)} ago" : "not yet indexed",
+        // Running work wins over history: a rebuild of an indexed project is indexing. Only when
+        // nothing is running does the persisted timestamp decide, and its absence then means
+        // exactly what it says - no index has ever completed - rather than being read as progress.
+        IndexState = p switch
+        {
+            { IsIndexing: true } => ProjectIndexState.Indexing,
+            { LastIndexedUtc: null } => ProjectIndexState.NeverIndexed,
+            _ => ProjectIndexState.Indexed,
+        },
+        IndexStatus = p switch
+        {
+            { IsIndexing: true } => "indexing…",
+            { LastIndexedUtc: { } lastIndexedUtc } => $"indexed {FormatAge(now - lastIndexedUtc)} ago",
+            _ => "not yet indexed",
+        },
         NodeCount = p.NodeCount,
         EdgeCount = p.EdgeCount,
         Editor = BuildEditorInfo(p),
@@ -518,14 +587,35 @@ public static class ProjectsEndpoint
     /// decisions" note on why this does not also wire live file-watching. 400 with a resolved
     /// message when the path is blank or is not a Unity project (mirrors Program.cs's own CLI-arg
     /// adoption message).</summary>
-    public static async Task<IResult> AddAsync(ProjectService projects, Func<DateTimeOffset> utcNow, AddProjectRequest request)
+    /// <summary>
+    /// <c>POST /control/projects/add</c>. Adopts the folder and starts indexing it as an
+    /// <see cref="Operations">operation</see>, answering as soon as the project is registered.
+    ///
+    /// <para><b>It used to index before answering</b>, which made the call take as long as the walk
+    /// - measured at ~6s for a 6,800-file project, longer on the first add after launch - with no
+    /// signal of any kind while it did. Every client showed a frozen-looking dialog, and the Mac's
+    /// own onboarding copy already told users the opposite: "Indexing starts right away and
+    /// continues in the background — nothing here waits on it." This makes that sentence true.</para>
+    ///
+    /// <para><b>The response shape is additive, deliberately.</b> The row is still the body, so a
+    /// client that knows nothing of operations behaves exactly as before; the new
+    /// <see cref="ProjectRow.IndexOperationId"/> is simply ignored by anything not polling it. The
+    /// row now honestly reports <see cref="ProjectIndexState.Indexing"/> with zero counts, because
+    /// that is the truth at the moment it is sent - a caller that wants the finished numbers polls
+    /// the operation or re-reads <c>GET /control/projects</c>.</para>
+    /// </summary>
+    public static async Task<IResult> AddAsync(
+        ProjectService projects, OperationRegistry operations, Func<DateTimeOffset> utcNow, AddProjectRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Path))
         {
             return Results.Json(new { error = "Path must not be blank." }, statusCode: StatusCodes.Status400BadRequest);
         }
 
-        var project = projects.AdoptAndIndex(request.Path);
+        // Adopt only. Registration is the part that can fail for a reason the caller must hear
+        // about ("not a Unity project"), and it is fast - so it stays inside the request, and only
+        // the slow, cannot-fail-usefully part moves to the operation.
+        var project = projects.Adopt(request.Path);
         if (project is null)
         {
             return Results.Json(
@@ -533,9 +623,29 @@ public static class ProjectsEndpoint
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
+        var operationId = operations.Start("index", project.ProductGuid, report =>
+        {
+            var progress = new Progress<Hades.Core.Indexing.IndexProgressUpdate>(u => report(u.Format()));
+
+            var result = projects.RebuildGraph(project.ProductGuid, progress) ?? throw new InvalidOperationException(
+                $"Project '{project.ProductGuid}' is no longer known to Hades — it may have been removed while indexing was queued.");
+
+            return new RebuildOperationResult
+            {
+                NodesBefore = result.NodesBefore,
+                NodesAfter = result.NodesAfter,
+                Message = $"Indexed {result.NodesAfter:N0} nodes.",
+            };
+        });
+
+        // Passing the registry matters here specifically: the index operation started immediately
+        // above is running as this row is built, so the row reports Indexing - which is what this
+        // method's own doc comment promises ("the row now honestly reports Indexing with zero
+        // counts, because that is the truth at the moment it is sent"). Without it the row would
+        // say NeverIndexed, which was true a millisecond ago and is not true now.
         var appPluginVersion = PluginInstaller.AppPluginVersion();
-        var snapshot = await BuildSnapshotAsync(projects, project, appPluginVersion).ConfigureAwait(false);
-        return Results.Json(BuildRow(snapshot, utcNow()));
+        var snapshot = await BuildSnapshotAsync(projects, project, appPluginVersion, operations).ConfigureAwait(false);
+        return Results.Json(BuildRow(snapshot, utcNow()) with { IndexOperationId = operationId });
     }
 
     /// <summary><c>POST /control/projects/{id}/remove</c>. See this class's own "design
@@ -569,15 +679,17 @@ public static class ProjectsEndpoint
             return Results.Json(new { error = $"Unknown project '{productGuid}'." }, statusCode: StatusCodes.Status404NotFound);
         }
 
-        var operationId = operations.Start("rebuild", () =>
+        var operationId = operations.Start("rebuild", productGuid, report =>
         {
+            var progress = new Progress<Hades.Core.Indexing.IndexProgressUpdate>(u => report(u.Format()));
+
             // RebuildGraph itself only returns null for an unknown productGuid (see its own doc
             // comment) - already confirmed known above, but a project can still be REMOVED between
             // that check and this background work actually running. Thrown, not swallowed: the
             // OperationRegistry's own catch turns this into a Failed state with THIS message,
             // rather than a silently-Done operation with no result (see that class's own doc
             // comment on why a failure must report why, actionably).
-            var result = projects.RebuildGraph(productGuid) ?? throw new InvalidOperationException(
+            var result = projects.RebuildGraph(productGuid, progress) ?? throw new InvalidOperationException(
                 $"Project '{productGuid}' is no longer known to Hades — it may have been removed while the rebuild was queued.");
 
             // I5's last wiring step: the per-file diagnostics RebuildGraph now carries (a file
@@ -712,7 +824,12 @@ public static class ProjectsEndpoint
             return Results.Json(new ActionResult
             {
                 Success = false,
-                Message = $"Unity {version} was not found at the default Unity Hub install location ({executable}). Open this project from Unity Hub instead.",
+                // Names every place actually searched. Naming only the default sent one user to
+                // check a directory they had never installed into, while their editor sat in the
+                // custom root Hub had been pointed at.
+                Message = $"Unity {version} was not found. Looked in: "
+                    + string.Join("; ", UnityHubEditorCandidates(version))
+                    + ". Open this project from Unity Hub instead.",
             });
         }
 
@@ -725,14 +842,70 @@ public static class ProjectsEndpoint
         });
     }
 
-    /// <summary>Unity Hub's own default per-version install location on each platform - see this
-    /// class's own "design decisions" note on why this convention, rather than real Hub discovery,
-    /// is what backs <see cref="OpenInUnity"/>. The cost of the convention is higher on Windows,
-    /// where users relocate editors to another drive far more often than Mac users move
-    /// /Applications - so a miss here is expected more often, and OpenInUnity's existing
-    /// "not found at the default location, open from Unity Hub instead" message carries it.</summary>
+    /// <summary>
+    /// Where Unity Hub keeps editors for <paramref name="version"/> - the default location, and the
+    /// custom one if the user set one.
+    ///
+    /// <para><b>This used to be the default path alone</b>, and this method's own comment predicted
+    /// the failure: "users relocate editors to another drive far more often than Mac users move
+    /// /Applications - so a miss here is expected more often". It then happened on the first machine
+    /// that tried it: Unity 6000.3.2f1 lived in <c>D:\Unity Editors</c>, and Open in Unity refused
+    /// to launch an editor that was installed and working.</para>
+    ///
+    /// <para>The prediction was right; the conclusion drawn from it was not. Hub records a relocated
+    /// install root in one small JSON file, so honouring it is a file read - not the "real Hub
+    /// discovery" the design note weighed and rejected as too costly. Both roots are searched
+    /// because both can hold editors: the custom path only receives installs made after it was set,
+    /// so earlier ones stay where they were.</para>
+    /// </summary>
     internal static string UnityHubEditorExecutablePath(string version) =>
+        UnityHubEditorCandidates(version).FirstOrDefault(File.Exists)
+        ?? UnityHubEditorCandidates(version).First();
+
+    /// <summary>Every place an editor for this version could be, most conventional first. Exposed so
+    /// <see cref="OpenInUnity"/> can name all of them when it finds none - a message that lists only
+    /// the default sends someone to check a directory they never used.</summary>
+    internal static IReadOnlyList<string> UnityHubEditorCandidates(string version)
+    {
+        var roots = new List<string> { DefaultUnityHubEditorRoot() };
+        if (UnityHubSecondaryInstallPath() is { } custom) roots.Add(custom);
+
+        return [.. roots.Select(root => OperatingSystem.IsWindows()
+            ? Path.Combine(root, version, "Editor", "Unity.exe")
+            : Path.Combine(root, version, "Unity.app", "Contents", "MacOS", "Unity"))];
+    }
+
+    static string DefaultUnityHubEditorRoot() =>
         OperatingSystem.IsWindows()
-            ? $@"C:\Program Files\Unity\Hub\Editor\{version}\Editor\Unity.exe"
-            : $"/Applications/Unity/Hub/Editor/{version}/Unity.app/Contents/MacOS/Unity";
+            ? @"C:\Program Files\Unity\Hub\Editor"
+            : "/Applications/Unity/Hub/Editor";
+
+    /// <summary>
+    /// The install root Unity Hub was pointed at, or null when it was never changed. The file holds
+    /// a bare JSON string - <c>"D:\\Unity Editors"</c> - not an object.
+    /// </summary>
+    static string? UnityHubSecondaryInstallPath()
+    {
+        try
+        {
+            var config = OperatingSystem.IsWindows()
+                ? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "UnityHub", "secondaryInstallPath.json")
+                : Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    "Library", "Application Support", "UnityHub", "secondaryInstallPath.json");
+
+            if (!File.Exists(config)) return null;
+
+            var path = System.Text.Json.JsonSerializer.Deserialize<string>(File.ReadAllText(config));
+            return string.IsNullOrWhiteSpace(path) ? null : path;
+        }
+        catch (Exception)
+        {
+            // Unreadable or malformed means "no custom root recorded", never a failure to surface:
+            // the default path below still works, and Open in Unity's own message covers a miss.
+            return null;
+        }
+    }
 }

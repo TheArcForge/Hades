@@ -201,14 +201,14 @@ public sealed class ControlListener : IDisposable
         // Task 2: the menu bar's one endpoint - the smallest surface in the control API and, per
         // the plan, the reason the app exists. See SummaryEndpoint's own class doc comment for the
         // pure-resolve/async-orchestrate split; this listener only ever calls the orchestrator.
-        app.MapGet("/control/summary", () => SummaryEndpoint.BuildAsync(_projects, _leases, _utcNow));
+        app.MapGet("/control/summary", () => SummaryEndpoint.BuildAsync(_projects, _leases, _utcNow, _operations));
 
         // Task 3: the Projects surface (spec #3 §3.2) - per-project state, resolved warnings, and
         // its six actions. See ProjectsEndpoint's own class doc comment for the pure-resolve/
         // async-orchestrate split and every action's design decisions; this listener only ever
         // calls into it, same division of labour as /control/summary above.
-        app.MapGet("/control/projects", () => ProjectsEndpoint.BuildAsync(_projects, _utcNow));
-        app.MapPost("/control/projects/add", (AddProjectRequest request) => ProjectsEndpoint.AddAsync(_projects, _utcNow, request));
+        app.MapGet("/control/projects", () => ProjectsEndpoint.BuildAsync(_projects, _utcNow, _operations));
+        app.MapPost("/control/projects/add", (AddProjectRequest request) => ProjectsEndpoint.AddAsync(_projects, _operations, _utcNow, request));
         app.MapPost("/control/projects/{productGuid}/remove", (string productGuid) => ProjectsEndpoint.Remove(_projects, productGuid));
         app.MapPost("/control/projects/{productGuid}/rebuild", (string productGuid) => ProjectsEndpoint.Rebuild(_projects, _operations, productGuid));
         app.MapPost("/control/projects/{productGuid}/installPlugin", (string productGuid) => ProjectsEndpoint.InstallPluginAsync(_projects, productGuid));

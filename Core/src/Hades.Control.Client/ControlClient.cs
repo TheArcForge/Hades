@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Hades.Control.Client.Dtos;
@@ -66,7 +68,162 @@ public sealed class ControlClient
     public Task<ActionResult> ReleaseLeaseAsync(string leaseId) =>
         PostAsync<ActionResult>($"/control/leases/{Uri.EscapeDataString(leaseId)}/release");
 
+    /// <summary><c>GET /control/operations/{id}</c> - one tracked operation's current state.
+    /// An unknown id answers 404 with the server's own explanation ("It may have completed and been
+    /// pruned, or the id is wrong"), which is an ORDINARY outcome for a rebuild that finished a
+    /// while ago rather than a failure; callers tell it apart by
+    /// <see cref="ControlClientException.StatusCode"/>.</summary>
+    public Task<OperationResult> OperationAsync(string id) =>
+        GetAsync<OperationResult>($"/control/operations/{Uri.EscapeDataString(id)}");
+
+    /// <summary><c>POST /control/projects/add</c>. Answers the new <see cref="ProjectRow"/> itself -
+    /// deliberately no <c>message</c> field, because the row appearing in the list IS the feedback,
+    /// so there is no server text for a caller to display and none should be invented.</summary>
+    public Task<ProjectRow> AddProjectAsync(string path) =>
+        PostAsync<AddProjectRequest, ProjectRow>("/control/projects/add", new AddProjectRequest { Path = path });
+
+    /// <summary><c>POST /control/projects/{productGuid}/remove</c>.</summary>
+    public Task<ActionResult> RemoveProjectAsync(string productGuid) =>
+        PostAsync<ActionResult>($"/control/projects/{Uri.EscapeDataString(productGuid)}/remove");
+
+    /// <summary><c>POST /control/projects/{productGuid}/rebuild</c> - starts a rebuild and hands
+    /// back the operation id to poll with <see cref="OperationAsync"/>. Returns as soon as the
+    /// operation is registered; it does not wait for the rebuild.</summary>
+    public Task<RebuildStartedResult> RebuildProjectAsync(string productGuid) =>
+        PostAsync<RebuildStartedResult>($"/control/projects/{Uri.EscapeDataString(productGuid)}/rebuild");
+
+    /// <summary><c>POST /control/projects/{productGuid}/installPlugin</c>.
+    /// <see cref="InstallPluginResult.Message"/> already says whether a restart is needed in plain
+    /// language - render it verbatim rather than re-stating <c>needsRestart</c> as your own text.</summary>
+    public Task<InstallPluginResult> InstallPluginAsync(string productGuid) =>
+        PostAsync<InstallPluginResult>($"/control/projects/{Uri.EscapeDataString(productGuid)}/installPlugin");
+
+    /// <summary><c>POST /control/projects/{productGuid}/revealInFinder</c>. The route keeps its
+    /// macOS name on both platforms - it is the server's, and the server decides what revealing
+    /// means per platform (Explorer on Windows). A client that renamed it would be guessing.</summary>
+    public Task<ActionResult> RevealInFinderAsync(string productGuid) =>
+        PostAsync<ActionResult>($"/control/projects/{Uri.EscapeDataString(productGuid)}/revealInFinder");
+
+    /// <summary><c>POST /control/projects/{productGuid}/openInUnity</c>.</summary>
+    public Task<ActionResult> OpenInUnityAsync(string productGuid) =>
+        PostAsync<ActionResult>($"/control/projects/{Uri.EscapeDataString(productGuid)}/openInUnity");
+
+    /// <summary>
+    /// <c>GET /control/traces/sequences</c> - the primary timeline, and the only traces route that
+    /// accepts filters at all.
+    ///
+    /// Filtering happens SERVER-side: a caller must not re-filter the result, because the server
+    /// groups calls into sequences before filtering and doing it the other way round corrupts the
+    /// grouping. <paramref name="limit"/> is OMITTED when null rather than defaulted to today's 200,
+    /// so the route's own default stays the single source of truth - a client that hardcoded it
+    /// would be keeping a stale copy of a server-owned policy value.
+    /// </summary>
+    public Task<TraceSequencesResult> TracesSequencesAsync(
+        string? project = null,
+        string? tool = null,
+        string? outcome = null,
+        long? minDurationMs = null,
+        long? maxDurationMs = null,
+        int? limit = null) =>
+        GetAsync<TraceSequencesResult>(WithQuery("/control/traces/sequences",
+            ("project", project),
+            ("tool", tool),
+            ("outcome", outcome),
+            ("minDurationMs", minDurationMs?.ToString(CultureInfo.InvariantCulture)),
+            ("maxDurationMs", maxDurationMs?.ToString(CultureInfo.InvariantCulture)),
+            ("limit", limit?.ToString(CultureInfo.InvariantCulture))));
+
+    /// <summary><c>GET /control/traces/failures</c> - its own endpoint, deliberately: failures are
+    /// never to be filtered client-side out of the sequences list.</summary>
+    public Task<FailedCallsResult> TracesFailuresAsync(string? project = null, int? limit = null) =>
+        GetAsync<FailedCallsResult>(WithQuery("/control/traces/failures",
+            ("project", project),
+            ("limit", limit?.ToString(CultureInfo.InvariantCulture))));
+
+    /// <summary><c>GET /control/traces/slow</c> - likewise its own endpoint.</summary>
+    public Task<SlowToolsResult> TracesSlowAsync(string? project = null, int? limit = null) =>
+        GetAsync<SlowToolsResult>(WithQuery("/control/traces/slow",
+            ("project", project),
+            ("limit", limit?.ToString(CultureInfo.InvariantCulture))));
+
+    /// <summary>
+    /// <c>GET /control/traces/{traceId}</c> - one call's full span detail.
+    ///
+    /// "sequences", "slow" and "failures" can never be mistaken for a trace id: ASP.NET Core prefers
+    /// a literal segment over a route parameter at the same position, regardless of registration
+    /// order, so the three routes above always win. See ControlListener's own comment.
+    /// </summary>
+    public Task<TraceDetailResult> TraceDetailAsync(string traceId, string? project = null) =>
+        GetAsync<TraceDetailResult>(WithQuery(
+            $"/control/traces/{Uri.EscapeDataString(traceId)}", ("project", project)));
+
+    /// <summary><c>GET /control/memory</c> - authored documents and the proposal queue together, in
+    /// the one round trip the endpoint provides.</summary>
+    public Task<MemoryResult> MemoryAsync(string? project = null) =>
+        GetAsync<MemoryResult>(WithQuery("/control/memory", ("project", project)));
+
+    /// <summary>
+    /// <c>GET /control/memory/document</c> - one document's complete raw text.
+    ///
+    /// <paramref name="name"/> is a QUERY parameter, not a route segment - see MemoryEndpoint's own
+    /// doc comment for why. A document that does not exist answers a server error carrying its own
+    /// explanation ("'{name}' does not exist yet."), which callers render verbatim.
+    /// </summary>
+    public Task<MemoryDocumentResult> MemoryDocumentAsync(string name, string? project = null) =>
+        GetAsync<MemoryDocumentResult>(WithQuery("/control/memory/document",
+            ("project", project), ("name", name)));
+
+    /// <summary>
+    /// <c>POST /control/memory/document</c> - OVERWRITES the named document.
+    ///
+    /// There is no merge and no version history: the core writes atomically over whatever was there.
+    /// Memory is authored and irreplaceable, unlike the derived databases, so a caller must not
+    /// reach this without an explicit confirmation - see MemoryViewModel's own gate.
+    /// </summary>
+    public Task<ActionResult> WriteMemoryDocumentAsync(string name, string content, string? project = null) =>
+        PostAsync<WriteMemoryDocumentRequest, ActionResult>(
+            WithQuery("/control/memory/document", ("project", project), ("name", name)),
+            new WriteMemoryDocumentRequest { Content = content });
+
+    /// <summary><c>POST /control/memory/proposals/accept</c>. Never destructive: accepting only ever
+    /// APPENDS to the target document, creating it if it is missing.</summary>
+    public Task<ActionResult> AcceptMemoryProposalAsync(string fileName, string? project = null) =>
+        PostAsync<ActionResult>(WithQuery("/control/memory/proposals/accept",
+            ("project", project), ("fileName", fileName)));
+
+    /// <summary><c>POST /control/memory/proposals/defer</c>. Pure bookkeeping - never deletes, never
+    /// writes an authored document.</summary>
+    public Task<ActionResult> DeferMemoryProposalAsync(string fileName, string? project = null) =>
+        PostAsync<ActionResult>(WithQuery("/control/memory/proposals/defer",
+            ("project", project), ("fileName", fileName)));
+
+    /// <summary>
+    /// <c>POST /control/memory/proposals/dismiss</c> - DELETES the proposal file.
+    ///
+    /// <paramref name="confirm"/> defaults to false server-side and the endpoint refuses without it,
+    /// so this parameter is the server's own gate rather than a client-side nicety. It is deliberately
+    /// not defaulted to true here: a caller has to say so.
+    /// </summary>
+    public Task<ActionResult> DismissMemoryProposalAsync(string fileName, bool confirm, string? project = null) =>
+        PostAsync<ActionResult>(WithQuery("/control/memory/proposals/dismiss",
+            ("project", project),
+            ("fileName", fileName),
+            ("confirm", confirm ? "true" : "false")));
+
     // MARK: - Request plumbing
+
+    /// <summary>Appends only the parameters that have a value. An absent parameter and an empty one
+    /// are different things to this API - absent means "no filter", so a null is dropped rather than
+    /// sent as an empty string.</summary>
+    static string WithQuery(string path, params (string Name, string? Value)[] parameters)
+    {
+        var present = parameters
+            .Where(p => !string.IsNullOrEmpty(p.Value))
+            .Select(p => $"{Uri.EscapeDataString(p.Name)}={Uri.EscapeDataString(p.Value!)}")
+            .ToArray();
+
+        return present.Length == 0 ? path : $"{path}?{string.Join("&", present)}";
+    }
 
     async Task<TResponse> GetAsync<TResponse>(string path)
     {
@@ -77,6 +234,20 @@ public sealed class ControlClient
     async Task<TResponse> PostAsync<TResponse>(string path)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, path);
+        return await SendAsync<TResponse>(request);
+    }
+
+    async Task<TResponse> PostAsync<TRequest, TResponse>(string path, TRequest body)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, path)
+        {
+            // The DTO's own [JsonPropertyName] attributes carry the wire names, exactly as they do
+            // when decoding - no serializer options here for the same reason SendAsync uses none
+            // when reading: anything configured on one side and not the other is drift waiting to
+            // happen, and the golden fixtures pin the shape either way.
+            Content = JsonContent.Create(body),
+        };
+
         return await SendAsync<TResponse>(request);
     }
 
@@ -116,7 +287,8 @@ public sealed class ControlClient
             // status code rather than throwing a second, unrelated decoding error out of an error
             // path.
             var message = TryReadErrorMessage(body) ?? $"Request failed with status {(int)response.StatusCode}.";
-            throw new ControlClientException(ControlClientError.Server, message);
+            throw new ControlClientException(
+                ControlClientError.Server, message, innerException: null, statusCode: (int)response.StatusCode);
         }
 
         try

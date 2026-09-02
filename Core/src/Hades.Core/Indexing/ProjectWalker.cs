@@ -147,8 +147,13 @@ public static class ProjectWalker
     /// package root descends into things Unity cannot see: measured on the real project, the
     /// Hades package root contributed 36 files from its own .NET solution under Core/, 15 of
     /// them generated (AssemblyInfo.cs, GlobalUsings.g.cs). Hades models what Unity models.
+    ///
+    /// <para><b>Internal, not private, because <see cref="Observation.ProjectWatcher"/> shares it.</b>
+    /// It used to carry its own copy of these rules, and the two drifted: the watcher's was
+    /// case-SENSITIVE, so a directory named <c>library/</c> was pruned by this walker and watched by
+    /// that watcher. One definition is the fix; do not restate the list anywhere else.</para>
     /// </summary>
-    static bool IsExcludedDirectory(string name) =>
+    internal static bool IsExcludedDirectory(string name) =>
         name.StartsWith('.')
         || name.EndsWith('~')
         || ExcludedDirectoryNames.Contains(name, StringComparer.OrdinalIgnoreCase);

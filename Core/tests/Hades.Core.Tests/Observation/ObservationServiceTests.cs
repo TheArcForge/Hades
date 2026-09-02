@@ -41,18 +41,44 @@ public class ObservationServiceTests : IDisposable
         return new ProjectService(new AppPaths(_appRoot));
     }
 
-    /// <summary>Polls rather than sleeping a fixed period — a timing-sensitive test that passes
-    /// on a fast machine and fails in CI is worse than no test.</summary>
-    static async Task<bool> Eventually(Func<bool> condition, int timeoutMs = 8000)
+    /// <summary>
+    /// Waits for the service's OWN "I synced this project" signal, rather than polling the graph
+    /// until the answer appears.
+    ///
+    /// <para><b>Why, concretely.</b> Every test here used to wait by calling
+    /// <c>service.Search(...)</c> every 100 ms for up to 8 s — up to eighty SQLite opens per waiting
+    /// test, five such tests in this class, all while the other test assemblies run in parallel. A
+    /// watcher test was therefore generating a large share of the very contention that made it miss
+    /// its deadline. Measured before this change: across six consecutive full-solution runs, four
+    /// failed and this class's <see cref="ALiveChangeIsIndexedWithoutARestart"/> was in all four —
+    /// yet it passed 5 of 5 in isolation at ~400 ms, and its own assembly passed 882/882 alone. The
+    /// captured TRX showed it exhausting the full 8 s ceiling, not failing an assertion.</para>
+    ///
+    /// <para>Waiting on the event costs NOTHING while it waits: no database, no timer, no polling.
+    /// The ceiling is generous because a ceiling on an event wait is free when the test passes — it
+    /// returns the instant the signal arrives — and only spends time on a genuine failure.</para>
+    ///
+    /// <para><b>Subscribe BEFORE causing the change.</b> The signal is not replayed, so a handler
+    /// attached after the sync has already run waits for something that has already happened. Every
+    /// caller here takes this task first and only then writes the file.</para>
+    /// </summary>
+    static Task<bool> SyncOf(ObservationService observation, string productGuid, int timeoutMs = 30_000)
     {
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (DateTime.UtcNow < deadline)
+        var signalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        void OnSynced(string guid, SweepResult sweep)
         {
-            if (condition()) return true;
-            await Task.Delay(100);
+            if (guid == productGuid) signalled.TrySetResult(true);
         }
 
-        return condition();
+        observation.ProjectSynced += OnSynced;
+
+        return Task.WhenAny(signalled.Task, Task.Delay(timeoutMs))
+            .ContinueWith(finished =>
+            {
+                observation.ProjectSynced -= OnSynced;
+                return finished.Result == signalled.Task;
+            }, TaskScheduler.Default);
     }
 
     [Fact]
@@ -62,10 +88,15 @@ public class ObservationServiceTests : IDisposable
         using var observation = new ObservationService(service) { Debounce = TimeSpan.FromMilliseconds(150) };
         observation.Start();
 
+        // Subscribed before the write, so the signal cannot be missed - see SyncOf.
+        var synced = SyncOf(observation, Guid);
         Write("Assets/Added.cs", "public class AddedWhileRunning { }");
 
-        Assert.True(await Eventually(() => service.Search(Guid, "AddedWhileRunning").Count == 1),
-            "the watcher never picked up a file created while running");
+        Assert.True(await synced, "the watcher never reported syncing a file created while running");
+
+        // Asserted separately from the wait: if the sync fires but the node is absent, that is a
+        // real indexing defect and must not read as "the watcher was slow".
+        Assert.Single(service.Search(Guid, "AddedWhileRunning"));
     }
 
     [Fact]
@@ -88,10 +119,11 @@ public class ObservationServiceTests : IDisposable
         using var observation = new ObservationService(service) { Debounce = TimeSpan.FromMilliseconds(150) };
         observation.Start();
 
+        var synced = SyncOf(observation, Guid);
         File.Delete(Path.Combine(_projectRoot, "Assets/Alpha.cs"));
 
-        Assert.True(await Eventually(() => service.Search(Guid, "Alpha").Count == 0),
-            "a deleted file's nodes survived");
+        Assert.True(await synced, "the watcher never reported syncing a deletion");
+        Assert.Empty(service.Search(Guid, "Alpha"));
     }
 
     // ---------------------------------------------------------------- F14: watcher enrollment
@@ -114,10 +146,13 @@ public class ObservationServiceTests : IDisposable
 
         // Registered AFTER Start() already ran — Start()'s own KnownProjects() loop never saw it.
         service.AdoptAndIndex(_projectRoot);
+
+        var synced = SyncOf(observation, Guid);
         Write("Assets/AddedAfterAdopt.cs", "public class AddedAfterAdopt { }");
 
-        Assert.True(await Eventually(() => service.Search(Guid, "AddedAfterAdopt").Count == 1),
+        Assert.True(await synced,
             "a project adopted after Start() never got a live watcher — F14");
+        Assert.Single(service.Search(Guid, "AddedAfterAdopt"));
     }
 
     [Fact]
@@ -129,9 +164,10 @@ public class ObservationServiceTests : IDisposable
 
         // Prove the watcher is live before removing anything, so a false negative below can only
         // mean "unwatched on remove", never "was never watched at all".
+        var synced = SyncOf(observation, Guid);
         Write("Assets/BeforeRemove.cs", "public class BeforeRemove { }");
-        Assert.True(await Eventually(() => service.Search(Guid, "BeforeRemove").Count == 1),
-            "setup failure: the watcher was not live before RemoveProject");
+        Assert.True(await synced, "setup failure: the watcher was not live before RemoveProject");
+        Assert.Single(service.Search(Guid, "BeforeRemove"));
 
         service.RemoveProject(Guid);
         Write("Assets/AfterRemove.cs", "public class AfterRemove { }");
@@ -262,7 +298,7 @@ public class ObservationServiceTests : IDisposable
         var external = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(Path.Combine(external, "Runtime"));
         File.WriteAllText(Path.Combine(external, "Runtime", "Ext.cs"), "public class Ext { }");
-        Write("Packages/manifest.json", $"{{\"dependencies\":{{\"com.example.pkg\":\"file:{external}\"}}}}");
+        Write("Packages/manifest.json", ManifestJson.WithLocalPackage("com.example.pkg", external));
 
         var service = MakeProject();
         using var watcher = new ProjectWatcher(_projectRoot);
@@ -271,6 +307,54 @@ public class ObservationServiceTests : IDisposable
         Assert.True(watcher.WatchedRootCount >= 3, $"only watching {watcher.WatchedRootCount} roots");
 
         Directory.Delete(external, recursive: true);
+    }
+
+    /// <summary>
+    /// A project whose PARENT directory is named like something Unity ignores must still be watched
+    /// live. ProjectWatcher used to test the whole absolute path against the exclusion list, so a
+    /// project in D:\Build\Game — or any project under a folder called Temp, bin or Library — had
+    /// live watching silently switched off by a directory the user never chose and that was not part
+    /// of the project at all.
+    ///
+    /// The bug hid because <see cref="ProjectSweeper"/> is authoritative: correctness never broke,
+    /// only freshness, and it degraded quietly to the sweep interval with nothing to observe.
+    ///
+    /// "Build" is chosen deliberately over "Temp": it is on the exclusion list but appears in no
+    /// OS temp path, so this test fails against the old code on macOS and Linux too rather than
+    /// being an accident of Windows putting every fixture under %LOCALAPPDATA%\Temp.
+    /// </summary>
+    [Fact]
+    public async Task AProjectUnderADirectoryNamedLikeAnIgnoredOneIsStillWatchedLive()
+    {
+        var container = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var awkwardRoot = Path.Combine(container, "Build", "Game");
+        Directory.CreateDirectory(Path.Combine(awkwardRoot, "Assets"));
+        Directory.CreateDirectory(Path.Combine(awkwardRoot, "ProjectSettings"));
+        File.WriteAllText(Path.Combine(awkwardRoot, "ProjectSettings", "ProjectSettings.asset"),
+            $"  productGUID: {Guid}\n");
+        File.WriteAllText(Path.Combine(awkwardRoot, "Assets", "Alpha.cs"), "public class Alpha { }");
+
+        try
+        {
+            var service = new ProjectService(new AppPaths(_appRoot));
+            service.AdoptAndIndex(awkwardRoot);
+
+            using var observation = new ObservationService(service) { Debounce = TimeSpan.FromMilliseconds(150) };
+            observation.Start();
+
+            var synced = SyncOf(observation, Guid);
+            File.WriteAllText(Path.Combine(awkwardRoot, "Assets", "Added.cs"),
+                "public class AddedUnderAnIgnoredParent { }");
+
+            Assert.True(await synced,
+                "a project under a directory named 'Build' never got live watching — the exclusion "
+                + "list was applied to the absolute path instead of the project-relative one");
+            Assert.Single(service.Search(Guid, "AddedUnderAnIgnoredParent"));
+        }
+        finally
+        {
+            if (Directory.Exists(container)) Directory.Delete(container, recursive: true);
+        }
     }
 
     public void Dispose()

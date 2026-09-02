@@ -1,0 +1,375 @@
+<UserControl x:Class="Hades.Shell.Sections.TracesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Hades.Shell.ViewModels">
+
+    <UserControl.Resources>
+        <vm:OutcomeGlyphConverter x:Key="OutcomeGlyph" />
+        <vm:UtcMillisecondsConverter x:Key="LocalTime" />
+        <vm:ToolListConverter x:Key="ToolList" />
+        <vm:DurationConverter x:Key="Duration" />
+        <vm:OffsetConverter x:Key="Offset" />
+        <vm:SequenceCallsKindConverter x:Key="SequenceCallsKind" />
+        <vm:CallCountConverter x:Key="CallCount" />
+        <vm:DetailKindConverter x:Key="DetailKind" />
+        <vm:EmptyToCollapsedConverter x:Key="EmptyToCollapsed" />
+        <FontFamily x:Key="GlyphFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+    </UserControl.Resources>
+
+    <Grid Margin="24,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+            <TextBlock Text="Charon" FontSize="24" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <TextBlock Text="Tool call observability" Opacity="0.7" FontSize="13"
+                       VerticalAlignment="Bottom" Margin="12,0,0,4" />
+        </StackPanel>
+
+        <!-- The project picker. The traces routes refuse with a 400 when several projects are known
+             and none is given, so this is not cosmetic. Names come from the core, verbatim. -->
+        <!-- WrapPanel, not StackPanel: on a narrow window a horizontal StackPanel clips its last
+             child rather than shrinking, which silently hid the Apply button and made the filters
+             unusable at the default size. -->
+        <WrapPanel Grid.Row="1" Margin="0,0,0,10" Orientation="Horizontal">
+            <StackPanel Orientation="Horizontal" Margin="0,0,16,6">
+                <TextBlock Text="Project" VerticalAlignment="Center" Margin="0,0,8,0" />
+                <ComboBox ItemsSource="{Binding KnownProjects}"
+                          SelectedValuePath="ProductGuid"
+                          DisplayMemberPath="Name"
+                          SelectedValue="{Binding ProjectFilter, Mode=OneWay}"
+                          SelectionChanged="OnProjectChanged"
+                          MinWidth="200">
+
+                          <!-- DisplayMemberPath sets the visible text but NOT the item's accessible name, which falls
+                               back to the bound record's ToString() - so assistive technology announced the whole
+                               "ProjectRow { Name = ..., Path = ..., NodeCount = ... }" dump. Same defect and same fix
+                               as the lists; see the Sequences ListBox for the measurement. -->
+                          <ComboBox.ItemContainerStyle>
+                              <Style TargetType="ComboBoxItem">
+                                  <Setter Property="AutomationProperties.Name" Value="{Binding Name}" />
+                              </Style>
+                          </ComboBox.ItemContainerStyle>
+                          </ComboBox>
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                <TextBlock Text="Tool" VerticalAlignment="Center" Margin="0,0,8,0" />
+                <TextBox x:Name="ToolFilterBox" MinWidth="130" VerticalAlignment="Center" />
+
+                <ComboBox x:Name="OutcomeFilterBox" MinWidth="110" Margin="8,0,0,0" SelectedIndex="0">
+                    <ComboBoxItem Content="Any outcome" Tag="" />
+                    <ComboBoxItem Content="ok" Tag="ok" />
+                    <ComboBoxItem Content="error" Tag="error" />
+                </ComboBox>
+
+                <Button Content="Apply" Click="OnApplyFilters" Padding="12,3" Margin="8,0,0,0" />
+            </StackPanel>
+        </WrapPanel>
+
+        <!-- The server explaining something the shell cannot act on silently - most often "this call
+             needs a 'project' argument". Verbatim, and it clears itself once a refresh succeeds. -->
+        <Border Grid.Row="2" Padding="10,8" Margin="0,0,0,10" BorderThickness="1"
+                Visibility="{Binding RefreshError, Converter={StaticResource EmptyToCollapsed}}">
+            <TextBlock Text="{Binding RefreshError}" TextWrapping="Wrap" />
+        </Border>
+
+        <Grid Grid.Row="3">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="360" />
+            </Grid.ColumnDefinitions>
+
+            <TabControl Grid.Column="0" Margin="0,0,12,0">
+                <!-- Sequences: the primary timeline, and the only route that takes filters. -->
+                <TabItem Header="Sequences">
+                    <DockPanel>
+                        <TextBlock DockPanel.Dock="Bottom" Margin="8,6" FontSize="11" Opacity="0.7"
+                                   Text="Showing a truncated list - narrow the filters to see the rest."
+                                   Visibility="{Binding SequencesTruncated, Converter={StaticResource EmptyToCollapsed}}" />
+                        <!--
+                          Named, because the code-behind re-selects the row after every refresh: this
+                          collection is replaced wholesale each tick, so the selected instance stops
+                          being in the list and WPF drops the selection - measured at under three
+                          seconds, with the calls pane then describing a sequence no longer
+                          highlighted. See OnSequencesReplaced in TracesView.xaml.cs, and the view
+                          model's SelectedSequenceId for why binding SelectedValue cannot fix it.
+                        -->
+                        <ListBox x:Name="SequencesList"
+                                 ItemsSource="{Binding Sequences}" SelectionChanged="OnSequenceSelected"
+                                 BorderThickness="0" HorizontalContentAlignment="Stretch">
+
+                            <!--
+                              An accessible name, because without one a ListBoxItem falls back to the
+                              bound item's ToString() - and these are records, so assistive technology
+                              announced the whole "TraceSequenceRow { Id = c6af091d..., Tools = ... }"
+                              dump. Measured with UI Automation. The OUTCOME is included deliberately:
+                              it is carried visually by a glyph, which a screen reader cannot see, so
+                              without it the one fact this list exists to convey is inaudible.
+                            -->
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="AutomationProperties.Name">
+                                        <Setter.Value>
+                                            <MultiBinding StringFormat="{}{0}, {1}, {2}">
+                                                <Binding Path="Pattern" />
+                                                <Binding Path="CallCount" Converter="{StaticResource CallCount}" />
+                                                <Binding Path="Outcome" />
+                                            </MultiBinding>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" Margin="0,3">
+                                        <TextBlock Text="{Binding Outcome, Converter={StaticResource OutcomeGlyph}}"
+                                                   FontFamily="{StaticResource GlyphFont}"
+                                                   VerticalAlignment="Center" Margin="0,0,8,0" />
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Pattern}" FontSize="13" />
+                                            <TextBlock FontSize="11" Opacity="0.7">
+                                                <Run Text="{Binding StartUtcMs, Converter={StaticResource LocalTime}, Mode=OneWay}" />
+                                                <Run Text=" · " />
+                                                <Run Text="{Binding CallCount, Converter={StaticResource CallCount}, Mode=OneWay}" />
+                                                <Run Text=" · " />
+                                                <Run Text="{Binding DurationMs, Converter={StaticResource Duration}, Mode=OneWay}" />
+                                            </TextBlock>
+                                            <!--
+                                              A flat, trimmed summary of the chain - NOT an expander.
+                                              An Expander here was tried and was worse three ways: its
+                                              Header ate the underscores in every tool name (WPF reads
+                                              "_" as an access key, so hades_ping rendered "hadesping"),
+                                              it re-collapsed itself on every refresh tick because a
+                                              poll rebuilds the item containers, and it made each row
+                                              tall enough to clip. The calls live in the detail pane
+                                              instead, where there is room to show their timings.
+                                            -->
+                                            <TextBlock Text="{Binding Tools, Converter={StaticResource ToolList}}"
+                                                       FontSize="11" Opacity="0.6" TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </DockPanel>
+                </TabItem>
+
+                <!-- Its OWN endpoint, never filtered client-side out of the sequences list. -->
+                <TabItem Header="Failures">
+                    <ListBox ItemsSource="{Binding Failures}" SelectionChanged="OnFailureSelected"
+                             BorderThickness="0" HorizontalContentAlignment="Stretch">
+
+                        <!-- See the Sequences list above for why. The error text is part of the name
+                             because it is the row's substance, not a detail: a list of tool names
+                             alone tells a screen-reader user nothing about what went wrong. -->
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="AutomationProperties.Name">
+                                    <Setter.Value>
+                                        <MultiBinding StringFormat="{}{0}: {1}">
+                                            <Binding Path="Tool" />
+                                            <Binding Path="Error" />
+                                        </MultiBinding>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="0,3">
+                                    <TextBlock Text="{Binding Tool}" FontSize="13" />
+                                    <!-- The core's own error text, verbatim. -->
+                                    <TextBlock Text="{Binding Error}" FontSize="11" Opacity="0.75" TextWrapping="Wrap" />
+                                    <TextBlock Text="{Binding StartUtcMs, Converter={StaticResource LocalTime}}"
+                                               FontSize="11" Opacity="0.6" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </TabItem>
+
+                <TabItem Header="Slow tools">
+                    <ListBox ItemsSource="{Binding SlowTools}" BorderThickness="0" HorizontalContentAlignment="Stretch">
+
+                        <!-- See the Sequences list above for why. -->
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="AutomationProperties.Name">
+                                    <Setter.Value>
+                                        <MultiBinding StringFormat="{}{0}, {1}">
+                                            <Binding Path="Tool" />
+                                            <Binding Path="CallCount" Converter="{StaticResource CallCount}" />
+                                        </MultiBinding>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="0,3">
+                                    <TextBlock Text="{Binding Tool}" FontSize="13" />
+                                    <TextBlock FontSize="11" Opacity="0.7">
+                                        <Run Text="{Binding CallCount, Converter={StaticResource CallCount}, Mode=OneWay}" />
+                                        <Run Text=" · avg " />
+                                        <Run Text="{Binding AverageDurationMs, Converter={StaticResource Duration}, Mode=OneWay}" />
+                                        <Run Text=" · max " />
+                                        <Run Text="{Binding MaxDurationMs, Converter={StaticResource Duration}, Mode=OneWay}" />
+                                    </TextBlock>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </TabItem>
+            </TabControl>
+
+            <!--
+              The drill-down, two levels deep and both visible at once: which calls the selected
+              SEQUENCE contains (top), and the spans of whichever of those calls is selected
+              (bottom). Selecting a sequence no longer loads one arbitrary call's spans - see
+              TracesView.xaml.cs's OnSequenceSelected for what that used to claim.
+            -->
+            <Border Grid.Column="1" BorderThickness="1" Padding="12">
+              <DockPanel>
+
+                <!-- ================= the selected sequence's calls ================= -->
+                <Grid DockPanel.Dock="Top" Margin="0,0,0,10"
+                      Visibility="{Binding SelectedSequenceCalls, Converter={StaticResource SequenceCallsKind}, ConverterParameter=NotSelected}">
+                    <TextBlock Text="Select a sequence to see its calls." Opacity="0.6" FontSize="12" />
+                </Grid>
+
+                <TextBlock DockPanel.Dock="Top" Text="Resolving calls…" Opacity="0.6" FontSize="12" Margin="0,0,0,10"
+                           Visibility="{Binding SelectedSequenceCalls, Converter={StaticResource SequenceCallsKind}, ConverterParameter=Loading}" />
+
+                <TextBlock DockPanel.Dock="Top" Text="{Binding SelectedSequenceCalls.Message}" TextWrapping="Wrap"
+                           FontSize="12" Margin="0,0,0,10"
+                           Visibility="{Binding SelectedSequenceCalls, Converter={StaticResource SequenceCallsKind}, ConverterParameter=Failed}" />
+
+                <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10"
+                            Visibility="{Binding SelectedSequenceCalls, Converter={StaticResource SequenceCallsKind}, ConverterParameter=Loaded}">
+                    <TextBlock Text="Calls" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,4" />
+
+                    <!-- Column headers, so the two number columns are not guessable-only. "at" is the
+                         offset from the sequence's own start; "took" is the call's duration. -->
+                    <Grid Margin="0,0,0,2" Opacity="0.55">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="18" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="62" />
+                            <ColumnDefinition Width="56" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="2" Text="tool" FontSize="10" />
+                        <TextBlock Grid.Column="3" Text="at" FontSize="10" HorizontalAlignment="Right" />
+                        <TextBlock Grid.Column="4" Text="took" FontSize="10" HorizontalAlignment="Right" />
+                    </Grid>
+
+                    <ItemsControl ItemsSource="{Binding SelectedSequenceCalls.Calls}">
+                        <!-- Without this the item containers size to their content instead of the
+                             panel, so the rows end up narrower than the header above them and the
+                             "at"/"took" columns stop lining up with the numbers they label. -->
+                        <ItemsControl.ItemContainerStyle>
+                            <Style>
+                                <Setter Property="FrameworkElement.HorizontalAlignment" Value="Stretch" />
+                            </Style>
+                        </ItemsControl.ItemContainerStyle>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <!-- A Button, not a ListBoxItem: this is an action (fetch spans), and
+                                     it keeps keyboard focus and Enter working without a selection
+                                     model that would fight the sequences list's own. -->
+                                <Button Click="OnSequenceCallClicked" Tag="{Binding TraceId}"
+                                        HorizontalAlignment="Stretch"
+                                        HorizontalContentAlignment="Stretch" Padding="0,3"
+                                        Background="Transparent" BorderThickness="0" Cursor="Hand">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="18" />
+                                            <ColumnDefinition Width="16" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="62" />
+                                            <ColumnDefinition Width="56" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <TextBlock Grid.Column="0" Text="{Binding Position}" FontSize="11"
+                                                   Opacity="0.5" VerticalAlignment="Center" />
+
+                                        <!-- Per-call outcome. The reason this pane exists: a sequence
+                                             is flagged failed if ANY call failed, so the only way to
+                                             see WHICH is to show each call's own. -->
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{Binding Outcome, Converter={StaticResource OutcomeGlyph}}"
+                                                   FontFamily="{StaticResource GlyphFont}" FontSize="11"
+                                                   VerticalAlignment="Center" />
+
+                                        <TextBlock Grid.Column="2" Text="{Binding Tool}" FontSize="11"
+                                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                   Margin="2,0,4,0" />
+
+                                        <TextBlock Grid.Column="3"
+                                                   Text="{Binding OffsetMs, Converter={StaticResource Offset}}"
+                                                   FontSize="11" Opacity="0.65" HorizontalAlignment="Right"
+                                                   VerticalAlignment="Center" />
+
+                                        <TextBlock Grid.Column="4"
+                                                   Text="{Binding DurationMs, Converter={StaticResource Duration}}"
+                                                   FontSize="11" Opacity="0.8" HorizontalAlignment="Right"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <!-- ================= the selected call's spans ================= -->
+                <Grid>
+                    <TextBlock Text="Select a call to see its spans."
+                               Opacity="0.6" FontSize="12" VerticalAlignment="Top"
+                               Visibility="{Binding SelectedTraceDetail, Converter={StaticResource DetailKind}, ConverterParameter=NotSelected}" />
+
+                    <TextBlock Text="{Binding SelectedTraceDetail.Message}" TextWrapping="Wrap" FontSize="12"
+                               VerticalAlignment="Top"
+                               Visibility="{Binding SelectedTraceDetail, Converter={StaticResource DetailKind}, ConverterParameter=Failed}" />
+
+                    <DockPanel Visibility="{Binding SelectedTraceDetail, Converter={StaticResource DetailKind}, ConverterParameter=Loaded}">
+                        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                            <TextBlock Text="{Binding SelectedTraceDetail.Detail.Tool}" FontSize="15" FontWeight="SemiBold" />
+                            <TextBlock FontSize="11" Opacity="0.7">
+                                <Run Text="{Binding SelectedTraceDetail.Detail.DurationMs, Converter={StaticResource Duration}, Mode=OneWay}" />
+                            </TextBlock>
+                        </StackPanel>
+
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding SelectedTraceDetail.Detail.Spans}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,4">
+                                            <TextBlock Text="{Binding Name}" FontSize="12" />
+                                            <TextBlock FontSize="11" Opacity="0.65">
+                                                <Run Text="{Binding Kind, Mode=OneWay}" />
+                                                <Run Text=" · " />
+                                                <Run Text="{Binding DurationMs, Converter={StaticResource Duration}, Mode=OneWay}" />
+                                            </TextBlock>
+                                            <TextBlock Text="{Binding Status}" FontSize="11" Opacity="0.75"
+                                                       TextWrapping="Wrap"
+                                                       Visibility="{Binding Status, Converter={StaticResource EmptyToCollapsed}}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Grid>
+              </DockPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

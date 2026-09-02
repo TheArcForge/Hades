@@ -27,6 +27,17 @@ public static partial class ProcessLauncher
     private const uint CREATE_SUSPENDED = 0x00000004;
     private const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
 
+    /// <summary>
+    /// The core is a CONSOLE application, so without this Windows gives it a console window - and
+    /// the shell is a tray app that owns no visible window of its own, so what the user sees is a
+    /// terminal appearing from nowhere, scrolling request logs, with no obvious relationship to
+    /// Hades. It is also unclosable without killing the core: closing that window sends CTRL_CLOSE
+    /// to the process.
+    ///
+    /// The Mac side never had to think about this - launching a binary from a bundle shows nothing.
+    /// </summary>
+    private const uint CREATE_NO_WINDOW = 0x08000000;
+
     public sealed record LaunchedProcess(SafeFileHandle ProcessHandle, SafeFileHandle ThreadHandle, int ProcessId);
 
     /// <summary>
@@ -73,7 +84,7 @@ public static partial class ProcessLauncher
             lpProcessAttributes: IntPtr.Zero,
             lpThreadAttributes: IntPtr.Zero,
             bInheritHandles: false,
-            dwCreationFlags: CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+            dwCreationFlags: CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
             lpEnvironment: IntPtr.Zero,
             lpCurrentDirectory: workingDirectory,
             lpStartupInfo: ref startupInfo,
