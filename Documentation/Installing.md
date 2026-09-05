@@ -195,6 +195,53 @@ authored memory — alone. Delete that folder by hand if you want it gone.
 
 ---
 
+## Updating
+
+There is no automatic update check and no in-app updater. Hades will not tell you a new version
+exists — deliberately, for now: the core makes no outbound network calls at all, and a background
+check would be the first, which is not a change worth making silently for a product whose pitch is
+that everything runs locally. Watch the
+[releases page](https://github.com/TheArcForge/Hades/releases) instead.
+
+Updating is re-running the same command you installed with. Both installers replace an existing
+install in place.
+
+**Your data is never touched by an update.** Projects, graphs, traces and authored memory live
+outside the app bundle — `~/Library/Application Support/Hades` on macOS, `%LOCALAPPDATA%\Hades` on
+Windows — and neither installer goes near them. Nothing needs re-indexing afterwards.
+
+### macOS
+
+**Quit Hades first.** `install.sh` refuses to run while it is open, and says so:
+
+```
+error: Hades is currently running.
+  Quit it from the menu bar (or: osascript -e 'quit app "Hades"') and run this again.
+```
+
+That is not fussiness. Replacing the bundle under a running process leaves it attached to a path
+that no longer exists, which then fails in ways that look like unrelated bugs. Quit from the menu
+bar, then:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/TheArcForge/Hades/main/install.sh | bash
+```
+
+It reports `Replacing the existing Hades.app`, installs, and relaunches for you.
+
+### Windows
+
+No need to close anything first — the MSI handles a running install itself.
+
+```powershell
+irm https://raw.githubusercontent.com/TheArcForge/Hades/main/install.ps1 | iex
+```
+
+Or download the new MSI and run it. It upgrades in place rather than installing alongside, so you
+are left with one entry in **Settings → Apps**, not one per version.
+
+---
+
 ## First launch
 
 The app walks you through the Claude Code plugin command (see below), adding Unity projects, and

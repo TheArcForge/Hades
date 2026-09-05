@@ -191,6 +191,19 @@ claude --plugin-dir <your-Hades-checkout>/ClaudeCodePlugin
 
 Only needed for live-Editor actions — editing scenes and prefabs, running tests, reading the console. Hades installs it into your project's `Assets/Hades` from the app; you don't add a package or a git URL. Everything else works without it.
 
+### Updating
+
+There is no automatic update check — the app will not tell you a new version exists. Watch the
+[releases page](https://github.com/TheArcForge/Hades/releases).
+
+Updating is re-running the command you installed with; both installers replace an existing install
+in place, and neither touches your projects, graphs or authored memory. On macOS, **quit Hades from
+the menu bar first** — `install.sh` refuses to replace a running app, because swapping the bundle
+under a live process fails later in confusing ways. On Windows nothing needs closing; the MSI
+upgrades in place.
+
+Full detail, including what is deliberately left alone: [Installing → Updating](Documentation/Installing.md#updating).
+
 ### Uninstalling
 
 **macOS**
