@@ -27,7 +27,7 @@
 
 set -euo pipefail
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 SHA256="cec8fce26cdb17c712b8d3dd9e32d1a9b2f9d0b3bcfa3042d3f0d42f5672d044"
 
 REPO="TheArcForge/Hades"

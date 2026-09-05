@@ -154,6 +154,23 @@ jobs:
           # cycle: it was absent from the lockstep table, so nothing ever compared it to anything.
           VERSION="${TAG#v}"
           MANIFEST_V=$(python3 -c "import json; print(json.load(open('ClaudeCodePlugin/.claude-plugin/plugin.json'))['version'])")
+
+          # Same carve-out the lockstep job makes, and for the same reason: workflow_dispatch
+          # defaults to the placeholder "0.0.0-dryrun", which is deliberately not a release version
+          # and cannot be compared to a real version site. Without this, every dry run fails HERE -
+          # measured on run 33971038762 - and a dry run that can never go green is a dry run people
+          # stop reading, which is precisely how this file's own plugin.json drift survived a whole
+          # release cycle unnoticed. Skipped ONLY on a dry run: a real tag carrying a version that
+          # is not a plain X.Y.Z is still a mistake worth stopping for.
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "Dry run with placeholder version '$VERSION' - skipping the manifest check (plugin.json is $MANIFEST_V)."
+              exit 0
+            fi
+            echo "FAIL: tag version '$VERSION' is not a plain X.Y.Z."
+            exit 1
+          fi
+
           if [ "$MANIFEST_V" != "$VERSION" ]; then
             echo "FAIL: ClaudeCodePlugin/.claude-plugin/plugin.json is $MANIFEST_V but the tag is $VERSION."
             echo "Bump it (and every other site in ReleasePipeline.md section 2) and re-tag."

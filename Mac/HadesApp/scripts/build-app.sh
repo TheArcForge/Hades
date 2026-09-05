@@ -298,9 +298,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.0.0</string>
+    <string>2.1.0</string>
     <key>CFBundleVersion</key>
-    <string>5</string>
+    <string>6</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <!-- No Dock icon, no Cmd+Tab entry - see this script's own header and
