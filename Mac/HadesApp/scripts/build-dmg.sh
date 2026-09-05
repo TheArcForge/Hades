@@ -164,9 +164,11 @@ SIGNED_PATH=0; [[ $HAVE_SIGN -eq 1 ]] && SIGNED_PATH=1
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HADES_APP_DIR="$(dirname "$SCRIPT_DIR")"          # .../Mac/HadesApp
 
-# build-app.sh's xcodebuild -scheme resolution requires cwd == Mac/HadesApp (see that script's
-# own header + Documentation/ReleasePipeline.md); run it in a subshell so build-dmg.sh's own cwd is
-# untouched for everything that follows.
+# build-app.sh now cd's to Mac/HadesApp itself - its `xcodebuild -scheme` resolves the scheme from
+# the CURRENT DIRECTORY, so it used to fail from anywhere else, including the repo root its own
+# Usage line tells you to run it from. This subshell predates that fix and compensated for it here
+# instead; it is kept because it is still correct and still what keeps build-dmg.sh's own cwd
+# untouched for everything that follows, but it is no longer load-bearing.
 echo "== Building Hades.app ($CONFIGURATION) via build-app.sh =="
 ( cd "$HADES_APP_DIR" && "$SCRIPT_DIR/build-app.sh" "$CONFIGURATION" )
 

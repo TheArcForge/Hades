@@ -342,3 +342,93 @@ jobs:
           Get-ChildItem "$env:GITHUB_WORKSPACE\Windows\Installer\bin\*.msi" | ForEach-Object {
             Write-Host ("    {0}  ({1} MB)" -f $_.Name, [Math]::Round($_.Length / 1MB, 1))
           }
+
+  macos:
+    name: macOS DMG
+    needs: [params, lockstep]
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.params.outputs.tag }}
+      VERSION: ${{ needs.params.outputs.version }}
+      DRY_RUN: ${{ needs.params.outputs.dry_run }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          # Pinned to Core/global.json rather than a dotnet-version input, for the same reason the
+          # CI workflow pins it: Directory.Build.props sets TreatWarningsAsErrors, so a rolled-
+          # forward SDK shipping new analyzer warnings would fail the release for reasons that have
+          # nothing to do with the release.
+          global-json-file: Core/global.json
+
+      # build-app.sh publishes Hades.Server AND Hades.Cli self-contained for osx-arm64, builds the
+      # Swift shell universal (arm64 + x86_64 - the shell must start on an Intel Mac far enough to
+      # say "Apple Silicon required" rather than have the OS refuse silently), assembles the bundle
+      # and ad-hoc signs it. build-dmg.sh then stages and packages it.
+      #
+      # --allow-unsigned is passed explicitly: build-dmg.sh refuses to produce anything without
+      # either that flag or a real --sign/--notarize-profile pair, and there is no Developer ID on
+      # a GitHub runner. When one exists, this is the line that changes.
+      - name: Build the app bundle and DMG
+        run: |
+          Mac/HadesApp/scripts/build-app.sh Release
+          Mac/HadesApp/scripts/build-dmg.sh Release --allow-unsigned
+
+      - name: Checksum
+        run: |
+          # Same reason install.ps1's checksums are printed rather than pinned in advance: the DMG
+          # is NOT reproducible. Measured 2026-09-05 - two builds from an identical tree produced
+          # different digests (83e21e5b... and 99e72bfc...), because the bundle carries build
+          # timestamps and an ad-hoc signature. So the digest a maintainer pins MUST come from the
+          # artifact this run attached, never from a rebuild, or install.sh's integrity check fails
+          # for every user.
+          DMG="$(ls Mac/HadesApp/DerivedData/dmg/*.dmg | head -1)"
+          echo "Pin this into install.sh before publishing the release:"
+          echo
+          echo "    VERSION=\"${VERSION}\""
+          echo "    SHA256=\"$(shasum -a 256 "$DMG" | awk '{print $1}')\""
+
+      # Always, and before any upload to the release - the same ordering the Windows job uses and
+      # for the same reason: if attaching fails, the artifact of a long build is still recoverable
+      # from the run rather than lost.
+      - name: Upload the DMG as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hades-dmg-${{ needs.params.outputs.version }}
+          path: Mac/HadesApp/DerivedData/dmg/*.dmg
+          if-no-files-found: error
+
+      - name: Attach the DMG to the release
+        if: ${{ needs.params.outputs.dry_run != 'true' }}
+        run: |
+          # Draft-if-missing, exactly as the Windows job does. Both jobs race to create it; `gh
+          # release create` on an existing tag fails, which is why this checks first and why the
+          # upload uses --clobber. A draft is not public, so neither job can publish anything on
+          # its own - the maintainer still writes the notes and presses publish, which is also what
+          # makes pinning the checksum afterwards safe: nobody can download a stale-pinned asset
+          # from a release that is not out yet.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "No release for $TAG yet - creating it as a draft."
+            gh release create "$TAG" --draft --title "$TAG" \
+              --notes "Draft created by CI to hold the release artifacts. Replace these notes before publishing."
+          fi
+
+          DMG="$(ls Mac/HadesApp/DerivedData/dmg/*.dmg | head -1)"
+          gh release upload "$TAG" "$DMG" --clobber
+
+          # Assert rather than trust: a release page can look complete while carrying zero assets,
+          # which happened for real (ReleasePipeline.md section 8.4).
+          echo "Assets now on $TAG:"
+          gh release view "$TAG" --json assets --jq '.assets[].name' | sed 's/^/    /'
+          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -q '\.dmg$' \
+            || { echo "::error::the DMG is not attached to $TAG"; exit 1; }
+
+      - name: Dry run - what would have been attached
+        if: ${{ needs.params.outputs.dry_run == 'true' }}
+        run: |
+          echo "DRY RUN - nothing was uploaded to any release. Built:"
+          ls -lh Mac/HadesApp/DerivedData/dmg/*.dmg | awk '{print "    " $NF "  (" $5 ")"}'

@@ -59,10 +59,10 @@ instead; a test enforces that the root stays un-installable.
 All tests must pass before submitting a PR.
 
 ```bash
-# .NET core (1,939 tests; isolate with HADES_HOME=$(mktemp -d))
+# .NET core (1,961 tests on macOS; isolate with HADES_HOME=$(mktemp -d))
 dotnet test Core
 
-# Swift — run in each of Mac/HadesControl, Mac/HadesSupervision, Mac/HadesApp (70 / 14 / 211 tests)
+# Swift — run in each of Mac/HadesControl, Mac/HadesSupervision, Mac/HadesApp (81 / 14 / 213 tests)
 swift test
 
 # Unity plugin EditMode, batchmode (384 tests)
@@ -78,7 +78,7 @@ can only run on one OS carry a `Platform` trait and each platform filters out wh
 beats the early-return convention xUnit would report as *passed*:
 
 ```powershell
-# Windows — .NET core (1,939) plus the Windows shell and supervision suites (205)
+# Windows — .NET core plus the Windows shell and supervision suites (2,222 together)
 dotnet test Core --filter "Platform!=Unix"
 dotnet test Windows\HadesWindows.slnx --filter "Platform!=Unix"
 ```

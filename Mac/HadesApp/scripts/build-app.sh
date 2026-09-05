@@ -68,6 +68,17 @@ DERIVED_DATA="$HADES_APP_DIR/DerivedData"
 PRODUCTS_DIR="$DERIVED_DATA/Build/Products/$CONFIGURATION"
 APP_BUNDLE="$PRODUCTS_DIR/HadesApp.app"
 
+# `xcodebuild -scheme` with no -project/-workspace resolves the scheme from the CURRENT DIRECTORY,
+# and the schemes here are the ones Xcode auto-generates for this bare SwiftPM manifest - so it
+# only works with Mac/HadesApp as the working directory. Run from anywhere else (including the
+# repo root, which is what this script's own Usage line above tells you to do) it fails with
+# "does not contain an Xcode project, workspace or package" before building anything.
+#
+# Every other path in this script is already absolute, derived from BASH_SOURCE above, so moving
+# the working directory changes nothing else. Fixed here rather than in the Usage line because a
+# build script that only works from one directory is the surprising half of that pair.
+cd "$HADES_APP_DIR"
+
 # Universal (arm64 + x86_64), unlike the embedded .NET core below: release blocker #3 (external
 # tester report) is "arm64-only, and the current failure mode is the worst available" - a
 # drag-installed Hades.app that silently fails to launch on an Intel Mac, because macOS cannot start

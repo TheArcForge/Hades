@@ -66,7 +66,14 @@ if pgrep -f "$APP/Contents/MacOS/" >/dev/null 2>&1; then
             exit 1
         fi
     fi
-    note "stopped"
+    # Reported inside the branch, not after it. A dry run quits nothing (the guard above), so a
+    # flat "stopped" here would have it claim an action it did not take - and describing exactly
+    # what WOULD happen is the only thing --dry-run is for.
+    if [[ $DRY_RUN -eq 1 ]]; then
+        note "would quit Hades"
+    else
+        note "stopped"
+    fi
 else
     info "Hades is not running"
 fi
@@ -136,18 +143,40 @@ elif [[ -e "$CLI_LINK" ]]; then
     note "left alone  $CLI_LINK (a real file, not our symlink)"
 fi
 
-# `\~`, not a bare `~`: the REPLACEMENT half of ${var/pattern/string} undergoes tilde expansion,
-# so `~` expands straight back to $HOME and the substitution prints the full path it was written
-# to shorten. Measured with HOME=/ZZZ, where the output followed HOME rather than printing "~".
+# Strip-and-prepend rather than ${var/pattern/string}, because BOTH spellings of that substitution
+# are wrong on one bash or the other and this script has to survive `curl … | bash` on whatever
+# /bin/bash the Mac ships.
+#
+# The REPLACEMENT half of ${var/pattern/string} undergoes tilde expansion in bash 4.3+, so a bare
+# `~` expands back to $HOME and prints the full path it was written to shorten. Escaping it as `\~`
+# fixes that — and breaks bash 3.2.57, which macOS still ships as /bin/bash: there the escape is
+# not consumed and the output carries a literal backslash. Measured on this machine, 2026-09-05:
+#
+#   bash 3.2.57   ${t/#$HOME/\~}  ->  \~/Library/App     ${t/#$HOME/~}  ->  ~/Library/App
+#   bash 4.3+     ${t/#$HOME/\~}  ->  ~/Library/App      ${t/#$HOME/~}  ->  /Users/mike/Library/App
+#
+# The helper below sidesteps the whole question: ${var#prefix} has no replacement half to expand,
+# and the tilde is a plain literal in the surrounding word. Verified identical on both bashes.
+#
+# The `case` guard is not optional. A bare `~${t#$HOME}` prepends the tilde unconditionally, so a
+# TARGET that is not under $HOME - /Applications/Hades.app, the very first one - prints as
+# "~/Applications/Hades.app", which is a different path that does not exist. ${var/#pattern/...}
+# only substitutes on a prefix match; strip-and-prepend has to be told to.
+shorten_home() {
+    case "$1" in
+        "$HOME"/*) printf '~%s' "${1#$HOME}" ;;
+        *)         printf '%s' "$1" ;;
+    esac
+}
 info "Removing Hades' own files"
 removed=0
 for t in "${TARGETS[@]}"; do
     if [[ -e "$t" ]]; then
         if [[ $DRY_RUN -eq 1 ]]; then
-            note "would remove  ${t/#$HOME/\~}"
+            note "would remove  $(shorten_home "$t")"
         else
             rm -rf "$t"
-            note "removed  ${t/#$HOME/\~}"
+            note "removed  $(shorten_home "$t")"
         fi
         removed=$((removed + 1))
     fi
