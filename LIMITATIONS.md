@@ -1,6 +1,6 @@
 # Hades — Limitations
 
-Hades is honest about what it can and can't know. Most of the boundaries below are **by design** (a consequence of static analysis), not bugs — and the tools surface them in their confidence signals at runtime. This page exists so you know where the edges are before you hit them.
+Hades is honest about what it can and can't know. Most of the boundaries below are **by design** (a consequence of static analysis), not bugs. **The tools do not announce them at runtime** — there is no confidence score on a result and no health field to check, so this page is the record, not a reminder. Read it before you hit an edge rather than after.
 
 If you see a result that's wrong *outside* these boundaries, that's a real bug — please [open an issue](https://github.com/TheArcForge/Hades/issues) with a repro.
 
@@ -23,7 +23,7 @@ Use these without second-guessing them.
 
 The C# **relationship** layer is inferred by static analysis, so it's a strong lead rather than a guarantee. Confirm independently before deleting/refactoring when the answer touches:
 
-- **Reference queries** — "what references X" for scripts and prefabs. Check the `nested_by` field and the confidence block before treating an asset as unused.
+- **Reference queries** — "what references X" for scripts and prefabs. A count of zero means "nothing was found statically", never "definitely unused", and nothing in the response distinguishes the two for you. Check by hand — a prefab variant or a nested prefab can embed an asset without producing a reference edge — before treating an asset as unused.
 - **Inheritance / `implements`, dependency traces, "which prefabs use this component"** — most reliable for plain types defined under `Assets/`; less so across the cases below.
 
 ## What static analysis cannot see (by design)
@@ -71,12 +71,20 @@ Hades 2.0.0 has been field-tested on a large production Unity project, but **not
 
 ## How limitations surface at runtime
 
-You don't have to remember this page — the tools tell you. Watch for these in tool responses:
+**They don't.** This is the part worth knowing, because an earlier version of this page said the
+opposite.
 
-- `confidence` blocks with `level` (`high`/`medium`/`low`) and `result_status` (`complete`/`partial`/`uncertain`/`error`)
-- a `static_analysis_coverage: partial` factor listing blind spots (reflection, runtime/string dispatch, DI, dynamic instantiation)
-- `nested_by` on `find_references_to` — structural parents that embed an asset even when `reference_count` is 0
-- `package_scan: degraded` / `supertypes_external_unresolved` — package/external types may be unindexed
-- `scan_health` (`csharp` / `meta` / `addressables` / `packages`) — per-scanner status
+Hades v1.2 attached runtime signals to tool responses — a `confidence` block carrying `level` and
+`result_status`, a `static_analysis_coverage` factor, `nested_by` on `find_references_to`,
+`package_scan` and `scan_health`. **The current app emits none of them.** Verified against the
+source: no such field appears anywhere in `Core/src`.
 
-See [Interpreting results](Documentation/Retired/interpreting-results.md) (an archived v1.2 doc, kept for reference) for what each one means and how to act on it.
+So a v2 tool response tells you what it found and nothing about how much to trust it. A reference
+count of zero looks exactly like a reference count of zero for an asset reached only by reflection.
+That makes this page load-bearing rather than optional: the boundaries above are the ones you have
+to hold yourself, because nothing will remind you at the point of use.
+
+Restoring some form of this is a reasonable thing to want back, and the v1.2 design is written down
+— see [Interpreting results](Documentation/Retired/interpreting-results.md), an archived v1.2 doc
+kept for exactly that reason. **It describes an architecture that no longer runs. Do not read it as
+a description of the current app.**

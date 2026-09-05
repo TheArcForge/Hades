@@ -108,15 +108,15 @@ Dependency analysis that traces references through the full project graph *befor
 
 ## What to trust (and what to verify)
 
-Hades is honest about its own certainty — every result carries a confidence signal, and the tools tell you when *not* to rely on them. As a rule of thumb:
+Different answers deserve different levels of trust, and **the tools do not flag this for you** — there is no confidence score on a v2 result. The rubric below is yours to apply:
 
 | Trust level | What | How to use it |
 |---|---|---|
 | **Trust** | Structural facts: type → file, prefab/scene/material/ScriptableObject contents, asset GUID/type, direct dependencies | Use directly — these read serialized data straight from your project. |
-| **Verify** | "What references X?" for scripts and prefabs | Treat the result as a strong lead. Before concluding "unused / safe to delete," check the `nested_by` field and the confidence block. |
+| **Verify** | "What references X?" for scripts and prefabs | Treat the result as a strong lead. A count of zero means "nothing found statically", not "unused" — check by hand before deleting, since a prefab variant or nested prefab can embed an asset without producing a reference edge. |
 | **Confirm** | Inheritance / `implements` edges, C# dependency traces, "which prefabs use this component" | Confirm independently when the answer involves types from precompiled packages/DLLs, generics, or reflection/DI wiring. |
 
-Hades is a **navigator, not an oracle**: it makes understanding your project fast and structural, and it surfaces its own blind spots so you (and your agent) stay in the loop before anything destructive. See [Interpreting results](Documentation/Retired/interpreting-results.md) for what each confidence signal means, and [Limitations](LIMITATIONS.md) for the boundaries that are there by design.
+Hades is a **navigator, not an oracle**: it makes understanding your project fast and structural, and its blind spots are documented rather than signalled — so knowing them is on you and your agent, before anything destructive. See [Limitations](LIMITATIONS.md) for the boundaries that are there by design, and for what the tools do and don't tell you at runtime.
 
 ## Prerequisites
 
