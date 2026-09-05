@@ -79,4 +79,4 @@ You don't have to remember this page — the tools tell you. Watch for these in 
 - `package_scan: degraded` / `supertypes_external_unresolved` — package/external types may be unindexed
 - `scan_health` (`csharp` / `meta` / `addressables` / `packages`) — per-scanner status
 
-See [Interpreting results](Documentation/interpreting-results.md) for what each one means and how to act on it.
+See [Interpreting results](Documentation/Retired/interpreting-results.md) (an archived v1.2 doc, kept for reference) for what each one means and how to act on it.

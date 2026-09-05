@@ -6,14 +6,19 @@ architecture is retired. Hades is now a standalone macOS menu-bar app with an em
 core — see `Documentation/Architecture.md`.
 
 These files were moved here **verbatim, with zero content edits** — most on 2026-08-10, and
-`interpreting-results.md`, `comparison.md` and `performance-benchmark.md` on 2026-08-30, having
-been listed below but left behind in `Documentation/` by the first pass. They are the only
+`interpreting-results.md` and `performance-benchmark.md` on 2026-08-30, having been listed below
+but left behind in `Documentation/` by the first pass. (`comparison.md` was moved here in that
+same pass and then moved back out on 2026-09-05: it is still the README's proof link, and a file
+cannot be both the current evidence and something this README tells you not to treat as current.
+It lives at `Documentation/comparison.md` carrying a dated note that its figures were measured
+against v1.2 and a re-measurement is due.) They are the only
 written record of the v1.2 design and are kept for reference only. Nothing in this folder was
 updated to reflect the current app. Do not treat anything in this folder as current.
 
-**One exception to "verbatim":** `comparison.md`'s two recording links were repointed from
-`media/…` to `../media/…`. The recordings themselves stay in `Documentation/media/` as live
-assets, so the link had to change to keep resolving. Nothing else in this folder was touched.
+**No exceptions to "verbatim" remain.** There used to be one — `comparison.md`'s two recording
+links, repointed from `media/…` to `../media/…` so they still resolved one directory deeper. That
+file has since moved back to `Documentation/` and its links were repointed again to match, so
+nothing in this folder differs from what it said when it was retired.
 
 ## What's here
 
@@ -23,10 +28,9 @@ assets, so the link had to change to keep resolving. Nothing else in this folder
 - **`getting-started.md`, `troubleshooting.md`** — the v1.2 install and troubleshooting guides.
   Both describe the Node 20 / Unity Package Manager install path and `hub.json` — none of which
   exist in the current app.
-- **`comparison.md`, `performance-benchmark.md`** — real, measured numbers, but measured against
-  the v1.2 in-Editor system. Stale evidence for the current app. The recordings `comparison.md`
-  embeds are **not** here: they remain live at `Documentation/media/`, which is why this file's
-  links point at `../media/`.
+- **`performance-benchmark.md`** — real, measured numbers, but measured against the v1.2
+  in-Editor system. Stale evidence for the current app, and nothing live links to it.
+  (`comparison.md` was in this list until 2026-09-05 — see the note above for why it is not.)
 - **`openupm-cover.png`** — a v1.2 distribution asset. OpenUPM distribution ended with the v1.2
   Unity-package install path. (`demo.gif` is **not** here — it remains live at
   `Documentation/demo.gif` and is still the README's hero image.)

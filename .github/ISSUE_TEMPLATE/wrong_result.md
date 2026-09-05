@@ -20,7 +20,7 @@ How it differs from the result above.
 
 ## Confidence signal it reported
 
-Trust / Verify / Confirm — or paste the confidence block. See [Interpreting results](../../Documentation/interpreting-results.md) for what each signal means.
+Trust / Verify / Confirm — or paste the confidence block. See [Interpreting results](../../Documentation/Retired/interpreting-results.md) (an archived v1.2 doc, kept for reference) for what each signal means.
 
 ## What kind of thing?
 

@@ -116,7 +116,7 @@ Hades is honest about its own certainty — every result carries a confidence si
 | **Verify** | "What references X?" for scripts and prefabs | Treat the result as a strong lead. Before concluding "unused / safe to delete," check the `nested_by` field and the confidence block. |
 | **Confirm** | Inheritance / `implements` edges, C# dependency traces, "which prefabs use this component" | Confirm independently when the answer involves types from precompiled packages/DLLs, generics, or reflection/DI wiring. |
 
-Hades is a **navigator, not an oracle**: it makes understanding your project fast and structural, and it surfaces its own blind spots so you (and your agent) stay in the loop before anything destructive. See [Interpreting results](Documentation/interpreting-results.md) for what each confidence signal means, and [Limitations](LIMITATIONS.md) for the boundaries that are there by design.
+Hades is a **navigator, not an oracle**: it makes understanding your project fast and structural, and it surfaces its own blind spots so you (and your agent) stay in the loop before anything destructive. See [Interpreting results](Documentation/Retired/interpreting-results.md) for what each confidence signal means, and [Limitations](LIMITATIONS.md) for the boundaries that are there by design.
 
 ## Prerequisites
 
@@ -292,7 +292,7 @@ The app detects an existing v1.2 install (Unity package + in-Editor MCP server +
 ## Documentation
 
 - [Installing Hades](Documentation/Installing.md) — install, first launch, plugins, migration, known issues
-- [Interpreting results](Documentation/interpreting-results.md) — what each confidence signal means and how to act on it
+- [Interpreting results](Documentation/Retired/interpreting-results.md) — an archived v1.2 doc describing the confidence signals that architecture emitted
 - [Limitations](LIMITATIONS.md) — the boundaries that are there by design
 - [Architecture](Documentation/Architecture.md) — system design, data flow, component responsibilities
 - [Comparison](Documentation/comparison.md) — with and without Hades, one prompt, side by side
