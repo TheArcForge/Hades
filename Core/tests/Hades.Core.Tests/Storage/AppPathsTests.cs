@@ -6,7 +6,12 @@ public class AppPathsTests : IDisposable
 {
     string? _tempRoot;
 
-    [Fact]
+    // Unix-gated because SpecialFolder.ApplicationData is the roaming folder on Windows, while the
+    // Windows port deliberately roots storage at LocalApplicationData (machine-local, never synced)
+    // - see DefaultRootIsMachineLocalOnWindows below. That test and DefaultRootIsApplicationSupportOnMac
+    // together assert this property exactly on both platforms, so this one is now the weaker,
+    // Unix-only half of a pair rather than the general statement it reads as.
+    [Fact, Trait(PlatformTraits.Key, PlatformTraits.Unix)]
     public void DefaultRoot_IsUnderTheOsApplicationDataFolder()
     {
         var paths = new AppPaths();
@@ -20,7 +25,10 @@ public class AppPathsTests : IDisposable
     {
         var paths = new AppPaths("/tmp/hades-test");
 
-        Assert.Equal("/tmp/hades-test/projects/15c012f27331e49229cef25e74537816",
+        // Expectations are composed with Path.Combine rather than written as "/"-joined literals:
+        // AppPaths builds its paths that way, so on Windows it correctly yields "\" and a literal
+        // would be asserting the separator rather than the layout this test is actually about.
+        Assert.Equal(Path.Combine("/tmp/hades-test", "projects", "15c012f27331e49229cef25e74537816"),
             paths.ProjectDir("15c012f27331e49229cef25e74537816"));
     }
 
@@ -29,7 +37,7 @@ public class AppPathsTests : IDisposable
     {
         var paths = new AppPaths("/tmp/hades-test");
 
-        Assert.Equal("/tmp/hades-test/projects/abc/graph.db", paths.GraphDb("abc"));
+        Assert.Equal(Path.Combine("/tmp/hades-test", "projects", "abc", "graph.db"), paths.GraphDb("abc"));
     }
 
     [Fact]
@@ -37,7 +45,7 @@ public class AppPathsTests : IDisposable
     {
         var paths = new AppPaths("/tmp/hades-test");
 
-        Assert.Equal("/tmp/hades-test/projects/abc/memory-index.db", paths.MemoryIndexPath("abc"));
+        Assert.Equal(Path.Combine("/tmp/hades-test", "projects", "abc", "memory-index.db"), paths.MemoryIndexPath("abc"));
     }
 
     [Fact]
@@ -47,7 +55,7 @@ public class AppPathsTests : IDisposable
 
         // App-level, not per-project: one listener authenticates editors for every known
         // project, so the token lives beside config.json, not inside projects/<guid>/.
-        Assert.Equal("/tmp/hades-test/editor.token", paths.EditorTokenFile);
+        Assert.Equal(Path.Combine("/tmp/hades-test", "editor.token"), paths.EditorTokenFile);
     }
 
     [Fact]
@@ -57,7 +65,7 @@ public class AppPathsTests : IDisposable
 
         // Its own file, deliberately separate from EditorTokenFile - see AppPaths.ControlTokenFile's
         // own doc comment for why a shared discovery file would be the wrong call here.
-        Assert.Equal("/tmp/hades-test/control.token", paths.ControlTokenFile);
+        Assert.Equal(Path.Combine("/tmp/hades-test", "control.token"), paths.ControlTokenFile);
     }
 
     [Theory]
@@ -77,6 +85,24 @@ public class AppPathsTests : IDisposable
         var paths = new AppPaths("/tmp/hades-test");
 
         Assert.Throws<ArgumentException>(() => paths.ProjectDir(productGuid!));
+    }
+
+    [Fact, Trait(PlatformTraits.Key, PlatformTraits.Windows)]
+    public void DefaultRootIsMachineLocalOnWindows()
+    {
+        var expected = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Hades");
+
+        Assert.Equal(expected, new AppPaths().Root);
+    }
+
+    [Fact, Trait(PlatformTraits.Key, PlatformTraits.Unix)]
+    public void DefaultRootIsApplicationSupportOnMac()
+    {
+        var expected = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Hades");
+
+        Assert.Equal(expected, new AppPaths().Root);
     }
 
     [Fact]

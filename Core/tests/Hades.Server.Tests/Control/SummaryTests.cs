@@ -194,20 +194,67 @@ public sealed class SummaryResolveTests
         Assert.Equal(ControlSeverity.Warning, row.Severity);
     }
 
+    /// <summary>
+    /// THIS TEST USED TO ASSERT THE ICON WAS <c>Indexing</c> HERE, and that assertion was the bug -
+    /// it is the menu-bar/tray half of the same defect ProjectsResolveTests documents. A null
+    /// <c>LastIndexedUtc</c> was read as "an index is in progress", but the timestamp was
+    /// per-process, so after any restart every project looked like it was indexing forever: a blue
+    /// tray icon and "Indexing X…" as the headline, on a project with a complete graph and no
+    /// operation running.
+    ///
+    /// Nothing is attached and nothing is running, so this is simply idle. The ROW still says "not
+    /// yet indexed", which is both true and the useful thing to say.
+    /// </summary>
     [Fact]
-    public void NeverIndexed_RowStatusIsExactLiteral_AndIconStateIsIndexing()
+    public void NeverIndexedAndNothingRunning_IsIdle_NotIndexing()
     {
         var snapshot = new ProjectSnapshot
         {
             Name = "Hades-Unity-Client", ProductGuid = "guid-hades-unity-client", PathExists = true, Attached = false, Busy = false,
-            LastIndexedUtc = null,
+            LastIndexedUtc = null, IsIndexing = false,
+        };
+
+        var result = SummaryEndpoint.Resolve([snapshot], Now);
+
+        Assert.Equal(ControlIconState.Idle, result.IconState);
+        Assert.Equal("No Unity Editor attached", result.Headline);
+        Assert.Equal("No Editor attached · not yet indexed", Assert.Single(result.Rows).Status);
+    }
+
+    [Fact]
+    public void IndexActuallyRunning_RowStatusIsExactLiteral_AndIconStateIsIndexing()
+    {
+        var snapshot = new ProjectSnapshot
+        {
+            Name = "Hades-Unity-Client", ProductGuid = "guid-hades-unity-client", PathExists = true, Attached = false, Busy = false,
+            LastIndexedUtc = null, IsIndexing = true,
         };
 
         var result = SummaryEndpoint.Resolve([snapshot], Now);
 
         Assert.Equal(ControlIconState.Indexing, result.IconState);
         Assert.Equal("Indexing Hades-Unity-Client…", result.Headline);
-        Assert.Equal("No Editor attached · not yet indexed", Assert.Single(result.Rows).Status);
+        Assert.Equal("No Editor attached · indexing…", Assert.Single(result.Rows).Status);
+    }
+
+    /// <summary>
+    /// A REBUILD of an already-indexed project must still raise the indexing icon. The previous
+    /// derivation could not express this at all: a non-null timestamp meant "indexed", so the one
+    /// case where the user most wants a progress signal - they just pressed Rebuild - showed none.
+    /// </summary>
+    [Fact]
+    public void RebuildOfAnIndexedProject_IconStateIsIndexing()
+    {
+        var snapshot = new ProjectSnapshot
+        {
+            Name = "Hades-Unity-Client", ProductGuid = "guid-hades-unity-client", PathExists = true, Attached = false, Busy = false,
+            LastIndexedUtc = Now.AddMinutes(-5), IsIndexing = true,
+        };
+
+        var result = SummaryEndpoint.Resolve([snapshot], Now);
+
+        Assert.Equal(ControlIconState.Indexing, result.IconState);
+        Assert.Equal("Indexing Hades-Unity-Client…", result.Headline);
     }
 
     [Fact]
@@ -273,20 +320,30 @@ public sealed class SummaryResolveTests
 
     public static IEnumerable<object[]> SingleConditionCases()
     {
-        // (pathMissing, hasLease, neverIndexed, attached) -> expected iconState, ALL OTHER
-        // projects absent - proves each condition's own outcome in isolation. The cross-project
-        // Facts below prove the RANKING when two conditions land on two different projects at once.
-        yield return new object[] { true, false, false, false, ControlIconState.Error };
-        yield return new object[] { false, true, false, false, ControlIconState.LeaseHeld };
-        yield return new object[] { false, false, true, false, ControlIconState.Indexing };
-        yield return new object[] { false, false, false, true, ControlIconState.Attached };
-        yield return new object[] { false, false, false, false, ControlIconState.Idle };
+        // (pathMissing, hasLease, indexing, attached, neverIndexed) -> expected iconState, ALL
+        // OTHER projects absent - proves each condition's own outcome in isolation. The
+        // cross-project Facts below prove the RANKING when two land on two projects at once.
+        //
+        // `indexing` and `neverIndexed` USED TO BE ONE FLAG. They are separate here because they
+        // are separate facts with opposite outcomes: work in flight raises the indexing icon, and a
+        // project that has simply never been built raises nothing at all.
+        yield return new object[] { true, false, false, false, false, ControlIconState.Error };
+        yield return new object[] { false, true, false, false, false, ControlIconState.LeaseHeld };
+        yield return new object[] { false, false, true, false, false, ControlIconState.Indexing };
+        yield return new object[] { false, false, false, true, false, ControlIconState.Attached };
+        yield return new object[] { false, false, false, false, false, ControlIconState.Idle };
+
+        // The case the old shape could not express, and the bug: never indexed, nothing running.
+        yield return new object[] { false, false, false, false, true, ControlIconState.Idle };
+
+        // ...and its mirror: indexing a project that HAS been indexed before (a rebuild).
+        yield return new object[] { false, false, true, false, false, ControlIconState.Indexing };
     }
 
     [Theory]
     [MemberData(nameof(SingleConditionCases))]
     public void SingleConditionOnOneProject_ProducesTheExpectedIconState(
-        bool pathMissing, bool hasLease, bool neverIndexed, bool attached, ControlIconState expected)
+        bool pathMissing, bool hasLease, bool indexing, bool attached, bool neverIndexed, ControlIconState expected)
     {
         var snapshot = new ProjectSnapshot
         {
@@ -296,6 +353,7 @@ public sealed class SummaryResolveTests
             Attached = attached,
             Busy = false,
             LastIndexedUtc = neverIndexed ? null : Now.AddMinutes(-5),
+            IsIndexing = indexing,
             Lease = hasLease ? Lease(Now.AddSeconds(-1), Now.AddSeconds(29)) : null,
         };
 
@@ -349,7 +407,10 @@ public sealed class SummaryResolveTests
     [Fact]
     public void IndexingOnOneProject_OutranksAttachedOnAnother()
     {
-        var indexing = new ProjectSnapshot { Name = "Indexing", ProductGuid = "guid-indexing", PathExists = true, Attached = false, Busy = false, LastIndexedUtc = null };
+        // IsIndexing, not a null timestamp. The precedence being tested is real; the way this test
+        // used to construct "an indexing project" was not - it built one that had merely never been
+        // indexed, which is now (correctly) idle.
+        var indexing = new ProjectSnapshot { Name = "Indexing", ProductGuid = "guid-indexing", PathExists = true, Attached = false, Busy = false, LastIndexedUtc = null, IsIndexing = true };
         var attached = new ProjectSnapshot { Name = "Attached", ProductGuid = "guid-attached", PathExists = true, Attached = true, Busy = false, LastIndexedUtc = Now.AddMinutes(-1) };
 
         var result = SummaryEndpoint.Resolve([indexing, attached], Now);
@@ -422,7 +483,7 @@ public sealed class SummaryBuildAsyncTests : IDisposable
 
         _projects = new ProjectService(new AppPaths(_appRoot), _editorRegistry)
         {
-            CharonProbeTimeout = TimeSpan.FromMilliseconds(300),
+            CharonProbeTimeout = TimeSpan.FromSeconds(5),
         };
     }
 
@@ -497,7 +558,7 @@ public sealed class SummaryBuildAsyncTests : IDisposable
         var responder = RespondToNextProbeAsync(unityReads, unityWrites);
 
         var result = await SummaryEndpoint.BuildAsync(_projects, new LeaseRegistry(), () => DateTimeOffset.UtcNow);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal(ControlIconState.Attached, result.IconState);
         var row = Assert.Single(result.Rows);
@@ -523,14 +584,61 @@ public sealed class SummaryBuildAsyncTests : IDisposable
     }
 
     [Fact]
-    public async Task NeverIndexed_IsIndexingIconState()
+    public async Task NeverIndexedWithNothingRunning_IsIdle_NotIndexing()
     {
         _projects.Adopt(_projectRoot); // registered, never indexed
 
-        var result = await SummaryEndpoint.BuildAsync(_projects, new LeaseRegistry(), () => DateTimeOffset.UtcNow);
+        var result = await SummaryEndpoint.BuildAsync(
+            _projects, new LeaseRegistry(), () => DateTimeOffset.UtcNow, new OperationRegistry());
+
+        Assert.Equal(ControlIconState.Idle, result.IconState);
+        Assert.Contains("not yet indexed", Assert.Single(result.Rows).Status);
+    }
+
+    /// <summary>
+    /// THE WIRING TEST for <see cref="SummaryEndpoint.BuildAsync"/>'s optional
+    /// <c>operations</c> parameter. That default exists so the many fixture tests here can describe
+    /// projects at rest without ceremony, but a default is also how a parameter quietly stops being
+    /// passed - and if it were dropped from the route, the indexing icon would simply never appear
+    /// again and every test above would still be green. This is the one that would not be.
+    /// </summary>
+    [Fact]
+    public async Task IndexOperationRunningForTheProject_IsIndexingIconState()
+    {
+        _projects.Adopt(_projectRoot);
+
+        var operations = new OperationRegistry();
+        var gate = new TaskCompletionSource();
+        var id = operations.Start("index", ProjectGuid, _ => { gate.Task.GetAwaiter().GetResult(); return "unused"; });
+
+        var result = await SummaryEndpoint.BuildAsync(
+            _projects, new LeaseRegistry(), () => DateTimeOffset.UtcNow, operations);
 
         Assert.Equal(ControlIconState.Indexing, result.IconState);
-        Assert.Contains("not yet indexed", Assert.Single(result.Rows).Status);
+        Assert.Contains("indexing…", Assert.Single(result.Rows).Status);
+
+        gate.SetResult();
+        await operations.WhenComplete(id);
+    }
+
+    /// <summary>An operation for a DIFFERENT project must not make this one look busy - the same
+    /// per-subject guarantee OperationRegistryTests pins, proven here through the real endpoint.</summary>
+    [Fact]
+    public async Task IndexOperationRunningForAnotherProject_LeavesThisOneIdle()
+    {
+        _projects.Adopt(_projectRoot);
+
+        var operations = new OperationRegistry();
+        var gate = new TaskCompletionSource();
+        var id = operations.Start("index", "some-other-projects-guid", _ => { gate.Task.GetAwaiter().GetResult(); return "unused"; });
+
+        var result = await SummaryEndpoint.BuildAsync(
+            _projects, new LeaseRegistry(), () => DateTimeOffset.UtcNow, operations);
+
+        Assert.Equal(ControlIconState.Idle, result.IconState);
+
+        gate.SetResult();
+        await operations.WhenComplete(id);
     }
 
     [Fact]

@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <!-- ArchitectureTests.cs: reads assembly metadata without loading anything for execution. -->
+    <PackageReference Include="System.Reflection.MetadataLoadContext" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The ONLY project in this repo sanctioned to reference both sides of the client/core
+         boundary. It does so to PROVE the two agree (a reflection conformance test) and to
+         generate a golden fixture corpus from the real server types - never to let the client
+         borrow server code. -->
+    <ProjectReference Include="..\..\src\Hades.Control.Client\Hades.Control.Client.csproj" />
+    <ProjectReference Include="..\..\src\Hades.Server\Hades.Server.csproj" />
+    <!-- ArchitectureTests.cs inspects the CLI's own built assembly (hades.dll - see
+         Hades.Cli.csproj's <AssemblyName>) via MetadataLoadContext. Referencing it here is just to
+         get it copied into this test project's output directory; the test never calls into it. -->
+    <ProjectReference Include="..\..\src\Hades.Cli\Hades.Cli.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -16,22 +16,79 @@ on:
         default: "0.0.0-dryrun"
 
 jobs:
-  release:
-    name: Release Plugin
+  # TAG and DRY_RUN are decided ONCE, here, and consumed by every job below. They used to be
+  # computed inside the release job, which was correct while that was the only job - but the
+  # lockstep gate and the Windows build both need them now, and three copies of this `if` would be
+  # three places for a dry run to quietly stop being dry.
+  params:
+    name: Determine release parameters
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.decide.outputs.tag }}
+      version: ${{ steps.decide.outputs.version }}
+      dry_run: ${{ steps.decide.outputs.dry_run }}
+    steps:
+      - id: decide
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="v${{ inputs.version }}"
+            DRY="${{ inputs.dry_run }}"
+          else
+            TAG="${{ github.ref_name }}"
+            DRY="false"
+          fi
+          {
+            echo "tag=$TAG"
+            echo "version=${TAG#v}"
+            echo "dry_run=$DRY"
+          } >> "$GITHUB_OUTPUT"
+          echo "Triggered by: ${{ github.event_name }} -> tag $TAG, dry run $DRY"
+
+  # Runs BEFORE anything is built, pushed or uploaded, which is the entire point: a version
+  # mismatch discovered after the plugin repo has been updated is a mismatch that already shipped.
+  # This generalises the plugin.json-vs-tag check further down to every site in
+  # ReleasePipeline.md section 2 - that single-file check exists because plugin.json sat at 0.1.0
+  # for a whole release cycle, and the other rows have exactly the same failure mode.
+  lockstep:
+    name: Version lockstep
+    needs: params
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Determine release parameters
+      - name: Check every version site agrees with the tag
+        env:
+          VERSION: ${{ needs.params.outputs.version }}
+          DRY_RUN: ${{ needs.params.outputs.dry_run }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "TAG=v${{ inputs.version }}" >> "$GITHUB_ENV"
-            echo "DRY_RUN=${{ inputs.dry_run }}" >> "$GITHUB_ENV"
-          else
-            echo "TAG=${{ github.ref_name }}" >> "$GITHUB_ENV"
-            echo "DRY_RUN=false" >> "$GITHUB_ENV"
+          # workflow_dispatch defaults to "0.0.0-dryrun", which is deliberately not a release
+          # version and cannot be compared to anything. Skip rather than fail - but ONLY on a dry
+          # run, because a real tag that is not a plain X.Y.Z is a mistake worth stopping for.
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "Dry run with placeholder version '$VERSION' - skipping the lockstep gate."
+              exit 0
+            fi
+            echo "FAIL: tag version '$VERSION' is not a plain X.Y.Z."
+            exit 1
           fi
-          echo "Triggered by: ${{ github.event_name }}"
+          # --skip-checksums, and the reason is structural rather than convenience: the Windows
+          # MSIs are built by THIS run, and an MSI is not byte-reproducible (fresh package code and
+          # cab timestamps per build), so their checksums cannot be pinned before the tag exists.
+          # Enforcing them here would deadlock the release. The checksums are held to account by
+          # the run the maintainer does WITHOUT this flag, before publishing - ReleasePipeline.md
+          # sections 8.4 and 9.
+          bash scripts/check-version-lockstep.sh "$VERSION" --skip-checksums
+
+  release:
+    name: Release Plugin
+    needs: [params, lockstep]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.params.outputs.tag }}
+      DRY_RUN: ${{ needs.params.outputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Sync plugin to output directory
         run: bash scripts/sync-plugin.sh ./plugin-output
@@ -97,6 +154,23 @@ jobs:
           # cycle: it was absent from the lockstep table, so nothing ever compared it to anything.
           VERSION="${TAG#v}"
           MANIFEST_V=$(python3 -c "import json; print(json.load(open('ClaudeCodePlugin/.claude-plugin/plugin.json'))['version'])")
+
+          # Same carve-out the lockstep job makes, and for the same reason: workflow_dispatch
+          # defaults to the placeholder "0.0.0-dryrun", which is deliberately not a release version
+          # and cannot be compared to a real version site. Without this, every dry run fails HERE -
+          # measured on run 33971038762 - and a dry run that can never go green is a dry run people
+          # stop reading, which is precisely how this file's own plugin.json drift survived a whole
+          # release cycle unnoticed. Skipped ONLY on a dry run: a real tag carrying a version that
+          # is not a plain X.Y.Z is still a mistake worth stopping for.
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "Dry run with placeholder version '$VERSION' - skipping the manifest check (plugin.json is $MANIFEST_V)."
+              exit 0
+            fi
+            echo "FAIL: tag version '$VERSION' is not a plain X.Y.Z."
+            exit 1
+          fi
+
           if [ "$MANIFEST_V" != "$VERSION" ]; then
             echo "FAIL: ClaudeCodePlugin/.claude-plugin/plugin.json is $MANIFEST_V but the tag is $VERSION."
             echo "Bump it (and every other site in ReleasePipeline.md section 2) and re-tag."
@@ -154,3 +228,224 @@ jobs:
           else
             git push origin main
           fi
+
+  # Builds BOTH Windows MSIs and attaches them to the release.
+  #
+  # Building and attaching from CI is the point. The manual attach step is precisely where the
+  # documented mistakes happened - a release published to the wrong repo, and a release page that
+  # looked complete with zero assets (section 8.4). Two artifacts attached by hand doubles that
+  # exposure; this removes it.
+  #
+  # Runs in PARALLEL with `release`, not after it: both only need the lockstep gate to have passed,
+  # and making the MSIs wait on a plugin-repo push would couple two things that have nothing to do
+  # with each other.
+  windows:
+    name: Windows MSIs
+    needs: [params, lockstep]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.params.outputs.tag }}
+      VERSION: ${{ needs.params.outputs.version }}
+      DRY_RUN: ${{ needs.params.outputs.dry_run }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 7.0.0
+          # WiX 7 refuses to run at all - even `--help` - until its licence is accepted. This
+          # records the acceptance the maintainer already made on their own machine; it is not a
+          # decision taken here. The Open Source Maintenance Fee applies only to users with annual
+          # gross revenue over US$10,000, so it is free for this project.
+          wix eula accept wix7
+
+      - name: Build both MSIs
+        shell: pwsh
+        run: |
+          $v = $env:VERSION
+          if ($v -notmatch '^\d+\.\d+\.\d+$') {
+            # An MSI ProductVersion must be numeric, so "0.0.0-dryrun" cannot be built as-is.
+            if ($env:DRY_RUN -ne 'true') { throw "Refusing to build a release from version '$v'." }
+            Write-Host "Dry run: building 0.0.0 in place of '$v' (MSI ProductVersion must be numeric)."
+            $v = '0.0.0'
+          }
+          "MSI_VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          foreach ($rid in 'win-x64', 'win-arm64') {
+            Write-Host "::group::$rid"
+            & "$env:GITHUB_WORKSPACE\Windows\Installer\build-msi.ps1" -Rid $rid -Version $v
+            if ($LASTEXITCODE -ne 0) { throw "build-msi.ps1 failed for $rid" }
+            Write-Host "::endgroup::"
+          }
+
+          # build-msi.ps1 already asserts the MSI's File table matches the staged file count, so a
+          # silently-empty payload cannot reach here. This is the cruder second check: both files
+          # exist and neither is trivially small.
+          Get-ChildItem "$env:GITHUB_WORKSPACE\Windows\Installer\bin\*.msi" | ForEach-Object {
+            "{0}  {1} MB" -f $_.Name, [Math]::Round($_.Length / 1MB, 1)
+            if ($_.Length -lt 10MB) { throw "$($_.Name) is implausibly small" }
+          }
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          # Printed in a form that can be pasted straight into install.ps1. These CANNOT be pinned
+          # before this run exists - see the lockstep job's own note - so this output is how the
+          # maintainer gets them.
+          Write-Host "Pin these into install.ps1 `$Sha256 before publishing the release:"
+          Write-Host ""
+          Get-ChildItem "$env:GITHUB_WORKSPACE\Windows\Installer\bin\*.msi" | ForEach-Object {
+            $rid = if ($_.Name -match 'win-arm64') { 'win-arm64' } else { 'win-x64' }
+            $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            Write-Host ("    '{0}' = '{1}'" -f $rid, $h)
+          }
+
+      # Always, and before any upload to the release. If attaching fails - the release does not
+      # exist yet, the token lacks scope, the CDN is unhappy - the artifacts of a 15-minute build
+      # are still recoverable from the run rather than lost.
+      - name: Upload MSIs as workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hades-msi-${{ env.MSI_VERSION }}
+          path: Windows/Installer/bin/*.msi
+          if-no-files-found: error
+
+      - name: Attach MSIs to the release
+        if: ${{ needs.params.outputs.dry_run != 'true' }}
+        shell: pwsh
+        run: |
+          # The release does not exist at tag-push time: section 8.4 has the maintainer create it
+          # by hand afterwards, so `gh release upload` alone would fail. Create it as a DRAFT if it
+          # is missing - a draft is not public, so this cannot publish anything on its own, and the
+          # maintainer still writes the notes and presses publish. What it removes is the manual
+          # attach, which is the step the documented mistakes actually happened in.
+          gh release view "$env:TAG" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "No release for $env:TAG yet - creating it as a draft."
+            gh release create "$env:TAG" --draft --title "$env:TAG" --notes "Draft created by CI to hold the Windows MSIs. Replace these notes before publishing."
+            if ($LASTEXITCODE -ne 0) { throw "could not create a draft release for $env:TAG" }
+          }
+
+          # --clobber so re-running the workflow replaces the assets instead of erroring.
+          gh release upload "$env:TAG" (Get-ChildItem "$env:GITHUB_WORKSPACE\Windows\Installer\bin\*.msi" | ForEach-Object { $_.FullName }) --clobber
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
+
+          # A release and its assets are separate objects, and a release page can look complete
+          # while carrying zero assets - that happened for real (section 8.4). Assert, do not trust.
+          $assets = gh release view "$env:TAG" --json assets --jq '.assets[].name'
+          Write-Host "Assets now on $($env:TAG):"
+          $assets | ForEach-Object { Write-Host "    $_" }
+          foreach ($rid in 'win-x64', 'win-arm64') {
+            # `-not ($assets -match $rid)`, NOT `$assets -notmatch $rid`. Against an ARRAY the
+            # match operators filter rather than test: with both MSIs attached, `-notmatch 'win-x64'`
+            # returns the arm64 asset - a non-empty array, which is truthy - so the naive form
+            # throws on exactly the successful case it is meant to pass.
+            if (-not ($assets -match $rid)) { throw "$rid MSI is not attached to $env:TAG" }
+          }
+
+      - name: Dry run - what would have been attached
+        if: ${{ needs.params.outputs.dry_run == 'true' }}
+        shell: pwsh
+        run: |
+          Write-Host "DRY RUN - nothing was uploaded to any release. Built:"
+          Get-ChildItem "$env:GITHUB_WORKSPACE\Windows\Installer\bin\*.msi" | ForEach-Object {
+            Write-Host ("    {0}  ({1} MB)" -f $_.Name, [Math]::Round($_.Length / 1MB, 1))
+          }
+
+  macos:
+    name: macOS DMG
+    needs: [params, lockstep]
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.params.outputs.tag }}
+      VERSION: ${{ needs.params.outputs.version }}
+      DRY_RUN: ${{ needs.params.outputs.dry_run }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          # Pinned to Core/global.json rather than a dotnet-version input, for the same reason the
+          # CI workflow pins it: Directory.Build.props sets TreatWarningsAsErrors, so a rolled-
+          # forward SDK shipping new analyzer warnings would fail the release for reasons that have
+          # nothing to do with the release.
+          global-json-file: Core/global.json
+
+      # build-app.sh publishes Hades.Server AND Hades.Cli self-contained for osx-arm64, builds the
+      # Swift shell universal (arm64 + x86_64 - the shell must start on an Intel Mac far enough to
+      # say "Apple Silicon required" rather than have the OS refuse silently), assembles the bundle
+      # and ad-hoc signs it. build-dmg.sh then stages and packages it.
+      #
+      # --allow-unsigned is passed explicitly: build-dmg.sh refuses to produce anything without
+      # either that flag or a real --sign/--notarize-profile pair, and there is no Developer ID on
+      # a GitHub runner. When one exists, this is the line that changes.
+      - name: Build the app bundle and DMG
+        run: |
+          Mac/HadesApp/scripts/build-app.sh Release
+          Mac/HadesApp/scripts/build-dmg.sh Release --allow-unsigned
+
+      - name: Checksum
+        run: |
+          # Same reason install.ps1's checksums are printed rather than pinned in advance: the DMG
+          # is NOT reproducible. Measured 2026-09-05 - two builds from an identical tree produced
+          # different digests (83e21e5b... and 99e72bfc...), because the bundle carries build
+          # timestamps and an ad-hoc signature. So the digest a maintainer pins MUST come from the
+          # artifact this run attached, never from a rebuild, or install.sh's integrity check fails
+          # for every user.
+          DMG="$(ls Mac/HadesApp/DerivedData/dmg/*.dmg | head -1)"
+          echo "Pin this into install.sh before publishing the release:"
+          echo
+          echo "    VERSION=\"${VERSION}\""
+          echo "    SHA256=\"$(shasum -a 256 "$DMG" | awk '{print $1}')\""
+
+      # Always, and before any upload to the release - the same ordering the Windows job uses and
+      # for the same reason: if attaching fails, the artifact of a long build is still recoverable
+      # from the run rather than lost.
+      - name: Upload the DMG as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hades-dmg-${{ needs.params.outputs.version }}
+          path: Mac/HadesApp/DerivedData/dmg/*.dmg
+          if-no-files-found: error
+
+      - name: Attach the DMG to the release
+        if: ${{ needs.params.outputs.dry_run != 'true' }}
+        run: |
+          # Draft-if-missing, exactly as the Windows job does. Both jobs race to create it; `gh
+          # release create` on an existing tag fails, which is why this checks first and why the
+          # upload uses --clobber. A draft is not public, so neither job can publish anything on
+          # its own - the maintainer still writes the notes and presses publish, which is also what
+          # makes pinning the checksum afterwards safe: nobody can download a stale-pinned asset
+          # from a release that is not out yet.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "No release for $TAG yet - creating it as a draft."
+            gh release create "$TAG" --draft --title "$TAG" \
+              --notes "Draft created by CI to hold the release artifacts. Replace these notes before publishing."
+          fi
+
+          DMG="$(ls Mac/HadesApp/DerivedData/dmg/*.dmg | head -1)"
+          gh release upload "$TAG" "$DMG" --clobber
+
+          # Assert rather than trust: a release page can look complete while carrying zero assets,
+          # which happened for real (ReleasePipeline.md section 8.4).
+          echo "Assets now on $TAG:"
+          gh release view "$TAG" --json assets --jq '.assets[].name' | sed 's/^/    /'
+          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -q '\.dmg$' \
+            || { echo "::error::the DMG is not attached to $TAG"; exit 1; }
+
+      - name: Dry run - what would have been attached
+        if: ${{ needs.params.outputs.dry_run == 'true' }}
+        run: |
+          echo "DRY RUN - nothing was uploaded to any release. Built:"
+          ls -lh Mac/HadesApp/DerivedData/dmg/*.dmg | awk '{print "    " $NF "  (" $5 ")"}'

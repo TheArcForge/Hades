@@ -1,0 +1,1 @@
+{"id":"op-1","kind":"rebuild","state":"done","startedAtUtc":"2026-06-01T12:00:00+00:00","finishedAtUtc":"2026-06-01T12:00:05+00:00","elapsedSeconds":5,"progress":"120 of 400 files","result":{"nodesBefore":1180,"nodesAfter":1204,"message":"Rebuilt: 24 nodes added."}}

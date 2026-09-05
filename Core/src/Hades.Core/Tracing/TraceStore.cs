@@ -119,10 +119,13 @@ public sealed class TraceStore : IDisposable
         var directory = Path.GetDirectoryName(databasePath);
         if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
 
+        // Pooling = false: see Graph.GraphDatabase.Open's comment on the identical block - a pooled
+        // connection keeps the file handle open past Dispose, which Windows will not let you delete.
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false,
         }.ToString());
 
         try

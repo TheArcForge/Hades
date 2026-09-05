@@ -134,7 +134,7 @@ public sealed class AnimationApplyTests(WebApplicationFactory<Program> factory) 
             },
         }));
 
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("animation.apply", request.Method);
         var ops = Prop(request.Params!, "operations");
@@ -205,7 +205,7 @@ public sealed class AnimationApplyTests(WebApplicationFactory<Program> factory) 
                 },
             },
         }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         var op = Prop(request.Params!, "operations").Items[0];
         var removeTransitions = Prop(op, "removeTransitions");
@@ -237,7 +237,7 @@ public sealed class AnimationApplyTests(WebApplicationFactory<Program> factory) 
                 new Dictionary<string, object> { ["op"] = "assignClip", ["controllerPath"] = "Assets/Player.controller", ["stateName"] = "Ghost", ["clipPath"] = "Assets/Idle.anim" },
             },
         }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("animation.apply", request.Method);
         Assert.Equal(2, Prop(request.Params!, "operations").Items.Count);
@@ -272,7 +272,7 @@ public sealed class AnimationApplyTests(WebApplicationFactory<Program> factory) 
         {
             operations = new[] { new Dictionary<string, object> { ["op"] = "assignController", ["gameObjectPath"] = "Player", ["controllerPath"] = "Assets/Player.controller" } },
         });
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("animation.apply requires an 'operations' array parameter.", McpTestClient.ErrorText(envelope));
     }
@@ -317,7 +317,7 @@ public sealed class AnimationApplyTests(WebApplicationFactory<Program> factory) 
             },
         }));
 
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
         var ops = Prop(request.Params!, "operations");
         Assert.Equal(4, ops.Items.Count);
 

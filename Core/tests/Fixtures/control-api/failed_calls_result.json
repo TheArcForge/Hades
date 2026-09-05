@@ -1,0 +1,1 @@
+{"failures":[{"traceId":"trace-1","tool":"hades_search","startUtcMs":1700000000000,"durationMs":42,"error":"Timed out waiting for the Editor."}],"truncated":false}

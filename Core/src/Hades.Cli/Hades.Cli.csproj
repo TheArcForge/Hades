@@ -7,9 +7,31 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- AppPaths only - see Discovery.cs's own doc comment for why this project stops there and
-         does not also reference Hades.Server for its wire-shaped record types. -->
-    <ProjectReference Include="..\Hades.Core\Hades.Core.csproj" />
+    <!-- Hades.Core is deliberately NOT referenced. It used to be, for AppPaths only, to locate the
+         discovery file - a job that now belongs to Hades.Control.Client, exactly as it belongs to
+         Discovery.swift on the Swift side. A production project referencing both sides of the
+         client/core boundary is precisely the bridge the shell is forbidden to build. -->
+    <ProjectReference Include="..\Hades.Control.Client\Hades.Control.Client.csproj" />
+  </ItemGroup>
+
+  <!--
+    "The shell renders, the core decides". Hades.Cli lives under Core/, so the tree-level guard in
+    Windows/Directory.Build.props (EnsureShellIsAClient) can't reach it - this is the same target,
+    declared directly on the csproj instead. Modeled on the EnsureHeadless target in
+    Core/src/Hades.Core/Hades.Core.csproj, which holds the core to the same kind of structural
+    promise.
+  -->
+  <Target Name="EnsureShellIsAClient" BeforeTargets="Build">
+    <Error Condition="@(ProjectReference->AnyHaveMetadataValue('Filename', 'Hades.Core'))
+                   or @(ProjectReference->AnyHaveMetadataValue('Filename', 'Hades.Server'))
+                   or @(Reference->AnyHaveMetadataValue('Filename', 'Hades.Core'))
+                   or @(Reference->AnyHaveMetadataValue('Filename', 'Hades.Server'))"
+           Text="$(MSBuildProjectName) must not reference Hades.Core or Hades.Server. It is a control-API client by design." />
+  </Target>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" PrivateAssets="all" />
+    <AdditionalFiles Include="..\..\..\BannedSymbols.txt" Link="BannedSymbols.txt" />
   </ItemGroup>
 
 </Project>

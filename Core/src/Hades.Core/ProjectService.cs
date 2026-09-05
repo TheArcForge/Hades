@@ -259,7 +259,15 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
     // silently lost writes under enough concurrent projects and threads. Reindex() writes
     // this on every call, and nothing otherwise serialises EnsureIndexed for different
     // projects — exactly what a server fielding concurrent requests across multiple roots does.
-    readonly ConcurrentDictionary<string, DateTimeOffset> _lastIndexed = new();
+    //
+    // THIS IS A PER-PROCESS GUARD, NOT THE REPORTED TIMESTAMP - the two were one field and that
+    // was a bug. EnsureIndexed uses this to answer "have I already indexed this in THIS process",
+    // which is exactly the right question for it: a fresh process must still sweep a project whose
+    // files changed while Hades was closed, so this deliberately does not survive a restart.
+    // The durable "when did an index last complete" now lives on UnityProject.LastIndexedUtc, next
+    // to the graph it describes. Conflating them meant every restart reported every project as
+    // never-indexed, which the control API then rendered as "indexing", forever.
+    readonly ConcurrentDictionary<string, DateTimeOffset> _indexedThisProcess = new();
 
     // One semaphore per productGuid, created on first use. Makes EnsureIndexed single-flight
     // per project: without it, check-then-act still lets concurrent callers all pass the
@@ -388,12 +396,12 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
     /// <summary>Registers a project (if it is one), imports its memory, and performs a full
     /// index. Returns null when the directory is not a Unity project or its settings are
     /// unreadable.</summary>
-    public UnityProject? AdoptAndIndex(string projectRoot)
+    public UnityProject? AdoptAndIndex(string projectRoot, IProgress<Indexing.IndexProgressUpdate>? progress = null)
     {
         var project = Adopt(projectRoot);
         if (project is null) return null;
 
-        Reindex(project);
+        Reindex(project, progress);
         return project;
     }
 
@@ -401,7 +409,7 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
     /// Plan 3 replaces this with FSEvents-driven incremental indexing.</summary>
     public void EnsureIndexed(string productGuid)
     {
-        if (_lastIndexed.ContainsKey(productGuid)) return;
+        if (_indexedThisProcess.ContainsKey(productGuid)) return;
 
         var gate = _indexGates.GetOrAdd(productGuid, static _ => new SemaphoreSlim(1, 1));
         gate.Wait();
@@ -409,7 +417,7 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
         {
             // Re-check inside the gate: another caller may have already indexed this project
             // while this one waited, which is the normal case under concurrent load.
-            if (_lastIndexed.ContainsKey(productGuid)) return;
+            if (_indexedThisProcess.ContainsKey(productGuid)) return;
             if (_store.Get(productGuid) is { } project) Reindex(project);
         }
         finally
@@ -440,7 +448,7 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
     /// call even for a path SweepStaleNodes already cleared: a DELETE against rows that no
     /// longer exist is a no-op.
     /// </summary>
-    IReadOnlyList<string> Reindex(UnityProject project)
+    IReadOnlyList<string> Reindex(UnityProject project, IProgress<Indexing.IndexProgressUpdate>? progress = null)
     {
         using var database = OpenGraph(project.ProductGuid);
 
@@ -450,17 +458,44 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
         var sweep = ProjectSweeper.Sweep(project.Path, database);
         var freshState = ProjectSweeper.StateFor(project.Path, sweep.Added.Concat(sweep.Changed));
 
-        var scripts = ScriptIndexer.IndexProject(project.Path, database);
-        var assets = AssetIndexer.IndexProject(project.Path, database);
+        var scripts = ScriptIndexer.IndexProject(project.Path, database, progress);
+        var assets = AssetIndexer.IndexProject(project.Path, database, progress);
 
         database.UpsertFileState(freshState);
 
         // I8: file_state rows for files gone since the state above was captured.
         foreach (var deleted in sweep.Deleted) database.DeleteNodesForPath(deleted);
 
-        _lastIndexed[project.ProductGuid] = DateTimeOffset.UtcNow;
+        RecordIndexed(project.ProductGuid);
 
         return [.. sweep.Warnings, .. scripts.Warnings, .. assets.Warnings];
+    }
+
+    /// <summary>
+    /// Records that an index just COMPLETED, in the two places that need to know and for two
+    /// different reasons.
+    ///
+    /// <para><see cref="_indexedThisProcess"/> is <see cref="EnsureIndexed"/>'s single-flight guard
+    /// and is deliberately per-process. <see cref="UnityProject.LastIndexedUtc"/> is the durable
+    /// answer to "when was this graph last built", read back by <see cref="Summary"/> and rendered
+    /// by the control API - see that property's own doc comment for what conflating the two cost.</para>
+    ///
+    /// <para>Called only on the success path of a completed index, never on entry to one: an
+    /// interrupted index must leave the durable record untouched, so a project whose first index
+    /// was killed halfway still reads as never indexed rather than as freshly built.</para>
+    ///
+    /// <para>Writing project.json here is one small serialize per completed index - negligible
+    /// against the walk that just finished, and it is what makes the fact outlive the process.</para>
+    /// </summary>
+    void RecordIndexed(string productGuid)
+    {
+        var completedAt = DateTimeOffset.UtcNow;
+        _indexedThisProcess[productGuid] = completedAt;
+
+        if (_store.Get(productGuid) is { } project)
+        {
+            _store.Save(project with { LastIndexedUtc = completedAt });
+        }
     }
 
     /// <summary>
@@ -489,7 +524,24 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
             using var database = OpenGraph(productGuid);
             var sweep = ProjectSweeper.Sweep(project.Path, database);
 
-            if (!sweep.AnythingChanged) return sweep;
+            if (!sweep.AnythingChanged)
+            {
+                // A SWEEP THAT FINDS NOTHING STILL COUNTS AS AN INDEX, and skipping this was the
+                // root of the stuck-"Indexing…" bug rather than merely a contributor to it.
+                //
+                // ProjectSweeper compares every recorded file state against disk, so "nothing
+                // changed" is not "nothing happened" - it is a positive verification that the graph
+                // matches the project right now. Returning early recorded none of that, so a
+                // project nobody edits was swept by the periodic timer every five minutes, found
+                // current every time, and still reported as never indexed for as long as the core
+                // ran. Observed live on 2026-09-01 after 33 minutes and roughly six such sweeps.
+                //
+                // The cost is one 284-byte project.json write per project per periodic sweep on an
+                // otherwise idle machine, which is worth an honest answer. It is written outside
+                // the project directory, so it cannot feed back into the watcher that triggers this.
+                RecordIndexed(productGuid);
+                return sweep;
+            }
 
             // Deletions first, and by explicit path — never by sweeping a partial visited-set.
             foreach (var deleted in sweep.Deleted) database.DeleteNodesForPath(deleted);
@@ -509,7 +561,7 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
                 warnings = [.. warnings, .. scripts.Warnings, .. assets.Warnings]; // I5
             }
 
-            _lastIndexed[productGuid] = DateTimeOffset.UtcNow;
+            RecordIndexed(productGuid);
             return sweep with { Warnings = warnings };
         }
         finally
@@ -913,7 +965,10 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
             TotalNodes = database.TotalNodes(),
             NodesByKind = database.CountByKind(),
             TotalEdges = database.TotalEdges(),
-            LastIndexedUtc = _lastIndexed.TryGetValue(productGuid, out var at) ? at : null,
+            // Read off the persisted project record, NOT from an in-process dictionary. Callers of
+            // this (the control API's projects and summary endpoints) use it to tell a user when
+            // the graph was last built, and that answer must not reset to "never" every launch.
+            LastIndexedUtc = project.LastIndexedUtc,
 
             // Resolved fresh from disk, same "reflects last saved state" convention as every
             // other project-level fact Hades reports - see ProjectDefines.Resolve's own doc
@@ -987,7 +1042,7 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
     /// there; the ObservationService watcher/periodic sweep for SyncChanges) is a top-level entry
     /// point that never runs from inside an already-held gate.
     /// </summary>
-    public RebuildResult? RebuildGraph(string productGuid)
+    public RebuildResult? RebuildGraph(string productGuid, IProgress<Indexing.IndexProgressUpdate>? progress = null)
     {
         if (_store.Get(productGuid) is not { } project) return null;
 
@@ -996,7 +1051,7 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
         try
         {
             var before = Summary(productGuid)?.TotalNodes ?? 0;
-            var warnings = Reindex(project);
+            var warnings = Reindex(project, progress);
             var after = Summary(productGuid)?.TotalNodes ?? 0;
 
             return new RebuildResult { NodesBefore = before, NodesAfter = after, Warnings = warnings };

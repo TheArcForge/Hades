@@ -15,10 +15,22 @@ public sealed class GraphDatabase : IDisposable
         var directory = Path.GetDirectoryName(databasePath);
         if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
 
+        // Pooling is OFF deliberately. Microsoft.Data.Sqlite pools by default, which returns the
+        // native handle to a pool on Dispose rather than closing it - so the FILE STAYS OPEN after
+        // the GraphDatabase that owned it is gone. POSIX does not care (an open file can still be
+        // unlinked), but Windows refuses to delete or rename a file with an open handle, which made
+        // 662 tests fail in teardown on the first Windows run and is a live hazard for any future
+        // code that replaces a database in place.
+        //
+        // The pool buys little here: this is a local file, so opening is a file open rather than a
+        // network handshake, and Open's own PRAGMA + schema-version work below costs more than the
+        // open either way. Measured across the full 1,889-test suite on Windows: no runtime change
+        // (Hades.Server.Tests 12s -> 13s, Hades.Core.Tests 33s -> 32s).
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false,
         }.ToString());
 
         try

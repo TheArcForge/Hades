@@ -27,7 +27,7 @@
 
 set -euo pipefail
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 SHA256="cec8fce26cdb17c712b8d3dd9e32d1a9b2f9d0b3bcfa3042d3f0d42f5672d044"
 
 REPO="TheArcForge/Hades"
@@ -100,7 +100,11 @@ echo "    sha256 OK"
 # ----------------------------------------------------------------------------- install
 
 info "Mounting the disk image"
-MOUNTPOINT="$(hdiutil attach "$DMG" -nobrowse -readonly | grep -o '/Volumes/.*' | head -1)"
+# `|| true` is load-bearing, not defensive noise. `set -e` plus `pipefail` abort the script HERE,
+# at the assignment, the moment grep finds no /Volumes line - so the die() on the very next line,
+# which exists solely to explain this failure, could never run. Measured before the fix: a failing
+# `hdiutil attach` exited 1 having printed nothing after "==> Mounting the disk image".
+MOUNTPOINT="$(hdiutil attach "$DMG" -nobrowse -readonly | grep -o '/Volumes/.*' | head -1 || true)"
 [[ -n "$MOUNTPOINT" && -d "$MOUNTPOINT" ]] || die "Could not mount ${DMG_NAME}."
 [[ -d "${MOUNTPOINT}/${APP_NAME}" ]] || die "${APP_NAME} is not present in the disk image."
 
@@ -126,6 +130,45 @@ if xattr "$TARGET" 2>/dev/null | grep -q com.apple.quarantine; then
   To approve: open System Settings > Privacy & Security, find Hades, click Open Anyway."
 else
     echo "    no quarantine attribute - the app will launch without a Gatekeeper prompt"
+fi
+
+# ------------------------------------------------------------------------ the hades CLI on PATH
+
+# The one part of this installer that touches anything outside /Applications. Done only when
+# /usr/local/bin already exists and is writable - never created, never sudo'd. If it cannot be
+# made, say so and print the full path rather than failing an otherwise-good install.
+#
+# Why a symlink into an existing directory rather than editing a shell profile: a profile edit has
+# to guess the user's shell, survives uninstall badly, and silently does nothing for anyone whose
+# PATH is managed elsewhere. A symlink is one inode, trivially inspectable, and uninstall.sh removes
+# it by name. /usr/local/bin is on the default PATH of every macOS shell and is writable without
+# sudo on any Mac where Homebrew has ever run, which is the overwhelming majority of dev machines.
+#
+# The target lives INSIDE the bundle, so it follows the app: moving or deleting Hades.app is
+# immediately visible as a broken link rather than leaving a stale copy that keeps half-working.
+CLI_SOURCE="$TARGET/Contents/Resources/HadesCli/hades"
+CLI_LINK="/usr/local/bin/hades"
+
+if [[ ! -x "$CLI_SOURCE" ]]; then
+    # A Debug bundle has no published CLI (see build-app.sh - Debug never publishes). Not an error:
+    # the app itself is fully installed and working.
+    echo "    no bundled CLI in this build - skipping the 'hades' command"
+elif [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
+    if ln -sfn "$CLI_SOURCE" "$CLI_LINK" 2>/dev/null; then
+        info "Linked 'hades' into /usr/local/bin"
+        echo "    try: hades status"
+    else
+        warn "Could not link 'hades' into /usr/local/bin. Run it directly with:
+  $CLI_SOURCE"
+    fi
+else
+    # Deliberately NOT created and never sudo'd: an installer that quietly acquires root, or
+    # invents a directory on someone's PATH, is doing more than it was asked to.
+    warn "/usr/local/bin does not exist or is not writable, so 'hades' was not linked.
+  Run it directly with:
+  $CLI_SOURCE
+  Or link it yourself:
+  sudo ln -sfn '$CLI_SOURCE' '$CLI_LINK'"
 fi
 
 # Launch it. This is not a convenience: Hades is LSUIElement (menu-bar only - no Dock icon, no

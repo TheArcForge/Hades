@@ -135,11 +135,31 @@ public sealed class EditorListenerTests : IDisposable
         // mismatch above must already have closed the connection first.
         await writer.WriteLineAsync(MiniJson.Write(MakeHello("aaaabbbbccccddddeeeeffff00001111").ToJson()));
 
+        // "The server hung up" has two legal spellings, and which one you get is decided by TCP,
+        // not by this code. Unlike the no-token case above - which half-closes cleanly after
+        // sending nothing, so the server's close arrives as a FIN and reads as EOF - this test
+        // deliberately leaves a second line UNREAD in the server's receive buffer. Closing a socket
+        // with unread data queued sends RST rather than FIN, and Windows surfaces that to the next
+        // read as WSAECONNRESET ("An existing connection was forcibly closed by the remote host")
+        // instead of returning 0.
+        //
+        // Both outcomes prove exactly what this test is about: the connection was closed on the
+        // token mismatch, before the well-formed hello behind it could be parsed. Asserting only
+        // the EOF spelling pinned one platform's TCP behaviour, not the product's.
         var buffer = new byte[1];
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var read = await stream.ReadAsync(buffer, cts.Token);
 
-        Assert.Equal(0, read);
+        var closed = false;
+        try
+        {
+            closed = await stream.ReadAsync(buffer, cts.Token) == 0;
+        }
+        catch (IOException ex) when (ex.InnerException is SocketException { SocketErrorCode: SocketError.ConnectionReset })
+        {
+            closed = true;
+        }
+
+        Assert.True(closed, "the server did not close the connection after the token mismatch");
         Assert.Empty(registry.All());
     }
 
@@ -278,7 +298,7 @@ public sealed class EditorListenerTests : IDisposable
         var reader = new StreamReader(client.GetStream(), new UTF8Encoding(false));
         var writer = new StreamWriter(client.GetStream(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
 
-        var line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(JsonRpcRequest.TryParse(line, out var request, out _));
         Assert.Equal("lease.renew", request!.Method);
 
@@ -406,7 +426,7 @@ public sealed class EditorListenerTests : IDisposable
         var reader = new StreamReader(client.GetStream(), new UTF8Encoding(false));
         var writer = new StreamWriter(client.GetStream(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
 
-        var line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(JsonRpcRequest.TryParse(line, out var request, out _));
         Assert.Equal("lease.renew", request!.Method);
         Assert.True(request.Params!.TryGetProperty("leaseId", out var idValue));
@@ -462,7 +482,7 @@ public sealed class EditorListenerTests : IDisposable
         var reader = new StreamReader(client.GetStream(), new UTF8Encoding(false));
         var writer = new StreamWriter(client.GetStream(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
 
-        var line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(JsonRpcRequest.TryParse(line, out var request, out _));
         Assert.Equal("lease.renew", request!.Method);
 

@@ -207,7 +207,7 @@ public class BinaryAssetIndexerTests : IDisposable
         File.WriteAllText(Path.Combine(external, "Runtime", "Ext.png"), "not real png bytes");
         File.WriteAllText(Path.Combine(external, "Runtime", "Ext.png.meta"),
             "fileFormatVersion: 2\nguid: 77777777777777777777777777777777\n");
-        Write("Packages/manifest.json", $"{{\"dependencies\":{{\"com.example.pkg\":\"file:{external}\"}}}}");
+        Write("Packages/manifest.json", ManifestJson.WithLocalPackage("com.example.pkg", external));
         using var db = OpenGraph();
 
         BinaryAssetIndexer.IndexProject(_projectRoot, db);

@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using Hades.Contract.Wire;
+using Hades.Core.Storage;
 
 namespace Hades.Core.Editors;
 
@@ -288,45 +289,14 @@ public sealed class EditorListener : IDisposable
 
     static string GenerateToken() => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
 
+    // Mode-0600 protection (and the reasoning behind exactly how it is applied) lives in
+    // TokenFileWriter, shared with ControlAuth.WriteConnectionFile's identical discovery-file
+    // write.
     void WriteConnectionFile(string token, int port)
     {
-        var directory = Path.GetDirectoryName(_tokenFilePath);
-        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
-
         var info = new EditorConnectionInfo { Port = port, Token = token };
         var json = MiniJson.Write(info.ToJson());
-
-        // Hades targets macOS (see the Mac Shell spec); File.SetUnixFileMode /
-        // FileStreamOptions.UnixCreateMode are unsupported on Windows. OperatingSystem.IsWindows()
-        // is the analyzer-recognised platform-guard pattern, so this stays warning-free without a
-        // project-wide platform declaration that would also constrain every other public member of
-        // this assembly.
-        if (OperatingSystem.IsWindows())
-        {
-            File.WriteAllText(_tokenFilePath, json);
-            return;
-        }
-
-        // Create the inode at 0600 in the SAME syscall that creates it (FileStreamOptions.
-        // UnixCreateMode), so the token is never briefly sitting in a file at the wider,
-        // umask-determined default mode a plain WriteAllText-then-chmod would leave it at for the
-        // instant in between. UnixCreateMode only takes effect when this call actually creates a
-        // NEW inode, so the SetUnixFileMode below still runs unconditionally afterward, as a
-        // defensive fallback for a pre-existing file at this path (a stale token from a previous
-        // run, or one some other tool wrote) that FileMode.Create reuses/truncates instead of
-        // replacing - which is what the "reused inode" test asserts.
-        using (var stream = File.Open(_tokenFilePath, new FileStreamOptions
-        {
-            Mode = FileMode.Create,
-            Access = FileAccess.Write,
-            UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
-        }))
-        {
-            var bytes = Encoding.UTF8.GetBytes(json);
-            stream.Write(bytes, 0, bytes.Length);
-        }
-
-        File.SetUnixFileMode(_tokenFilePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        TokenFileWriter.Write(_tokenFilePath, json);
     }
 
     /// <summary>Constant-time comparison so a mismatched token cannot be brute-forced faster by

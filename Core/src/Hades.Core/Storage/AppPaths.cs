@@ -106,6 +106,22 @@ public sealed class AppPaths
         return dir;
     }
 
+    /// <summary>
+    /// macOS/Unix: <c>~/Library/Application Support/Hades</c> via
+    /// <see cref="Environment.SpecialFolder.ApplicationData"/>.
+    ///
+    /// Windows: <c>%LOCALAPPDATA%\Hades</c> — deliberately NOT
+    /// <see cref="Environment.SpecialFolder.ApplicationData"/>, which resolves to the ROAMING
+    /// profile there. Everything under this root is either derived and rebuildable (graph.db,
+    /// traces.db, memory-index.db) or machine-local by nature (control.token, editor.token, whose
+    /// ports are meaningless on another machine), so none of it should follow a user between
+    /// machines — and a roaming profile silently syncing a multi-hundred-megabyte graph is a
+    /// support incident waiting to happen. The one authored, irreplaceable thing Hades owns
+    /// (memory/*.md) lives in the user's own repository under .arcforge/, not here.
+    /// </summary>
     static string DefaultRoot() => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Hades");
+        Environment.GetFolderPath(OperatingSystem.IsWindows()
+            ? Environment.SpecialFolder.LocalApplicationData
+            : Environment.SpecialFolder.ApplicationData),
+        "Hades");
 }

@@ -1,0 +1,27 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <!--
+    "The shell renders, the core decides". On macOS that rule is mostly enforced by language -
+    Swift cannot reference Hades.Core. On Windows the shell is also .NET, so one ProjectReference
+    would collapse the architecture permanently. Declared at tree level rather than in one csproj
+    so it covers every project here, including ones added later, and so removing it is a loud,
+    separate diff.
+
+    Modeled on the EnsureHeadless target in Core/src/Hades.Core/Hades.Core.csproj, which holds the
+    core to the same kind of structural promise.
+  -->
+  <Target Name="EnsureShellIsAClient" BeforeTargets="Build">
+    <Error Condition="@(ProjectReference->AnyHaveMetadataValue('Filename', 'Hades.Core'))
+                   or @(ProjectReference->AnyHaveMetadataValue('Filename', 'Hades.Server'))
+                   or @(Reference->AnyHaveMetadataValue('Filename', 'Hades.Core'))
+                   or @(Reference->AnyHaveMetadataValue('Filename', 'Hades.Server'))"
+           Text="$(MSBuildProjectName) must not reference Hades.Core or Hades.Server. It is a control-API client by design." />
+  </Target>
+</Project>

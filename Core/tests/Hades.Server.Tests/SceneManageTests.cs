@@ -127,7 +127,7 @@ public sealed class SceneManageTests(WebApplicationFactory<Program> factory) : E
             },
         }));
 
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         // ONE wire call for the whole 4-operation spec.
         Assert.Equal("scene.manage", request.Method);
@@ -177,7 +177,7 @@ public sealed class SceneManageTests(WebApplicationFactory<Program> factory) : E
                 new Dictionary<string, object> { ["op"] = "open", ["path"] = "Assets/Ghost.unity" },
             },
         }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("scene.manage", request.Method);
         Assert.Equal(2, Prop(request.Params!, "operations").Items.Count);
@@ -212,7 +212,7 @@ public sealed class SceneManageTests(WebApplicationFactory<Program> factory) : E
         {
             operations = new[] { new Dictionary<string, object> { ["op"] = "save" } },
         });
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("scene.manage requires an 'operations' array parameter.", McpTestClient.ErrorText(envelope));
     }

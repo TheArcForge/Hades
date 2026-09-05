@@ -50,7 +50,7 @@ public abstract class EditorToolTestBase : IClassFixture<WebApplicationFactory<P
                 services.AddSingleton(sp => new ProjectService(
                     sp.GetRequiredService<AppPaths>(), sp.GetRequiredService<EditorRegistry>())
                 {
-                    CharonProbeTimeout = TimeSpan.FromMilliseconds(300),
+                    CharonProbeTimeout = TimeSpan.FromSeconds(5),
                 });
             }));
 

@@ -108,8 +108,7 @@ public static class McpBinding
 
         return $"Hades could not start: port {port} is already in use. The MCP endpoint binds this port "
             + "deliberately and always, so Claude Code and other MCP clients can find it at a fixed address — "
-            + $"Hades will not silently switch to a different one. Find and stop whatever is using port {port} "
-            + $"(`lsof -nP -iTCP:{port} -sTCP:LISTEN`), or set ASPNETCORE_URLS to run Hades at a different address.";
+            + $"Hades will not silently switch to a different one. {RemedyForPortInUse(port)}";
     }
 
     /// <summary>The actionable remedy for port <paramref name="port"/> being occupied - the same
@@ -119,9 +118,30 @@ public static class McpBinding
     /// listener" state, not a startup failure) can word its message the identical way rather than a
     /// second, independently-drifting copy. Plan 13 Task 7: "render the conflict including the
     /// actionable remedy the core already words" - this is that remedy, authored once.</summary>
-    public static string RemedyForPortInUse(int port) =>
-        $"Find and stop whatever is using port {port} (`lsof -nP -iTCP:{port} -sTCP:LISTEN`), or set "
+    public static string RemedyForPortInUse(int port) => RemedyForPortInUse($"{port}");
+
+    /// <summary>The same remedy for a port already reduced to text - what
+    /// <see cref="DescribePortInUseFailure"/> holds, since it falls back to the whole URL when one
+    /// cannot be parsed. Having that method call this one is the point: it used to carry its own
+    /// copy of this sentence, which is exactly the drift the doc comment above warned about.</summary>
+    public static string RemedyForPortInUse(string port) =>
+        $"Find and stop whatever is using port {port} (`{FindPortHolderCommand(port)}`), or set "
         + "ASPNETCORE_URLS to run Hades at a different address.";
+
+    /// <summary>
+    /// The command that names whoever is holding the port, in the shape of the platform actually
+    /// running.
+    ///
+    /// <para><c>lsof</c> does not exist on Windows. Printing it there sends a stuck user nowhere, at
+    /// the one moment they most need a command that works — found on the first Windows hand-run of
+    /// <c>hades serve</c>, where force-killing it orphaned the core, the orphan kept port 7823, and
+    /// the resulting failure recommended a macOS-only tool. Two tests pinned the <c>lsof</c> literal
+    /// and passed on Windows, so the suite was endorsing it.</para>
+    /// </summary>
+    static string FindPortHolderCommand(string port) =>
+        OperatingSystem.IsWindows()
+            ? $"netstat -ano | findstr :{port}"
+            : $"lsof -nP -iTCP:{port} -sTCP:LISTEN";
 }
 
 /// <summary>Thrown by <see cref="McpBinding.Run"/> in place of a raw

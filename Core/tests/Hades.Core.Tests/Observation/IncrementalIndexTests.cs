@@ -157,7 +157,7 @@ public class IncrementalIndexTests : IDisposable
         File.WriteAllText(Path.Combine(external, "Runtime", "Packaged.cs"), "public class Packaged { }");
 
         MakeProject();
-        Write("Packages/manifest.json", $"{{\"dependencies\":{{\"com.example.pkg\":\"file:{external}\"}}}}");
+        Write("Packages/manifest.json", ManifestJson.WithLocalPackage("com.example.pkg", external));
 
         var service = NewService();
         service.AdoptAndIndex(_projectRoot);
@@ -186,7 +186,10 @@ public class IncrementalIndexTests : IDisposable
     // specifically to simulate a Unix permissions failure, so the platform-compatibility warning
     // has nothing to protect here — suppressed for exactly the two call sites that need it.
 #pragma warning disable CA1416
-    [Fact]
+    // File.SetUnixFileMode is a POSIX chmod equivalent and throws PlatformNotSupportedException on
+    // Windows. This test exists specifically to simulate a Unix permissions failure, so it is
+    // gated by trait rather than early-returned - see PlatformTraits for why traits, not skips.
+    [Fact, Trait(PlatformTraits.Key, PlatformTraits.Unix)]
     public void AnUnreadableDirectory_PreservesItsRecordedState_InsteadOfReportingDeletions()
     {
         MakeProject();

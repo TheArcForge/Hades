@@ -156,7 +156,7 @@ public class ScriptIndexerTests : IDisposable
         Directory.CreateDirectory(Path.Combine(external, "Editor"));
         File.WriteAllText(Path.Combine(external, "Editor", "Tool.cs"), "public class Tool { }");
         WriteScript("Assets/Local.cs", "public class Local { }");
-        WriteManifest($"\"com.example.tools\":\"file:{external}\"");
+        WriteManifest(ManifestJson.LocalPackageEntry("com.example.tools", external));
         using var db = OpenGraph();
         ScriptIndexer.IndexProject(_projectRoot, db);
         Assert.Single(db.SearchByName("Tool"));
@@ -239,7 +239,7 @@ public class ScriptIndexerTests : IDisposable
         Directory.CreateDirectory(Path.Combine(external, "Editor"));
         File.WriteAllText(Path.Combine(external, "Editor", "Tool.cs"), "public class Tool { }");
         WriteScript("Assets/Local.cs", "public class Local { }");
-        WriteManifest($"\"com.example.tools\":\"file:{external}\"");
+        WriteManifest(ManifestJson.LocalPackageEntry("com.example.tools", external));
         using var db = OpenGraph();
 
         ScriptIndexer.IndexProject(_projectRoot, db);
@@ -255,7 +255,7 @@ public class ScriptIndexerTests : IDisposable
         var external = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(Path.Combine(external, "Editor"));
         File.WriteAllText(Path.Combine(external, "Editor", "Tool.cs"), "public class Tool { }");
-        WriteManifest($"\"com.example.tools\":\"file:{external}\"");
+        WriteManifest(ManifestJson.LocalPackageEntry("com.example.tools", external));
         using var db = OpenGraph();
 
         ScriptIndexer.IndexProject(_projectRoot, db);
@@ -305,7 +305,7 @@ public class ScriptIndexerTests : IDisposable
             File.WriteAllText(Path.Combine(external, sub, "F.cs"),
                 $"public class F{sub.Replace('/', '_').Replace('~', '_').Replace('.', '_')} {{ }}");
         }
-        WriteManifest($"\"com.example.tools\":\"file:{external}\"");
+        WriteManifest(ManifestJson.LocalPackageEntry("com.example.tools", external));
         using var db = OpenGraph();
 
         var result = ScriptIndexer.IndexProject(_projectRoot, db);
@@ -351,19 +351,24 @@ public class ScriptIndexerTests : IDisposable
         File.WriteAllText(Path.Combine(projectRoot, "Assets", "Scripts", "Player.cs"), "public class Player { }");
         Directory.CreateDirectory(Path.Combine(projectRoot, "Packages"));
         File.WriteAllText(Path.Combine(projectRoot, "Packages", "manifest.json"),
-            "{\"dependencies\":{\"com.example.parent\":\"file:" + container + "\"}}");
+            ManifestJson.WithLocalPackage("com.example.parent", container));
 
         var siblingDir = Path.Combine(container, "Sibling");
         Directory.CreateDirectory(siblingDir);
         File.WriteAllText(Path.Combine(siblingDir, "Junk.cs"), "public class SiblingJunk { }");
 
-        using var db = GraphDatabase.Open(Path.Combine(container, "graph.db"));
+        // An explicit scope rather than `using var`, because the database lives INSIDE the directory
+        // deleted below and `using var` would not dispose it until the method returned. Unix happily
+        // unlinks a file that is still open; Windows refuses, so the cleanup threw and failed a test
+        // whose assertions had all passed.
+        using (var db = GraphDatabase.Open(Path.Combine(container, "graph.db")))
+        {
+            var result = ScriptIndexer.IndexProject(projectRoot, db);
 
-        var result = ScriptIndexer.IndexProject(projectRoot, db);
-
-        Assert.Contains(result.Warnings, w => w.Contains("com.example.parent"));
-        Assert.Single(db.SearchByName("Player"));
-        Assert.Empty(db.SearchByName("SiblingJunk"));
+            Assert.Contains(result.Warnings, w => w.Contains("com.example.parent"));
+            Assert.Single(db.SearchByName("Player"));
+            Assert.Empty(db.SearchByName("SiblingJunk"));
+        }
 
         Directory.Delete(container, recursive: true);
     }
@@ -591,7 +596,11 @@ public class ScriptIndexerTests : IDisposable
     // "never visited because unreadable" the same as "confirmed gone", or a permissions hiccup
     // silently wipes an entire subtree's nodes.
 #pragma warning disable CA1416 // POSIX-only test, see IncrementalIndexTests' identical suppression
-    [Fact]
+    // Unix-gated because it makes the directory unreadable with File.SetUnixFileMode, which throws
+    // PlatformNotSupportedException on Windows. The suppression above already said "POSIX-only" but
+    // nothing enforced it, so the test ran and failed there. A Windows equivalent needs an ACL that
+    // denies traverse rather than a chmod - a rewrite, not a trait, and not attempted here.
+    [Fact, Trait(PlatformTraits.Key, PlatformTraits.Unix)]
     public void AnUnreadableDirectory_PreservesItsNodes_OnFullReindex()
     {
         WriteScript("Assets/Locked/Hidden.cs", "public class Hidden { }");

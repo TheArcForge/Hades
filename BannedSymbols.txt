@@ -1,0 +1,3 @@
+T:Microsoft.Data.Sqlite.SqliteConnection;Clients read through the control API, never the databases directly.
+M:System.Reflection.Assembly.LoadFrom(System.String);The Windows installer ships core/ inside the shell's own directory; loading from it bypasses the client boundary.
+M:System.Reflection.Assembly.LoadFile(System.String);See Assembly.LoadFrom.

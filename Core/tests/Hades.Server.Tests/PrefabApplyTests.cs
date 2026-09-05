@@ -128,7 +128,7 @@ public sealed class PrefabApplyTests(WebApplicationFactory<Program> factory) : E
             },
         }));
 
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("prefab.apply", request.Method);
         var ops = Prop(request.Params!, "operations");
@@ -212,7 +212,7 @@ public sealed class PrefabApplyTests(WebApplicationFactory<Program> factory) : E
             },
         }));
 
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         // ONE wire call carries both edits to the SAME prefab - not two separate open/edit/save
         // round trips, and definitely not a "prefab.open_editing" + "prefab.save_editing" pair.
@@ -252,7 +252,7 @@ public sealed class PrefabApplyTests(WebApplicationFactory<Program> factory) : E
                 new Dictionary<string, object> { ["op"] = "instantiate", ["prefabPath"] = "Assets/Ghost.prefab" },
             },
         }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("prefab.apply", request.Method);
         Assert.Equal(2, Prop(request.Params!, "operations").Items.Count);
@@ -287,7 +287,7 @@ public sealed class PrefabApplyTests(WebApplicationFactory<Program> factory) : E
         {
             operations = new[] { new Dictionary<string, object> { ["op"] = "create", ["gameObjectPath"] = "Widget", ["prefabPath"] = "Assets/Widget.prefab" } },
         });
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("prefab.apply requires an 'operations' array parameter.", McpTestClient.ErrorText(envelope));
     }
@@ -329,7 +329,7 @@ public sealed class PrefabApplyTests(WebApplicationFactory<Program> factory) : E
             },
         }));
 
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
         var ops = Prop(request.Params!, "operations");
         Assert.Equal(3, ops.Items.Count);
 

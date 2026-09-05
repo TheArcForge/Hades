@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <!-- JobObjectTests.cs' own IsProcessInJob P/Invoke uses LibraryImport, which requires this. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Hades.Supervision\Hades.Supervision.csproj" />
+
+    <!-- FakeCore is launched as a SEPARATE PROCESS (JobObjectTests, StandaloneFakeCore) and never
+         linked against, so this is a build-order dependency rather than a reference:
+         ReferenceOutputAssembly=false builds the exe while keeping its assembly out of our compile
+         closure. Without it, `dotnet test` builds only this project's reference closure, FakeCore
+         is never built, and 8 of the 11 tests fail with FileNotFoundException. That is exactly what
+         a bare `dotnet test` does here, and what ci.yml's Windows job would have done on its first
+         run, since it invokes `dotnet test` in Windows/ with no preceding build step. -->
+    <ProjectReference Include="..\FakeCore\FakeCore.csproj"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true" />
+  </ItemGroup>
+
+</Project>

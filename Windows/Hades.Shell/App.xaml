@@ -1,0 +1,10 @@
+<Application x:Class="Hades.Shell.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnExplicitShutdown">
+    <!-- ShutdownMode is load-bearing: the default, OnLastWindowClose, would quit the app the first
+         time the user closes the main window - and quitting kills a spawned core. There is
+         deliberately no StartupUri either; the app starts with a tray icon and no window, matching
+         the Mac app's LSUIElement behaviour (no Dock icon, no Cmd+Tab entry). -->
+    <Application.Resources />
+</Application>

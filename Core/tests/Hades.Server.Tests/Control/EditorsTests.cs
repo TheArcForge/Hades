@@ -123,7 +123,7 @@ public sealed class EditorsBuildAsyncTests : IDisposable
 
         _projects = new ProjectService(new AppPaths(_appRoot), _editorRegistry)
         {
-            CharonProbeTimeout = TimeSpan.FromMilliseconds(300),
+            CharonProbeTimeout = TimeSpan.FromSeconds(5),
         };
     }
 
@@ -188,7 +188,7 @@ public sealed class EditorsBuildAsyncTests : IDisposable
         var responder = RespondToNextProbeAsync(unityReads, unityWrites);
 
         var result = await EditorsEndpoint.BuildAsync(_projects);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         var row = Assert.Single(result.Editors);
         Assert.Equal(ProjectEditorState.Attached, row.State);
@@ -250,7 +250,7 @@ public sealed class EditorsReleaseTests : IDisposable
 
         _projects = new ProjectService(new AppPaths(_appRoot), _editorRegistry)
         {
-            CharonProbeTimeout = TimeSpan.FromMilliseconds(300),
+            CharonProbeTimeout = TimeSpan.FromSeconds(5),
         };
         _editorProxy = new EditorProxy(_projects, _editorRegistry);
 
@@ -383,8 +383,12 @@ public sealed class EditorsReleaseTests : IDisposable
     {
         _leases.RecordHeld(ProjectGuid, "hades-script-editing", DateTimeOffset.UtcNow.AddSeconds(30));
         await RegisterFakeEditorAsync();
-        // Deliberately never answers the probe - CharonProbeTimeout is 300ms here, so this fails
-        // fast rather than waiting for EditorProxy's own 30s command timeout.
+        // Deliberately never answers the probe, so the busy path is reached via CharonProbeTimeout
+        // rather than EditorProxy's own much longer command timeout. That probe window is
+        // deliberately generous in these fixtures (see the constructor): a short one made every
+        // test whose probe was supposed to SUCCEED flaky under parallel load, because a loaded
+        // machine blows a few-hundred-millisecond budget on thread scheduling alone and the proxy
+        // then correctly reports "busy" for the wrong reason.
 
         var response = await EditorsEndpoint.ReleaseAsync(_projects, _leases, _editorProxy, ProjectGuid);
         var json = await ResultBodyAsync(response);
@@ -403,7 +407,7 @@ public sealed class EditorsReleaseTests : IDisposable
         var responderTask = AnswerProbeThenRespondAsync(reads, writes, LeaseResult(success: true));
 
         var response = await EditorsEndpoint.ReleaseAsync(_projects, _leases, _editorProxy, ProjectGuid);
-        var request = await responderTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responderTask.WaitAsync(TimeSpan.FromSeconds(30));
         var json = await ResultBodyAsync(response);
 
         // The release path goes through the plugin's existing lease.release - not a second path.
@@ -422,7 +426,7 @@ public sealed class EditorsReleaseTests : IDisposable
         var responderTask = AnswerProbeThenRespondAsync(reads, writes, LeaseResult(success: true));
 
         await EditorsEndpoint.ReleaseAsync(_projects, _leases, _editorProxy, ProjectGuid);
-        await responderTask.WaitAsync(TimeSpan.FromSeconds(5));
+        await responderTask.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Null(_leases.Get(ProjectGuid));
     }
@@ -444,11 +448,11 @@ public sealed class EditorsReleaseTests : IDisposable
         var releaseTask = EditorsEndpoint.ReleaseAsync(_projects, _leases, _editorProxy, ProjectGuid);
 
         // EditorProxy.SendCommandAsync's own two-step cadence: answer the busy probe first.
-        var probeLine = await reads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var probeLine = await reads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(JsonRpcRequest.TryParse(probeLine, out var probe, out var probeError), probeError);
         await writes.WriteLineAsync(MiniJson.Write(JsonRpcResponse.Success(probe!.Id!, JsonValue.Bool(true)).ToJson()));
 
-        var realLine = await reads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var realLine = await reads.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(JsonRpcRequest.TryParse(realLine, out var real, out var realError), realError);
         Assert.Equal("lease.release", real!.Method);
 
@@ -459,7 +463,7 @@ public sealed class EditorsReleaseTests : IDisposable
         await writes.WriteLineAsync(MiniJson.Write(
             JsonRpcResponse.Success(real.Id!, LeaseResult(success: true)).ToJson()));
 
-        await releaseTask.WaitAsync(TimeSpan.FromSeconds(5));
+        await releaseTask.WaitAsync(TimeSpan.FromSeconds(30));
 
         var stillBelieved = _leases.Get(ProjectGuid);
         Assert.NotNull(stillBelieved);
@@ -476,7 +480,7 @@ public sealed class EditorsReleaseTests : IDisposable
         var responderTask = AnswerProbeThenRespondAsync(reads, writes, LeaseResult(success: true));
 
         var first = await EditorsEndpoint.ReleaseAsync(_projects, _leases, _editorProxy, ProjectGuid);
-        await responderTask.WaitAsync(TimeSpan.FromSeconds(5));
+        await responderTask.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal(StatusCodes.Status200OK, await StatusCodeOf(first));
         Assert.True((await ResultBodyAsync(first)).GetProperty("success").GetBoolean());
 
@@ -503,7 +507,7 @@ public sealed class EditorsReleaseTests : IDisposable
             LeaseResult(success: false, leaseId: "some-other-lease", expiresAtUtcMs: DateTimeOffset.UtcNow.AddSeconds(30).ToUnixTimeMilliseconds()));
 
         var response = await EditorsEndpoint.ReleaseAsync(_projects, _leases, _editorProxy, ProjectGuid);
-        await responderTask.WaitAsync(TimeSpan.FromSeconds(5));
+        await responderTask.WaitAsync(TimeSpan.FromSeconds(30));
         var json = await ResultBodyAsync(response);
 
         Assert.False(json.GetProperty("success").GetBoolean());
@@ -704,7 +708,7 @@ public sealed class EditorsProgramWiringTests(WebApplicationFactory<Program> fac
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", listener.Token);
 
         var response = await client.SendAsync(request);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -737,7 +741,7 @@ public sealed class EditorsProgramWiringTests(WebApplicationFactory<Program> fac
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", listener.Token);
 
         var response = await client.SendAsync(request);
-        var wireRequest = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var wireRequest = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("lease.release", wireRequest.Method);

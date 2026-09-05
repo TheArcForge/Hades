@@ -46,7 +46,7 @@ public class TraceStoreTests : IDisposable
         // prove opening it self-heals rather than crashing or reading garbage.
         Directory.CreateDirectory(_dir);
         var dbPath = Path.Combine(_dir, "traces.db");
-        using (var raw = new SqliteConnection($"Data Source={dbPath}"))
+        using (var raw = new SqliteConnection(TestSqlite.ConnectionString(dbPath)))
         {
             raw.Open();
             using (var cmd = raw.CreateCommand())

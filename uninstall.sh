@@ -66,7 +66,14 @@ if pgrep -f "$APP/Contents/MacOS/" >/dev/null 2>&1; then
             exit 1
         fi
     fi
-    note "stopped"
+    # Reported inside the branch, not after it. A dry run quits nothing (the guard above), so a
+    # flat "stopped" here would have it claim an action it did not take - and describing exactly
+    # what WOULD happen is the only thing --dry-run is for.
+    if [[ $DRY_RUN -eq 1 ]]; then
+        note "would quit Hades"
+    else
+        note "stopped"
+    fi
 else
     info "Hades is not running"
 fi
@@ -107,15 +114,69 @@ TARGETS=(
     "$HOME/Library/Saved Application State/$BUNDLE_ID.savedState"
 )
 
+# The 'hades' symlink install.sh may have made. Handled separately from TARGETS above for two
+# reasons, both of which would otherwise be silent bugs:
+#
+#   1. TARGETS is tested with `-e`, which is FALSE for a dangling symlink - and $APP is removed
+#      first, which is exactly what makes it dangle. It would be listed, then never removed.
+#   2. /usr/local/bin/hades might not be ours. A real file there belongs to someone else and must
+#      not be touched, so this removes the link ONLY if it is a symlink pointing into the bundle
+#      we are uninstalling. readlink works on a dangling link, so this is correct either way.
+CLI_LINK="/usr/local/bin/hades"
+if [[ -L "$CLI_LINK" ]]; then
+    CLI_TARGET="$(readlink "$CLI_LINK" 2>/dev/null || true)"
+    if [[ "$CLI_TARGET" == "$APP"/* ]]; then
+        if [[ $DRY_RUN -eq 1 ]]; then
+            note "would remove  $CLI_LINK"
+        elif rm -f "$CLI_LINK" 2>/dev/null; then
+            note "removed  $CLI_LINK"
+        else
+            warn "Could not remove $CLI_LINK - remove it yourself with:
+  sudo rm '$CLI_LINK'"
+        fi
+    else
+        # Someone else's hades, or a link a user pointed elsewhere on purpose. Say so rather than
+        # deleting it or staying silent about why it was left.
+        note "left alone  $CLI_LINK (does not point into $APP)"
+    fi
+elif [[ -e "$CLI_LINK" ]]; then
+    note "left alone  $CLI_LINK (a real file, not our symlink)"
+fi
+
+# Strip-and-prepend rather than ${var/pattern/string}, because BOTH spellings of that substitution
+# are wrong on one bash or the other and this script has to survive `curl … | bash` on whatever
+# /bin/bash the Mac ships.
+#
+# The REPLACEMENT half of ${var/pattern/string} undergoes tilde expansion in bash 4.3+, so a bare
+# `~` expands back to $HOME and prints the full path it was written to shorten. Escaping it as `\~`
+# fixes that — and breaks bash 3.2.57, which macOS still ships as /bin/bash: there the escape is
+# not consumed and the output carries a literal backslash. Measured on this machine, 2026-09-05:
+#
+#   bash 3.2.57   ${t/#$HOME/\~}  ->  \~/Library/App     ${t/#$HOME/~}  ->  ~/Library/App
+#   bash 4.3+     ${t/#$HOME/\~}  ->  ~/Library/App      ${t/#$HOME/~}  ->  /Users/mike/Library/App
+#
+# The helper below sidesteps the whole question: ${var#prefix} has no replacement half to expand,
+# and the tilde is a plain literal in the surrounding word. Verified identical on both bashes.
+#
+# The `case` guard is not optional. A bare `~${t#$HOME}` prepends the tilde unconditionally, so a
+# TARGET that is not under $HOME - /Applications/Hades.app, the very first one - prints as
+# "~/Applications/Hades.app", which is a different path that does not exist. ${var/#pattern/...}
+# only substitutes on a prefix match; strip-and-prepend has to be told to.
+shorten_home() {
+    case "$1" in
+        "$HOME"/*) printf '~%s' "${1#$HOME}" ;;
+        *)         printf '%s' "$1" ;;
+    esac
+}
 info "Removing Hades' own files"
 removed=0
 for t in "${TARGETS[@]}"; do
     if [[ -e "$t" ]]; then
         if [[ $DRY_RUN -eq 1 ]]; then
-            note "would remove  ${t/#$HOME/~}"
+            note "would remove  $(shorten_home "$t")"
         else
             rm -rf "$t"
-            note "removed  ${t/#$HOME/~}"
+            note "removed  $(shorten_home "$t")"
         fi
         removed=$((removed + 1))
     fi

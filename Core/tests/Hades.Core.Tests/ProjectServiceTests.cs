@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using Hades.Core;
+using Hades.Core.Projects;
 using Hades.Core.Storage;
 
 namespace Hades.Core.Tests;
@@ -338,7 +339,7 @@ public class ProjectServiceTests : IDisposable
 
         gate.Release();
 
-        var result = await rebuildTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await rebuildTask.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.NotNull(result);
     }
 
@@ -355,7 +356,7 @@ public class ProjectServiceTests : IDisposable
         Assert.NotNull(result);
 
         var gate = AcquireIndexGateForTest(service, project.ProductGuid);
-        var acquired = await gate.WaitAsync(TimeSpan.FromSeconds(5));
+        var acquired = await gate.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(acquired, "the index gate was still held after RebuildGraph returned — it leaked the lock");
         gate.Release();
     }
@@ -386,7 +387,7 @@ public class ProjectServiceTests : IDisposable
 
         gate.Release();
 
-        var result = await syncTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await syncTask.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.NotNull(result);
     }
 
@@ -401,7 +402,7 @@ public class ProjectServiceTests : IDisposable
         Assert.NotNull(result);
 
         var gate = AcquireIndexGateForTest(service, project.ProductGuid);
-        var acquired = await gate.WaitAsync(TimeSpan.FromSeconds(5));
+        var acquired = await gate.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(acquired, "the index gate was still held after SyncChanges returned — it leaked the lock");
         gate.Release();
     }
@@ -680,6 +681,80 @@ public class ProjectServiceTests : IDisposable
         Assert.NotNull(withoutRebuild);
         Assert.Equal(withoutRebuild, withRebuild);
     }
+    /// <summary>
+    /// <summary>
+    /// A sync that finds NO CHANGES still records the index time.
+    ///
+    /// This is the root of the stuck-"Indexing…" bug: SyncChanges returned early on the no-change
+    /// path, so the five-minute periodic sweep verified the graph was current over and over and
+    /// recorded none of it. A project nobody edits therefore never acquired a timestamp at all,
+    /// and the control API rendered that missing timestamp as "indexing", forever.
+    /// </summary>
+    [Fact]
+    public void SyncChanges_WithNothingChanged_StillRecordsTheIndexTime()
+    {
+        MakeUnityProject();
+
+        var service = NewService();
+        var project = service.AdoptAndIndex(_projectRoot)!;
+
+        // Clear the durable record the way an upgrade from a build that never wrote one leaves it.
+        var store = new ProjectStore(new AppPaths(_appRoot));
+        store.Save(store.Get(project.ProductGuid)! with { LastIndexedUtc = null });
+
+        var reopened = NewService();
+        Assert.Null(reopened.Summary(project.ProductGuid)!.LastIndexedUtc);
+
+        var sweep = reopened.SyncChanges(project.ProductGuid);
+
+        Assert.NotNull(sweep);
+        Assert.False(sweep!.AnythingChanged, "the fixture was just indexed, so this sweep must find nothing - which is the case under test");
+        Assert.NotNull(reopened.Summary(project.ProductGuid)!.LastIndexedUtc);
+    }
+
+    /// The last-indexed timestamp must SURVIVE A RESTART. "Has this project ever been indexed" is a
+    /// durable fact about the graph sitting on disk, not a fact about the current process.
+    ///
+    /// It used to live only in a ConcurrentDictionary, so every fresh core answered "never" for
+    /// every project - and because the control API derived "is an index running?" from that same
+    /// null, the app then claimed to be indexing forever. Observed live on 2026-09-01: a 42 MB
+    /// graph, 28,838 nodes, a blue "Indexing project_aurora…" that never ended, and zero disk I/O.
+    /// </summary>
+    [Fact]
+    public void LastIndexedUtc_SurvivesARestart()
+    {
+        MakeUnityProject();
+
+        var before = NewService();
+        var project = before.AdoptAndIndex(_projectRoot)!;
+
+        var indexedAt = before.Summary(project.ProductGuid)!.LastIndexedUtc;
+        Assert.NotNull(indexedAt);
+
+        // A second service over the same app root IS what a core restart is - same storage, new
+        // process state. Nothing is re-indexed here, which is the point: the answer has to come off
+        // disk, not from having just done the work.
+        var after = NewService();
+
+        Assert.Equal(indexedAt, after.Summary(project.ProductGuid)!.LastIndexedUtc);
+    }
+
+    /// <summary>
+    /// A project adopted but never indexed still reports null after a restart - the timestamp is
+    /// recorded on COMPLETION, so an interrupted or never-run index must not look finished.
+    /// </summary>
+    [Fact]
+    public void LastIndexedUtc_IsNullForAProjectThatWasNeverIndexed()
+    {
+        MakeUnityProject();
+
+        var before = NewService();
+        var project = before.Adopt(_projectRoot)!;
+
+        Assert.Null(before.Summary(project.ProductGuid)!.LastIndexedUtc);
+        Assert.Null(NewService().Summary(project.ProductGuid)!.LastIndexedUtc);
+    }
+
 
     public void Dispose()
     {
