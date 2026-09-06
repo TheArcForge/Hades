@@ -1,4 +1,5 @@
 using System.Net;
+using System.Runtime.ExceptionServices;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
@@ -9,6 +10,7 @@ using Hades.Core.Storage;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Xunit.Sdk;
 using WireKind = Hades.Contract.Wire.JsonValueKind;
 
 namespace Hades.Server.Tests;
@@ -29,12 +31,25 @@ public abstract class EditorToolTestBase : IClassFixture<WebApplicationFactory<P
 {
     protected const string ProjectGuid = "aaaabbbbccccddddeeeeffff00001111";
 
+    /// <summary>The most recently started fake-Editor responder, so <see cref="Structured"/> can
+    /// report why it failed instead of the symptom it caused. Every test here reads
+    /// <c>Structured(await CallTool(...))</c> BEFORE <c>await responder.WaitAsync(...)</c>, so a
+    /// responder that throws loses its exception entirely: Structured fails first, the responder
+    /// Task is never awaited, and its exception is discarded unobserved. What the test reports is
+    /// then a tool error caused by the responder's failure - most often "busy - its main thread has
+    /// not answered within the probe window", because a responder that threw never wrote a reply
+    /// and the app really did wait out the whole probe window.</summary>
+    Task? _responder;
+
     protected readonly WebApplicationFactory<Program> Factory;
     readonly string _appRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
     readonly string _projectRoot = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
     readonly List<IDisposable> _toDispose = [];
 
-    protected EditorToolTestBase(WebApplicationFactory<Program> factory)
+    /// <param name="charonProbeTimeout">Overrides <see cref="ProjectService.CharonProbeTimeout"/>
+    /// for classes that WANT the probe to time out. Everything else takes the default - see the
+    /// assignment below for why it is so generous.</param>
+    protected EditorToolTestBase(WebApplicationFactory<Program> factory, TimeSpan? charonProbeTimeout = null)
     {
         Directory.CreateDirectory(Path.Combine(_projectRoot, "ProjectSettings"));
         File.WriteAllText(Path.Combine(_projectRoot, "ProjectSettings", "ProjectSettings.asset"),
@@ -50,15 +65,80 @@ public abstract class EditorToolTestBase : IClassFixture<WebApplicationFactory<P
                 services.AddSingleton(sp => new ProjectService(
                     sp.GetRequiredService<AppPaths>(), sp.GetRequiredService<EditorRegistry>())
                 {
-                    CharonProbeTimeout = TimeSpan.FromSeconds(5),
+                    // Deliberately far above production's 1.5s, and raised again from 5s. NO test
+                    // built on this base class exercises the probe TIMING OUT - every one of them
+                    // answers the probe through AnswerBusyProbeThenRespondAsync - so the only thing
+                    // this budget can do here is turn scheduling latency into a spurious "busy".
+                    //
+                    // It did. Two tests failed on a Windows CI runner reporting "its main thread
+                    // has not answered within the probe window"; the fake editor was fine, its
+                    // responder just had not been scheduled yet. xUnit runs collections in
+                    // parallel and the thread pool grows roughly one thread at a time, so on a
+                    // 2-core runner a burst of parallel hosts can queue a reply for seconds. The
+                    // earlier 300ms -> 5s move fixed the same failure for the same reason; 5s was
+                    // simply still inside what a loaded runner can miss.
+                    //
+                    // Costs nothing when things work - a localhost round trip answers in
+                    // milliseconds - and a fake editor that genuinely never answers still fails,
+                    // via the test's own 30s responder guard.
+                    // Deliberately far above production's 1.5s, and raised again from 5s. Almost
+                    // no test built on this base class exercises the probe TIMING OUT - they answer
+                    // it through AnswerBusyProbeThenRespondAsync - so for those the only thing this
+                    // budget can do is turn scheduling latency into a spurious "busy".
+                    //
+                    // It did. Two tests failed on a Windows CI runner reporting "its main thread
+                    // has not answered within the probe window"; the fake editor was fine, its
+                    // responder just had not been scheduled yet. xUnit runs collections in parallel
+                    // and the thread pool grows roughly one thread at a time, so on a 2-core runner
+                    // a burst of parallel hosts can queue a reply for seconds. The earlier
+                    // 300ms -> 5s move fixed the same failure for the same reason; 5s was simply
+                    // still inside what a loaded runner can miss.
+                    //
+                    // Costs nothing when things work - a localhost round trip answers in
+                    // milliseconds - and a fake editor that genuinely never answers still fails,
+                    // via the test's own 30s responder guard. The exception is a class that never
+                    // answers the probe ON PURPOSE, which would now wait the full 30s; those pass
+                    // their own short value to this constructor.
+                    CharonProbeTimeout = charonProbeTimeout ?? TimeSpan.FromSeconds(30),
                 });
             }));
 
         Factory.Services.GetRequiredService<ProjectService>().AdoptAndIndex(_projectRoot);
     }
 
-    protected static JsonElement Structured(JsonElement envelope) =>
-        envelope.GetProperty("result").GetProperty("structuredContent");
+    /// <summary>
+    /// The structured payload of a successful tool call - and, when the call was NOT successful, a
+    /// failure that says so.
+    ///
+    /// <para>This used to be a bare
+    /// <c>envelope.GetProperty("result").GetProperty("structuredContent")</c>, which turned every
+    /// failed tool call in every test using it into <c>KeyNotFoundException: The given key was not
+    /// present in the dictionary</c> - naming neither the missing key nor the error the tool
+    /// actually returned. Two Windows CI failures reported exactly that and nothing else, which is
+    /// what prompted this: an error envelope carries <c>isError</c> and a human-readable
+    /// <c>content</c> block, and throwing it away is throwing away the entire diagnosis.</para>
+    /// </summary>
+    protected JsonElement Structured(JsonElement envelope)
+    {
+        // The responder's failure IS the diagnosis; whatever the tool returned is just its
+        // consequence. Rethrown with its original stack, so the failure points at the line in the
+        // fake Editor that actually broke rather than at this method. See _responder.
+        if (_responder is { IsFaulted: true, Exception: { } fault })
+            ExceptionDispatchInfo.Capture(fault.InnerExceptions.Count == 1 ? fault.InnerExceptions[0] : fault).Throw();
+
+        if (!envelope.TryGetProperty("result", out var result))
+            throw new XunitException($"Tool call returned no 'result'. Envelope:\n{Pretty(envelope)}");
+
+        if (!result.TryGetProperty("structuredContent", out var structured))
+            throw new XunitException(
+                "Tool call returned a 'result' with no 'structuredContent', which is what an error " +
+                $"response looks like. Envelope:\n{Pretty(envelope)}");
+
+        return structured;
+    }
+
+    static string Pretty(JsonElement element) =>
+        JsonSerializer.Serialize(element, new JsonSerializerOptions { WriteIndented = true });
 
     static Hello MakeHello(long processId) => new()
     {
@@ -133,10 +213,20 @@ public abstract class EditorToolTestBase : IClassFixture<WebApplicationFactory<P
     /// KeyNotFoundException from deep inside the HTTP call, nowhere near this check. Writing first,
     /// then throwing, lets the awaited HTTP call complete normally and the violation surface at the
     /// test's own <c>responder.WaitAsync(...)</c> - fast, and pointing at the exact field.</para></summary>
-    protected static async Task AnswerOneAsync(StreamReader reads, StreamWriter writes, JsonValue? result = null)
+    protected Task AnswerOneAsync(StreamReader reads, StreamWriter writes, JsonValue? result = null) =>
+        _responder = AnswerOneCoreAsync(reads, writes, result);
+
+    static async Task AnswerOneCoreAsync(StreamReader reads, StreamWriter writes, JsonValue? result = null)
     {
         var line = await reads.ReadLineAsync();
-        Assert.True(JsonRpcRequest.TryParse(line, out var request, out _));
+        // Names what actually arrived. Unlike the contract violation below, there is no reply this
+        // can still write - without a request id there is nothing to correlate one to - so the app
+        // WILL wait out its full probe window and report the Editor busy. Saying so here is the
+        // difference between diagnosing this and re-deriving it.
+        if (!JsonRpcRequest.TryParse(line, out var request, out var parseError))
+            throw new XunitException(
+                $"The fake Editor could not parse what the app sent it, so it answered nothing and " +
+                $"the app will report the Editor busy. Parse error: {parseError}. Line: {line ?? "<null - the stream closed>"}");
         var violation = PluginWireContractViolation(request!);
         await writes.WriteLineAsync(MiniJson.Write(
             JsonRpcResponse.Success(request!.Id!, result ?? JsonValue.Bool(true)).ToJson()));
@@ -146,9 +236,16 @@ public abstract class EditorToolTestBase : IClassFixture<WebApplicationFactory<P
     /// <summary>Plays the busy probe (plain success) followed by the real command, answered with
     /// <paramref name="result"/>. Returns the parsed real request so a test can assert the method
     /// name and params the tool actually sent, alongside the mapped result it gets back.</summary>
-    protected static async Task<JsonRpcRequest> AnswerBusyProbeThenRespondAsync(StreamReader reads, StreamWriter writes, JsonValue result)
+    protected Task<JsonRpcRequest> AnswerBusyProbeThenRespondAsync(StreamReader reads, StreamWriter writes, JsonValue result)
     {
-        await AnswerOneAsync(reads, writes); // the busy probe
+        var task = AnswerBusyProbeThenRespondCoreAsync(reads, writes, result);
+        _responder = task;
+        return task;
+    }
+
+    static async Task<JsonRpcRequest> AnswerBusyProbeThenRespondCoreAsync(StreamReader reads, StreamWriter writes, JsonValue result)
+    {
+        await AnswerOneCoreAsync(reads, writes); // the busy probe
 
         var line = await reads.ReadLineAsync();
         Assert.True(JsonRpcRequest.TryParse(line, out var request, out var error), error);
@@ -161,9 +258,16 @@ public abstract class EditorToolTestBase : IClassFixture<WebApplicationFactory<P
     /// <summary>Same as <see cref="AnswerBusyProbeThenRespondAsync"/>, but the real command comes
     /// back as a JSON-RPC error - exactly how a plugin-side exception's Message reaches the wire
     /// (see HadesClient.DescribeFailure on the plugin side).</summary>
-    protected static async Task<JsonRpcRequest> AnswerBusyProbeThenFailAsync(StreamReader reads, StreamWriter writes, string message)
+    protected Task<JsonRpcRequest> AnswerBusyProbeThenFailAsync(StreamReader reads, StreamWriter writes, string message)
     {
-        await AnswerOneAsync(reads, writes); // the busy probe
+        var task = AnswerBusyProbeThenFailCoreAsync(reads, writes, message);
+        _responder = task;
+        return task;
+    }
+
+    static async Task<JsonRpcRequest> AnswerBusyProbeThenFailCoreAsync(StreamReader reads, StreamWriter writes, string message)
+    {
+        await AnswerOneCoreAsync(reads, writes); // the busy probe
 
         var line = await reads.ReadLineAsync();
         Assert.True(JsonRpcRequest.TryParse(line, out var request, out var error), error);

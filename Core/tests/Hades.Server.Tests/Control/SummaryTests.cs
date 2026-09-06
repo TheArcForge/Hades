@@ -864,7 +864,12 @@ public sealed class SummaryProgramWiringTests : IClassFixture<WebApplicationFact
 /// (no HTTP) can prove alone: that a real disconnect on the app's real EditorListener is actually
 /// visible through the app's real /control/summary route.
 /// </summary>
-public sealed class SummaryLeaseClearedOnDisconnectTests(WebApplicationFactory<Program> factory) : EditorToolTestBase(factory)
+// Keeps the short probe window this base class no longer defaults to: nothing here ever answers
+// the probe, so /control/summary reaches its verdict by TIMING OUT. On the generous default this
+// class does not fail intermittently - it fails every run, 30s each, because the icon state
+// resolves to busy instead of leaseHeld.
+public sealed class SummaryLeaseClearedOnDisconnectTests(WebApplicationFactory<Program> factory)
+    : EditorToolTestBase(factory, TimeSpan.FromSeconds(5))
 {
     static async Task<bool> Eventually(Func<bool> condition, int timeoutMs = 8000)
     {
