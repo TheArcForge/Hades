@@ -865,7 +865,12 @@ public class QueryToolsTests : IClassFixture<WebApplicationFactory<Program>>, ID
         // (EditorListener's live accept loop, ControlListener's, ObservationService's periodic
         // sweep) keep running, and can still be touching _appRoot/_projectRoot, until the host
         // itself is disposed - which must happen before the recursive delete below, not after.
-        _factory.Dispose();
+        //
+        // DisposeBlocking, not Dispose: the sync Dispose returns BEFORE those background
+        // services have finished shutting down, so the delete below can race handles that are
+        // still open. See HostTeardown for why that is a silent flake on macOS and a hard
+        // failure on Windows.
+        _factory.DisposeBlocking();
 
         TeardownDiagnostics.Delete(_appRoot, _projectRoot);
     }
