@@ -257,6 +257,50 @@ public class ObservationServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task DisposeWaitsForASweepThatIsAlreadyRunning()
+    {
+        // The Windows failure this drain exists for. Disposing a Timer or a FileSystemWatcher does
+        // not wait for a callback already in flight, so Dispose() used to return while a sweep
+        // still held graph.db (and a .project.json.*.tmp) open. On macOS that is invisible -
+        // deleting a file another handle has open unlinks it and succeeds - so the only symptom
+        // was an occasional "Directory not empty" when a late sweep recreated an entry mid-delete.
+        // On Windows an open handle blocks the delete outright, and six Server tests failed on the
+        // first Windows CI run this repo has ever done, every run.
+        //
+        // Held open by a ProjectSynced handler on a background thread, which is where a real sweep
+        // runs: Dispose() must block until that handler returns, not race past it.
+        var service = MakeProject();
+        var observation = new ObservationService(service);
+        Write("Assets/HeldOpen.cs", "public class HeldOpen { }");
+
+        using var sweepStarted = new ManualResetEventSlim();
+        using var releaseSweep = new ManualResetEventSlim();
+        var sweepFinished = 0;
+
+        observation.ProjectSynced += (_, _) =>
+        {
+            sweepStarted.Set();
+            releaseSweep.Wait(TimeSpan.FromSeconds(10));
+            Volatile.Write(ref sweepFinished, 1);
+        };
+
+        var sweep = Task.Run(() => observation.Sync(Guid));
+        Assert.True(sweepStarted.Wait(TimeSpan.FromSeconds(10)), "the sweep never started");
+
+        var dispose = Task.Run(observation.Dispose);
+
+        // Dispose is blocked on the gate the sweep holds - it must not have returned yet.
+        var settled = await Task.WhenAny(dispose, Task.Delay(TimeSpan.FromMilliseconds(500)));
+        Assert.NotSame(dispose, settled);
+
+        releaseSweep.Set();
+
+        await dispose.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(1, Volatile.Read(ref sweepFinished));
+        await sweep.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
     public void SyncAfterDisposeReturnsQuietlyInsteadOfThrowingObjectDisposed()
     {
         // The acquire-side twin of SyncsFinallyReleaseSurvivesADisposeThatRacedInDuringProjectSynced

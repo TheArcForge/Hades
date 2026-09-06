@@ -31,9 +31,19 @@ public sealed class ObservationService(ProjectService projects) : IDisposable
     Timer? _periodicSweep;
     bool _disposed;
 
+    // Managed thread id of the thread currently inside _indexGate, or 0. Only Dispose reads it,
+    // to tell "a sweep is running on another thread, wait for it" apart from "I am being called
+    // from inside that sweep" - Dispose from a ProjectSynced handler runs on the very thread
+    // holding the gate, so draining there would mean waiting DisposeDrainTimeout for itself.
+    int _syncThreadId;
+
     /// <summary>Raised after a project is synced. Exists so the host can log without this class
     /// taking a logging dependency, and so tests can observe progress without sleeping.</summary>
     public event Action<string, SweepResult>? ProjectSynced;
+
+    /// <summary>How long <see cref="Dispose"/> waits for an in-flight sweep to finish before
+    /// giving up on it. See the drain in <see cref="Dispose"/> for why it is bounded.</summary>
+    static readonly TimeSpan DisposeDrainTimeout = TimeSpan.FromSeconds(30);
 
     public TimeSpan PeriodicInterval { get; init; } = TimeSpan.FromMinutes(5);
     public TimeSpan Debounce { get; init; } = TimeSpan.FromMilliseconds(500);
@@ -103,14 +113,24 @@ public sealed class ObservationService(ProjectService projects) : IDisposable
     /// </summary>
     public void Sync(string productGuid)
     {
+        lock (_gate) { if (_disposed) return; }
+
         bool acquired;
         try { acquired = _indexGate.Wait(TimeSpan.FromMinutes(2)); }
         catch (ObjectDisposedException) { return; } // disposed before we could even acquire - nothing to sync, nothing to release
 
         if (!acquired) return;
+        Volatile.Write(ref _syncThreadId, Environment.CurrentManagedThreadId);
 
         try
         {
+            // Re-checked INSIDE the gate. The check above can pass and Dispose() can then run in
+            // full while this call is still queued in Wait() - a watcher's Fire() invokes
+            // ChangesSettled outside its own lock, so ProjectWatcher.Dispose() returning is no
+            // promise that a sweep is not about to start. Without this, that sweep opens graph.db
+            // AFTER teardown believes observation has stopped.
+            lock (_gate) { if (_disposed) return; }
+
             if (projects.SyncChanges(productGuid) is { } sweep && sweep.AnythingChanged)
                 ProjectSynced?.Invoke(productGuid, sweep);
         }
@@ -130,16 +150,13 @@ public sealed class ObservationService(ProjectService projects) : IDisposable
         }
         finally
         {
-            // Guards against the known Dispose()/Sync() teardown race: Dispose() can run - and
-            // dispose _indexGate - while this call is still between the Wait() above and this
-            // finally, on another thread (or synchronously, if disposing is itself triggered from
-            // a ProjectSynced handler). Guarding the release (rather than reordering Dispose to
-            // wait out every in-flight Sync first) is the minimal fix: Dispose already tears down
-            // _watchers and _periodicSweep unconditionally without waiting for them either, and
-            // making Dispose block on a sync that can itself wait up to two minutes for the gate
-            // would trade a rare, harmless race for a routine, user-visible stall. Once _indexGate
-            // is disposed there is nothing left to release into - the semaphore it would have
-            // signalled is already gone - so there is nothing to do here but let it pass.
+            // Guards the Dispose()/Sync() teardown race that survives the drain. Dispose() waits
+            // for this gate precisely so it does NOT return while a sweep still holds graph.db -
+            // but that wait is bounded, so a sweep slower than DisposeDrainTimeout still ends up
+            // releasing into a semaphore Dispose() has already disposed. The same applies when
+            // disposal is triggered synchronously from a ProjectSynced handler, i.e. from inside
+            // this very try. Once _indexGate is disposed there is nothing left to release into -
+            // the semaphore it would have signalled is already gone - so let it pass.
             //
             // The same race can also land BEFORE this call ever acquires the gate - Dispose()
             // beating a scheduled Sync() to _indexGate.Dispose() entirely - in which case
@@ -148,6 +165,7 @@ public sealed class ObservationService(ProjectService projects) : IDisposable
             // never runs for that case, and there is equally nothing to release into. Both ends of
             // the same teardown race are now handled: the acquire returns quietly, the release
             // no-ops.
+            Volatile.Write(ref _syncThreadId, 0);
             try { _indexGate.Release(); }
             catch (ObjectDisposedException) { }
         }
@@ -172,6 +190,30 @@ public sealed class ObservationService(ProjectService projects) : IDisposable
 
         foreach (var watcher in _watchers.Values) watcher.Dispose();
         _watchers.Clear();
+
+        // Wait out a sweep that is already running before declaring observation stopped. Disposing
+        // a Timer or a FileSystemWatcher does not wait for a callback already in flight, so
+        // everything above can complete while Sync() still holds graph.db and a
+        // .project.json.*.tmp open. Acquiring the gate is exactly the proof that no sweep is
+        // running: every path that opens a project's graph holds it, and every sweep that has not
+        // yet acquired sees _disposed and returns without opening anything.
+        //
+        // On macOS/Linux the leak was invisible - deleting a file another handle has open unlinks
+        // it and succeeds - so this surfaced only as an occasional "Directory not empty" when a
+        // late sweep recreated an entry mid-delete. On Windows an open handle blocks the delete
+        // outright, and the same race failed six tests on the first Windows CI run.
+        //
+        // Bounded, so quitting never hangs behind a large project's first index: on timeout this
+        // is no worse than the unconditional teardown it replaces.
+        // Skipped when this IS the sweeping thread - Dispose() called from a ProjectSynced
+        // handler, which runs inside the gate. There is no other thread to wait for, and waiting
+        // would just burn DisposeDrainTimeout before timing out against ourselves.
+        if (Volatile.Read(ref _syncThreadId) != Environment.CurrentManagedThreadId)
+        {
+            try { _indexGate.Wait(DisposeDrainTimeout); }
+            catch (ObjectDisposedException) { }
+        }
+
         _indexGate.Dispose();
     }
 }
