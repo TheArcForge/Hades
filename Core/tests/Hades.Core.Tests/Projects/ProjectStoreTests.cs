@@ -37,6 +37,42 @@ public class ProjectStoreTests : IDisposable
     }
 
     [Fact]
+    public void Get_StillAnswersWhileProjectJsonIsBeingReplaced()
+    {
+        // Save() replaces project.json rather than editing it, and needs delete access on the
+        // target to do so. Get() used to read with File.ReadAllText, which takes FileShare.Read -
+        // granting others read access but DENYING write and delete - so the two could not hold the
+        // file at once and the loser got an IOException. On the read side that became
+        // ReadOutcome.Unreadable, which Get() collapses to null: the same answer as a project Hades
+        // has never heard of. A tool call landing in that window told the user "Unknown project
+        // 'X'. Call hades_status for details" about a project that was perfectly well known.
+        //
+        // Unix hid it - rename(2) is atomic and needs no cooperation from readers - and Windows CI
+        // found it. The handle opened below is exactly the access Save() holds mid-replace.
+        //
+        // BE CLEAR ABOUT WHAT THIS TEST IS WORTH: it only discriminates on Windows. Verified by
+        // running it against the pre-fix implementation on macOS, where it PASSED - .NET does not
+        // enforce FileShare's deny-semantics on Unix, so the collision this sets up cannot happen
+        // there. It is kept because CI runs Windows, where it is a real regression test, and
+        // because it documents the invariant on the platform that has one. It is deliberately not
+        // marked Platform=Windows: it is a valid, if vacuous, pass on Unix, and gating it would
+        // hide the invariant from anyone reading the suite on a Mac.
+        const string guid = "aaaabbbbccccddddeeeeffff00001111";
+        MakeUnityProject(guid);
+        var store = NewStore();
+        store.Adopt(_projectRoot);
+
+        var projectFile = new AppPaths(_appRoot).ProjectFile(guid);
+        using var replacing = new FileStream(
+            projectFile, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete);
+
+        var project = store.Get(guid);
+
+        Assert.NotNull(project);
+        Assert.Equal(guid, project.ProductGuid);
+    }
+
+    [Fact]
     public void Adopt_RegistersAUnityProject()
     {
         MakeUnityProject("aaaabbbbccccddddeeeeffff00001111");
