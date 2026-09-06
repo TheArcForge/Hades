@@ -140,8 +140,12 @@ public sealed class EditorListenerTests : IDisposable
         // sending nothing, so the server's close arrives as a FIN and reads as EOF - this test
         // deliberately leaves a second line UNREAD in the server's receive buffer. Closing a socket
         // with unread data queued sends RST rather than FIN, and Windows surfaces that to the next
-        // read as WSAECONNRESET ("An existing connection was forcibly closed by the remote host")
-        // instead of returning 0.
+        // read as an exception instead of returning 0 - in EITHER of two spellings, which is which
+        // being a matter of who observed the reset first. WSAECONNRESET ("An existing connection
+        // was forcibly closed by the remote host") is the peer's RST arriving; WSAECONNABORTED
+        // ("An established connection was aborted by the software in your host machine") is the
+        // local stack having already torn the connection down when the read is issued. Windows CI
+        // produced the second one, on a test written expecting only the first.
         //
         // Both outcomes prove exactly what this test is about: the connection was closed on the
         // token mismatch, before the well-formed hello behind it could be parsed. Asserting only
@@ -154,7 +158,8 @@ public sealed class EditorListenerTests : IDisposable
         {
             closed = await stream.ReadAsync(buffer, cts.Token) == 0;
         }
-        catch (IOException ex) when (ex.InnerException is SocketException { SocketErrorCode: SocketError.ConnectionReset })
+        catch (IOException ex) when (ex.InnerException is SocketException
+               { SocketErrorCode: SocketError.ConnectionReset or SocketError.ConnectionAborted })
         {
             closed = true;
         }
