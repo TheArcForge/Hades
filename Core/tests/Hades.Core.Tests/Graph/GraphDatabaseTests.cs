@@ -118,7 +118,7 @@ public class GraphDatabaseTests : IDisposable
         // every legitimate schema bump, which tests nothing about migration.
         Directory.CreateDirectory(_dir);
         var dbPath = Path.Combine(_dir, "graph.db");
-        using (var raw = new SqliteConnection($"Data Source={dbPath}"))
+        using (var raw = new SqliteConnection(TestSqlite.ConnectionString(dbPath)))
         {
             raw.Open();
             Exec(raw, """
@@ -259,7 +259,7 @@ public class GraphDatabaseTests : IDisposable
         // user_version write: the version stamp already matches current, but the table
         // is gone. Without the fix, GraphSchema.Apply sees a matching version and returns
         // early forever, so every later call fails with "no such table: nodes".
-        using (var raw = new SqliteConnection($"Data Source={dbPath}"))
+        using (var raw = new SqliteConnection(TestSqlite.ConnectionString(dbPath)))
         {
             raw.Open();
             using var command = raw.CreateCommand();
@@ -287,7 +287,7 @@ public class GraphDatabaseTests : IDisposable
             // Just to create the schema at the current version.
         }
 
-        using var writer = new SqliteConnection($"Data Source={dbPath}");
+        using var writer = new SqliteConnection(TestSqlite.ConnectionString(dbPath));
         writer.Open();
         using var writerTransaction = writer.BeginTransaction(deferred: false);
         using (var command = writer.CreateCommand())

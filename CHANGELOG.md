@@ -4,6 +4,71 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.0] — Windows Support — 2026-09-06
+
+Hades runs on **Windows** as well as macOS. Both platforms run the same .NET 10 core, expose the
+same MCP tool surface, and pass the same test suites — the shells differ, the analysis does not.
+
+**Windows is beta.** Not because it is less tested — the suites are identical and CI runs both — but
+because it has no field use behind it yet. macOS remains the more proven platform.
+
+### Added
+
+- **Windows app.** A tray-based WPF shell supervising the same .NET 10 core, with the Projects /
+  Traces / Memory / Settings window the Mac app has. No taskbar button, and launching a second time
+  activates the running instance instead of starting another.
+- **The core dies with the shell, guaranteed.** A Win32 Job Object with
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` replaces macOS's `HadesCoreReaper`, so an orphaned core cannot
+  outlive the app even if the shell is killed rather than closed. The core is created suspended,
+  assigned to the job, and only then resumed — otherwise a crash in that gap leaks the very process
+  the job exists to own.
+- **Per-user MSI installers, x64 and arm64.** Silent, no UAC prompt, no administrator. Installs to
+  `%LOCALAPPDATA%`, puts `hades` on the per-user PATH, and adds a Start Menu shortcut. Upgrades
+  replace in place rather than registering a second copy.
+- **`irm …/install.ps1 | iex`** — downloads the MSI for the machine's architecture, verifies its
+  SHA256, and installs it. Command-line downloads carry no Mark-of-the-Web, so this path does not
+  raise SmartScreen; the script refuses to install rather than proceed on a checksum mismatch.
+- **`hades serve`** — runs the core in a terminal until stopped, on both platforms. A core started
+  this way is adopted by the shell if one launches later.
+- **A shared control client** (`Hades.Control.Client`), so both shells and the CLI speak to the
+  control API through one typed client instead of three hand-rolled copies.
+- **Both installers are built and attached by CI.** The Windows job builds both MSIs and the macOS
+  job builds the DMG; each uploads to a **draft** release and prints its checksum for pinning. The
+  DMG was previously built by hand on a maintainer's machine.
+
+### Changed
+
+- **Windows data lives in `%LOCALAPPDATA%\Hades`** (macOS is unchanged at
+  `~/Library/Application Support/Hades`). It holds the graph, trace and memory-index databases and
+  your authored memory documents, and **uninstalling does not remove it** — measured, not assumed.
+- The control API's token file is created with a restricted DACL **at creation** on Windows, rather
+  than being tightened afterwards, so it is never briefly world-readable.
+- Documentation covers both platforms: how to install, how to update, and how to build from source.
+  The v1.2 documentation set is retired to `Documentation/Retired/`.
+
+### Fixed
+
+- **A newly attached Unity Editor could be reported busy when it was not.** The Editor was published
+  to the registry before its session was started, with a `project.json` write in between, so a tool
+  call landing in that window was told *"Unity is attached but busy — its main thread has not
+  answered within the probe window… this is not a disconnect. Retry shortly."* Nothing was busy and
+  nothing was slow. The session is now started before the Editor is published.
+- **Shutdown could race an in-flight project sweep.** Disposing the observation service tore down its
+  timer and file watchers without waiting for a sweep already running, so the graph database could
+  still be open after shutdown reported complete. It now waits for the sweep to finish.
+- `LIMITATIONS.md` and `README.md` no longer describe runtime confidence signals — `confidence`,
+  `result_status`, `nested_by`, `scan_health` — that the current app does not emit. Those were v1.2
+  features; the pages had not caught up.
+
+### Known limitations
+
+- **Windows arm64 is built but has never been executed.** No ARM64 hardware was available. Every
+  binary's PE machine type was read from its header, including the native SQLite library, which
+  establishes that the payload is genuinely ARM64 rather than silently x64 — it does not establish
+  that it runs.
+- Neither platform's app is code-signed. `Documentation/Installing.md` describes what each OS shows
+  you and why.
+
 ## [2.0.0] — Standalone macOS App — 2026-08-17
 
 Hades is now a **standalone macOS menu-bar app** rather than an in-Unity-Editor package. A .NET 10 core builds and serves the knowledge graph over MCP; the Unity plugin is optional and dials out to the app only for live-Editor features. The v1.x architecture (in-Editor MCP server, Node.js Bridge/Scanner, browser dashboard, Charon/Asphodel) is **retired** — its docs live under `Documentation/Retired/`, and its code only in git history.

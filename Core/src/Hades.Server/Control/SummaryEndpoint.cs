@@ -118,12 +118,20 @@ public sealed record ProjectSnapshot
     /// <see cref="CharonStatus.Busy"/>, which this is always sourced from.</summary>
     public required bool Busy { get; init; }
 
-    /// <summary>Null when this project has never completed an index in this process - see
-    /// <see cref="ProjectService.Summary"/>. Treated as the <see cref="ControlIconState.Indexing"/>
-    /// condition: the only currently-observable stand-in for "an index is in progress", since
-    /// nothing in <see cref="Hades.Core.Observation.ObservationService"/> exposes a live
-    /// sync-in-progress flag yet.</summary>
+    /// <summary>When an index of this project last COMPLETED, or null if one never has - see
+    /// <see cref="ProjectService.Summary"/>. Persisted, so it survives a restart.
+    ///
+    /// <para>This USED TO DOUBLE as the <see cref="ControlIconState.Indexing"/> condition, on the
+    /// reasoning that a null meant an index must be in flight. It did not: the value was
+    /// per-process, so after every restart every project looked mid-index forever, and the menu bar
+    /// and tray both said "Indexing X…" over a finished graph with nothing running. What is actually
+    /// running is now asked directly - see <see cref="IsIndexing"/>.</para></summary>
     public DateTimeOffset? LastIndexedUtc { get; init; }
+
+    /// <summary>Whether an index or rebuild operation is running for this project right now, from
+    /// <see cref="OperationRegistry.IsRunningFor"/>. This, and nothing else, is what raises
+    /// <see cref="ControlIconState.Indexing"/>.</summary>
+    public bool IsIndexing { get; init; }
 
     public LeaseStatus? Lease { get; init; }
 }
@@ -196,7 +204,12 @@ public static class SummaryEndpoint
     /// concurrently across projects (so one busy/stuck Editor's probe timeout cannot stall every
     /// other project's row - see hades_charon_status's own description of how often Unity gets
     /// stuck) and fed to the pure <see cref="Resolve"/>.</summary>
-    public static async Task<SummaryResult> BuildAsync(ProjectService projects, LeaseRegistry leases, Func<DateTimeOffset> utcNow)
+    /// <param name="operations">Where <see cref="ProjectSnapshot.IsIndexing"/> is answered from.
+    /// Optional for the same reason as <see cref="ProjectsEndpoint.BuildAsync"/>'s: the fixture-driven
+    /// tests here describe projects at rest, and null means "nothing is running", identical to an
+    /// empty registry. The production route passes the listener's shared instance.</param>
+    public static async Task<SummaryResult> BuildAsync(
+        ProjectService projects, LeaseRegistry leases, Func<DateTimeOffset> utcNow, OperationRegistry? operations = null)
     {
         var known = projects.KnownProjects();
 
@@ -214,6 +227,7 @@ public static class SummaryEndpoint
                 Attached = charon?.Attached ?? false,
                 Busy = charon?.Busy ?? false,
                 LastIndexedUtc = summary?.LastIndexedUtc,
+                IsIndexing = operations?.IsRunningFor(project.ProductGuid) ?? false,
                 Lease = lease,
             };
         })).ConfigureAwait(false);
@@ -281,7 +295,11 @@ public static class SummaryEndpoint
             };
         }
 
-        if (projects.FirstOrDefault(p => p.LastIndexedUtc is null) is { } indexingProject)
+        // Something is ACTUALLY indexing - not merely "has no completed index on record", which is
+        // what this used to test and which every project satisfies for the whole life of a freshly
+        // started core. A project that has never been indexed and has nothing running is not
+        // indexing; it falls through to idle below, and its ROW still says "not yet indexed".
+        if (projects.FirstOrDefault(p => p.IsIndexing) is { } indexingProject)
         {
             return new SummaryResult
             {
@@ -332,9 +350,14 @@ public static class SummaryEndpoint
             _ => "No Editor attached",
         };
 
-        var indexPart = project.LastIndexedUtc is { } lastIndexedUtc
-            ? $"indexed {FormatAge(now - lastIndexedUtc)} ago"
-            : "not yet indexed";
+        // Same three-way split ProjectsEndpoint.BuildRow makes, and for the same reason: running
+        // work wins, then the persisted timestamp, then the honest "it has never been built".
+        var indexPart = project switch
+        {
+            { IsIndexing: true } => "indexing…",
+            { LastIndexedUtc: { } lastIndexedUtc } => $"indexed {FormatAge(now - lastIndexedUtc)} ago",
+            _ => "not yet indexed",
+        };
 
         return new SummaryRow
         {

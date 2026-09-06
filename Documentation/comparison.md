@@ -1,6 +1,15 @@
 <!-- Recordings are committed at Documentation/media/{no-hades,hades}-run.mp4 (H.264, inline-playable on GitHub).
      Numbers below are REAL (captured from /usage on clean single-prompt runs). Do not round. -->
 
+> [!NOTE]
+> **These numbers were measured against Hades v1.2** (the Unity-package + Node-hub architecture),
+> not the current standalone app — **a re-measurement against v2 is due.** They are kept live, and
+> linked from the README, deliberately: the *structural* claim they demonstrate is about the
+> knowledge graph, which v2 still has and still answers from. What has not been re-measured is the
+> token cost and the tool-call count, both of which the v2 architecture changes.
+>
+> Treat the shape of the result as current and the figures as historical until this note is removed.
+
 # With and without Hades: one prompt, side by side
 
 This is a single, reproducible task run twice under identical conditions — once with stock Claude Code, once with Hades. Same prompt, same model, same project. The only variable is whether Hades is connected.

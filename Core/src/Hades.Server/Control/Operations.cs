@@ -27,6 +27,21 @@ public sealed record OperationRecord
     /// change here to add a new value - same reservation pattern as <see cref="ProjectWarning.Code"/>.</summary>
     public required string Kind { get; init; }
 
+    /// <summary>
+    /// What this operation is ABOUT - a productGuid for the two that work on a project (index and
+    /// rebuild), null for anything that does not belong to one.
+    ///
+    /// <para>This exists so a caller can ask <see cref="OperationRegistry.IsRunningFor"/> whether a
+    /// given project is being indexed RIGHT NOW. Before it, nothing could: the control API inferred
+    /// "indexing" from a null last-indexed timestamp, which cannot distinguish "no index has ever
+    /// completed" from "an index is in progress" - and since that timestamp was per-process, every
+    /// restart reported every project as permanently indexing. Deliberately not part of
+    /// <see cref="OperationResult"/>: it is an internal correlation key, not something a poller of
+    /// <c>GET /control/operations/{id}</c> needs, and the client already knows which project it
+    /// asked about.</para>
+    /// </summary>
+    public string? Subject { get; init; }
+
     public required OperationState State { get; init; }
     public required DateTimeOffset StartedAtUtc { get; init; }
     public DateTimeOffset? FinishedAtUtc { get; init; }
@@ -124,24 +139,55 @@ public sealed class OperationRegistry(Func<DateTimeOffset>? utcNow = null, TimeS
     /// async long action can still run inside a synchronous wrapper here without this signature
     /// needing to grow a second overload nobody has needed yet.
     /// </summary>
-    public string Start(string kind, Func<object?> work)
+    public string Start(string kind, Func<object?> work) => Start(kind, _ => work());
+
+    /// <summary>
+    /// As <see cref="Start(string, Func{object})"/>, but the work is handed a reporter it can call
+    /// as it goes; whatever it reports becomes <see cref="OperationRecord.Progress"/> for anyone
+    /// polling. That field's own doc comment reserved this ("a future operation that DOES report
+    /// incremental progress ... populates it with no wire-shape change") - this is that operation.
+    ///
+    /// <para>Reports after the operation has finished are ignored rather than resurrecting a
+    /// terminal record: a straggling callback from work that already threw must not overwrite the
+    /// failure with a cheerful count.</para>
+    /// </summary>
+    public string Start(string kind, Func<Action<string>, object?> work) => Start(kind, null, work);
+
+    /// <summary>
+    /// As <see cref="Start(string, Func{Action{string}, object})"/>, but the operation also records
+    /// WHICH project it is about, so <see cref="IsRunningFor"/> can answer for that project. See
+    /// <see cref="OperationRecord.Subject"/> for why that question needed asking.
+    /// </summary>
+    public string Start(string kind, string? subject, Func<Action<string>, object?> work)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(kind);
         ArgumentNullException.ThrowIfNull(work);
 
         var id = Guid.NewGuid().ToString();
 
+        void Report(string text)
+        {
+            lock (_gate)
+            {
+                if (_operations.GetValueOrDefault(id) is not { State: OperationState.Running } running) return;
+                _operations[id] = running with { Progress = text };
+            }
+        }
+
         lock (_gate)
         {
             PruneExpired();
-            _operations[id] = new OperationRecord { Id = id, Kind = kind, State = OperationState.Running, StartedAtUtc = _utcNow() };
+            _operations[id] = new OperationRecord
+            {
+                Id = id, Kind = kind, Subject = subject, State = OperationState.Running, StartedAtUtc = _utcNow(),
+            };
         }
 
         var task = Task.Run(() =>
         {
             try
             {
-                var result = work();
+                var result = work(Report);
                 lock (_gate)
                 {
                     _operations[id] = _operations[id] with { State = OperationState.Done, FinishedAtUtc = _utcNow(), Result = result };
@@ -172,6 +218,32 @@ public sealed class OperationRegistry(Func<DateTimeOffset>? utcNow = null, TimeS
     {
         if (string.IsNullOrEmpty(id)) return null;
         lock (_gate) { return _operations.GetValueOrDefault(id); }
+    }
+
+    /// <summary>
+    /// Is any operation currently RUNNING for this subject (a productGuid)?
+    ///
+    /// <para>Deliberately narrow: only <see cref="OperationState.Running"/> counts. A finished
+    /// record lingers so a poller can still read its result (see this class's own retention notes),
+    /// but a finished operation is not work in progress, and reporting it as such is the whole class
+    /// of bug this method exists to end.</para>
+    ///
+    /// <para>An operation with no <see cref="OperationRecord.Subject"/> can never match, so a
+    /// project-less operation cannot make some unrelated project look busy.</para>
+    /// </summary>
+    public bool IsRunningFor(string subject)
+    {
+        if (string.IsNullOrEmpty(subject)) return false;
+
+        lock (_gate)
+        {
+            foreach (var operation in _operations.Values)
+            {
+                if (operation.State == OperationState.Running && operation.Subject == subject) return true;
+            }
+
+            return false;
+        }
     }
 
     /// <summary>Test-only observability hook: the background <see cref="Task"/> backing

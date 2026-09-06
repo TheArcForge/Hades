@@ -60,7 +60,15 @@ public sealed class SettingsResolveTests
             $"Hades is running on port 9999 — the documented MCP port {SettingsEndpoint.McpPort} is "
             + "already in use by another process. " + McpBinding.RemedyForPortInUse(SettingsEndpoint.McpPort),
             result.McpPort.Message);
-        Assert.Contains("lsof -nP -iTCP:7823 -sTCP:LISTEN", result.McpPort.Message);
+        // Deliberately the CONCRETE command rather than another RemedyForPortInUse call, which would
+        // tautologically match whatever the implementation emits. `lsof` does not exist on Windows,
+        // and this literal used to be asserted unconditionally - so it passed on Windows while the
+        // app told Windows users to run a macOS tool.
+        Assert.Contains(
+            OperatingSystem.IsWindows()
+                ? "netstat -ano | findstr :7823"
+                : "lsof -nP -iTCP:7823 -sTCP:LISTEN",
+            result.McpPort.Message);
     }
 
     [Fact]

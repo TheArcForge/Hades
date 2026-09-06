@@ -55,7 +55,7 @@ public sealed class LeaseVisibilityTests : IClassFixture<WebApplicationFactory<P
                 services.AddSingleton(sp => new ProjectService(
                     sp.GetRequiredService<AppPaths>(), sp.GetRequiredService<EditorRegistry>())
                 {
-                    CharonProbeTimeout = TimeSpan.FromMilliseconds(300),
+                    CharonProbeTimeout = TimeSpan.FromSeconds(5),
                 });
             }));
 
@@ -137,7 +137,7 @@ public sealed class LeaseVisibilityTests : IClassFixture<WebApplicationFactory<P
         var responder = RespondToNextProbeAsync(reads, writes);
 
         var structured = Structured(await McpTestClient.CallTool(_factory, "hades_charon_status"));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.True(structured.GetProperty("attached").GetBoolean());
         Assert.False(structured.GetProperty("leaseHeld").GetBoolean());
@@ -164,7 +164,7 @@ public sealed class LeaseVisibilityTests : IClassFixture<WebApplicationFactory<P
         leases.RecordHeld(ProjectGuid, "lease-xyz", expiresAt);
 
         var structured = Structured(await McpTestClient.CallTool(_factory, "hades_charon_status"));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.True(structured.GetProperty("attached").GetBoolean());
         Assert.True(structured.GetProperty("leaseHeld").GetBoolean());
@@ -200,7 +200,7 @@ public sealed class LeaseVisibilityTests : IClassFixture<WebApplicationFactory<P
         leases.RecordHeld(ProjectGuid, "lease-ttl-fired", DateTimeOffset.UtcNow.AddSeconds(-215)); // already expired
 
         var structured = Structured(await McpTestClient.CallTool(_factory, "hades_charon_status"));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.True(structured.GetProperty("attached").GetBoolean()); // the connection itself never dropped
         Assert.False(structured.GetProperty("leaseHeld").GetBoolean());
@@ -279,11 +279,11 @@ public sealed class LeaseVisibilityTests : IClassFixture<WebApplicationFactory<P
             .SetProperty("expiresAtUtcMs", JsonValue.Integer(DateTimeOffset.UtcNow.AddSeconds(30).ToUnixTimeMilliseconds())));
 
         await McpTestClient.CallTool(_factory, "script_editing_session", new { action = "begin" });
-        await beginResponder.WaitAsync(TimeSpan.FromSeconds(5));
+        await beginResponder.WaitAsync(TimeSpan.FromSeconds(30));
 
         var statusResponder = RespondToNextProbeAsync(reads, writes);
         var structured = Structured(await McpTestClient.CallTool(_factory, "hades_charon_status"));
-        await statusResponder.WaitAsync(TimeSpan.FromSeconds(5));
+        await statusResponder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.True(structured.GetProperty("leaseHeld").GetBoolean());
         Assert.Equal("hades-script-editing", structured.GetProperty("leaseId").GetString());

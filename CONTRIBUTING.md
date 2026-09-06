@@ -8,6 +8,14 @@
 - Python 3 (only for the e2e regression suite)
 - Claude Code (latest)
 
+On **Windows**, additionally:
+
+- **Developer Mode on** — Settings → System → For developers. Six tests create directory symlinks,
+  which needs `SeCreateSymbolicLinkPrivilege`; without it they fail with *"A required privilege is
+  not held by the client"*. This is a prerequisite for the suite, not a product requirement, and CI
+  does not need it because GitHub's `windows-latest` runners already run elevated.
+- **WiX 7** (`dotnet tool install --global wix`), only if you are building the MSI.
+
 ## Setup
 
 ```bash
@@ -51,10 +59,10 @@ instead; a test enforces that the root stays un-installable.
 All tests must pass before submitting a PR.
 
 ```bash
-# .NET core (~1863 tests; isolate with HADES_HOME=$(mktemp -d))
+# .NET core (1,961 tests on macOS; isolate with HADES_HOME=$(mktemp -d))
 dotnet test Core
 
-# Swift — run in each of Mac/HadesControl, Mac/HadesSupervision, Mac/HadesApp (70 / 14 / 211 tests)
+# Swift — run in each of Mac/HadesControl, Mac/HadesSupervision, Mac/HadesApp (81 / 14 / 213 tests)
 swift test
 
 # Unity plugin EditMode, batchmode (384 tests)
@@ -62,6 +70,22 @@ scripts/regression/run-plugin-editmode.sh
 
 # End-to-end (25 cases; needs the app running with a project registered)
 python3 scripts/regression/hades_suite.py --url http://127.0.0.1:7823/mcp
+```
+
+**Platform-specific tests are filtered, not skipped.** xUnit 2.9.3 has no dynamic skip, so tests that
+can only run on one OS carry a `Platform` trait and each platform filters out what it cannot run
+(see `Core/tests/Hades.Core.Tests/PlatformTraits.cs`). A filtered test is not reported at all, which
+beats the early-return convention xUnit would report as *passed*:
+
+```powershell
+# Windows — .NET core plus the Windows shell and supervision suites (2,222 together)
+dotnet test Core --filter "Platform!=Unix"
+dotnet test Windows\HadesWindows.slnx --filter "Platform!=Unix"
+```
+
+```bash
+# macOS — the mirror image
+dotnet test Core --filter "Platform!=Windows"
 ```
 
 See `Documentation/RegressionCoverage.md` for the per-issue regression coverage map.

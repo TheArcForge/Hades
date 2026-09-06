@@ -146,7 +146,7 @@ public class TraceRetentionTests : IDisposable
 
     int CountSpansForTrace(string traceId)
     {
-        using var connection = new SqliteConnection($"Data Source={DbPath}");
+        using var connection = new SqliteConnection(TestSqlite.ConnectionString(DbPath));
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT COUNT(*) FROM spans WHERE trace_id = $traceId;";

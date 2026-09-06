@@ -143,6 +143,56 @@ public sealed class OperationRegistryTests
 
         gate.SetResult();
     }
+
+    /// <summary>
+    /// An operation can name the PROJECT it is working on, and the registry can be asked whether
+    /// anything is running for that project.
+    ///
+    /// This exists to answer "is this project indexing?" from something that is actually running.
+    /// The control API used to infer it from a null last-indexed timestamp, which meant it could
+    /// not tell "no index has ever completed" from "an index is in progress" - and since that
+    /// timestamp was per-process, every restart answered the second when it meant the first.
+    /// </summary>
+    [Fact]
+    public async Task IsRunningFor_IsTrueOnlyWhileAnOperationForThatSubjectIsRunning()
+    {
+        var gate = new TaskCompletionSource();
+        var registry = new OperationRegistry();
+
+        Assert.False(registry.IsRunningFor("guid-a"));
+
+        var id = registry.Start("index", "guid-a", _ => { gate.Task.GetAwaiter().GetResult(); return "unused"; });
+
+        Assert.True(registry.IsRunningFor("guid-a"));
+
+        // A different project is unaffected - this is per-subject, not a global "something is busy".
+        Assert.False(registry.IsRunningFor("guid-b"));
+
+        gate.SetResult();
+        await registry.WhenComplete(id);
+
+        // Finished, so no longer running. The record survives for polling; the answer does not.
+        Assert.False(registry.IsRunningFor("guid-a"));
+        Assert.Equal(OperationState.Done, registry.Get(id)!.State);
+    }
+
+    /// <summary>
+    /// An operation started WITHOUT a subject never claims one. Not every operation is about a
+    /// project, and a subjectless operation must not make some unrelated project look busy.
+    /// </summary>
+    [Fact]
+    public void IsRunningFor_IgnoresOperationsWithNoSubject()
+    {
+        var gate = new TaskCompletionSource();
+        var registry = new OperationRegistry();
+
+        registry.Start("test", () => { gate.Task.GetAwaiter().GetResult(); return "unused"; });
+
+        Assert.False(registry.IsRunningFor("guid-a"));
+        Assert.False(registry.IsRunningFor(""));
+
+        gate.SetResult();
+    }
 }
 
 /// <summary>

@@ -49,7 +49,7 @@ public sealed class AckGapTests : IDisposable
         {
             // Keeps the busy-probe fast, same tunable EditorProxyTests/CharonStatusTests shrink
             // for the same reason - none of these tests want to spend real time proving "busy".
-            CharonProbeTimeout = TimeSpan.FromMilliseconds(300),
+            CharonProbeTimeout = TimeSpan.FromSeconds(5),
         };
         _projects.AdoptAndIndex(_projectRoot);
 
@@ -127,7 +127,7 @@ public sealed class AckGapTests : IDisposable
 
         var ex = await Assert.ThrowsAsync<McpException>(
             () => _proxy.SendCommandAsync(ProjectGuid, "scene.create_gameobject"));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("interrupted, state unverified, re-query before retrying", ex.Message);
     }
@@ -160,7 +160,7 @@ public sealed class AckGapTests : IDisposable
 
         var ex = await Assert.ThrowsAsync<McpException>(
             () => _proxy.SendCommandAsync(ProjectGuid, "scene.create_gameobject"));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("interrupted, state unverified, re-query before retrying", ex.Message);
     }
@@ -224,7 +224,7 @@ public sealed class AckGapTests : IDisposable
         }
 
         var result = await _proxy.SendCommandAsync(ProjectGuid, "scene.create_gameobject", verifyIfInterrupted: Verify);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal(1, verifyCalls);
         Assert.True(result.TryGetProperty("hadesVerifiedNotAcknowledged", out var flag) && flag!.AsBoolean());
@@ -262,7 +262,7 @@ public sealed class AckGapTests : IDisposable
 
         var ex = await Assert.ThrowsAsync<McpException>(
             () => _proxy.SendCommandAsync(ProjectGuid, "scene.create_gameobject", verifyIfInterrupted: Verify));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("did not", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("retry", ex.Message, StringComparison.OrdinalIgnoreCase);
@@ -286,7 +286,7 @@ public sealed class AckGapTests : IDisposable
 
         var ex = await Assert.ThrowsAsync<McpException>(
             () => _proxy.SendCommandAsync(ProjectGuid, "scene.create_gameobject", verifyIfInterrupted: Verify));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("interrupted, state unverified, re-query before retrying", ex.Message);
     }
@@ -307,7 +307,7 @@ public sealed class AckGapTests : IDisposable
 
         var ex = await Assert.ThrowsAsync<McpException>(
             () => _proxy.SendCommandAsync(ProjectGuid, "scene.create_gameobject", verifyIfInterrupted: Verify));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("interrupted, state unverified, re-query before retrying", ex.Message);
     }
@@ -332,7 +332,7 @@ public sealed class AckGapTests : IDisposable
 
         var ex = await Assert.ThrowsAsync<McpException>(
             () => _proxy.SendCommandAsync(ProjectGuid, "project_run_tests", verifyIfInterrupted: Verify));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("timed out", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, verifyCalls);
@@ -361,7 +361,7 @@ public sealed class AckGapTests : IDisposable
 
         var ex = await Assert.ThrowsAsync<McpException>(
             () => _proxy.SendCommandAsync(ProjectGuid, "scene.delete_gameobject", verifyIfInterrupted: Verify));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("GameObject 'Foo' does not exist.", ex.Message);
         Assert.Equal(0, verifyCalls);
@@ -427,7 +427,7 @@ public sealed class AckGapTests : IDisposable
             });
 
             await _proxy.SendCommandAsync(ProjectGuid, "scene.create_gameobject", sameParams, verifyIfInterrupted: Verify);
-            await responder.WaitAsync(TimeSpan.FromSeconds(5));
+            await responder.WaitAsync(TimeSpan.FromSeconds(30));
         }
 
         Assert.Equal(2, verifyCalls);

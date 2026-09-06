@@ -72,7 +72,18 @@ public enum ProjectEditorState: String, ControlEnum {
 /// Mirrors `Hades.Server.Control.ProjectIndexState`.
 public enum ProjectIndexState: String, ControlEnum {
     case indexed
+
+    /// An index or rebuild is running for this project RIGHT NOW.
     case indexing
+
+    /// No index has ever completed, and none is running.
+    ///
+    /// Added 2026-09-01. This and `indexing` were one case, meaning "no index has completed in the
+    /// core's current process" - which conflated two different facts and, because the timestamp
+    /// behind it did not survive a restart, made every project report as permanently indexing after
+    /// every launch. The menu bar showed a spinner and "Indexing X…" over a finished graph with
+    /// nothing running. See the server-side enum for the full account.
+    case neverIndexed
 
     /// Decode target for any value this build does not recognise - see `ControlIconState.unknown`.
     case unknown

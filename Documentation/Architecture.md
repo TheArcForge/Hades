@@ -61,17 +61,19 @@ idea that survives is memory (`.arcforge/memory/`), which v2 imports on sight �
               └───────────────────────────────────────┘
 
                                   │
-          supervised (spawn/kill) by, via HadesCoreReaper —
-               dialed into over a loopback socket by —
+        supervised (spawn/kill) by — via HadesCoreReaper on macOS,
+          a Win32 Job Object on Windows — and dialed into over
+                       a loopback socket by —
                                   ▼
 
-                      ┌───────────────────────┐
-                      │  Hades.app            │
-                      │  Mac/HadesApp      │
-                      │  (Swift 6 / SwiftUI)  │
-                      └───────────────────────┘
+        ┌────────────────────────┐   ┌────────────────────────┐
+        │  Hades.app             │   │  Hades.Shell.exe       │
+        │  Mac/HadesApp          │   │  Windows/Hades.Shell   │
+        │  (Swift 6 / SwiftUI)   │   │  (.NET 10 / WPF)       │
+        └────────────────────────┘   └────────────────────────┘
              spawns + supervises the core; reads it back
          through a separate local control API (bearer token)
+       — one implementation per platform; the core is identical
 
             ┌───────────────────────────────────────────┐
             │  Unity Editor plugin                      │
@@ -83,7 +85,8 @@ idea that survives is memory (`.arcforge/memory/`), which v2 imports on sight �
 
                                   │
                                   ▼
-                 ~/Library/Application Support/Hades/
+          macOS:   ~/Library/Application Support/Hades/
+          Windows: %LOCALAPPDATA%\Hades\
                        projects/<productGUID>/
                     graph.db · traces.db · memory/
 ```
@@ -124,7 +127,15 @@ other platforms). `HADES_HOME` overrides it end to end (`Program.cs`, `Hades.Cli
 avoid sharing one project store. Per-project state lives under `projects/<productGUID>/` — see §7
 for what's authored versus derived there.
 
-### 2.2 The shell — `Mac/HadesApp`
+### 2.2 The shells — `Mac/HadesApp` and `Windows/Hades.Shell`
+
+Two shells, one core, and the governing rule in §3 is what keeps that from becoming two products:
+neither shell decides anything. Each spawns, supervises, and renders the core, and every question
+of *behaviour* is answered by the core's control API rather than re-derived locally. That is why
+this section can describe two implementations of supervision and only one description of what the
+app actually does.
+
+#### macOS — `Mac/HadesApp`
 
 Swift 6 / SwiftUI, macOS 14+. It does not decide anything; it spawns, supervises, and renders the
 core (see the governing rule in §3). It is a menu-bar app (`LSUIElement`, no Dock icon) that also
@@ -166,6 +177,45 @@ live, before the fix.
 Quitting `Hades.app` is safe from Claude Code's side: the MCP Streamable HTTP transport
 auto-reconnects with backoff on its own, so relaunching the app resumes a session Claude Code never
 needed to restart.
+
+#### Windows — `Windows/Hades.Shell`
+
+.NET 10 / WPF (`net10.0-windows`, `UseWPF` **and** `UseWindowsForms`), Windows 10 1607+. A tray app
+that opens the same four views — projects, memory, traces, settings. WinForms is referenced for one
+reason: `NotifyIcon`. WPF has no tray primitive, and writing one against `Shell_NotifyIcon` by hand
+would be a worse version of a control that already ships in the framework.
+
+**The same decision logic, deliberately shared.** `CoreSupervisor`
+(`Windows/Hades.Supervision/CoreSupervisor.cs`) is a port of the Swift supervisor's *decisions* —
+adopt-or-spawn, exponential backoff, `minimumStableUptime`, the attempt budget, `Ownership` — and
+adopted cores are never killed by `stop()`, exactly as on the Mac. The platform-specific part is
+isolated behind `ICoreProcessHost`, so the file holding the decisions has no P/Invoke in it and is
+testable without spawning anything.
+
+**Supervision uses a Job Object, not a reaper.** Where macOS needs `HadesCoreReaper` as a live
+process because a `SIGKILL`'d app runs no cleanup code, Windows has a kernel object with the same
+guarantee: a Job Object created with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`
+(`Windows/Hades.Supervision/JobObject.cs`) kills everything inside it when the last handle closes —
+and handles close on process death regardless of *how* the process died. The kernel is the thing
+still alive after the app is gone, so no intermediate process is needed. Verified on real hardware,
+including End Task from Task Manager leaving no orphaned core.
+
+**The spawn→assign race is closed explicitly.** A process created normally could run — and fork —
+before it is placed in the job, and anything it forked in that window would escape. So
+`ProcessLauncher` (`Windows/Hades.Supervision/ProcessLauncher.cs`) calls `CreateProcess` via
+P/Invoke with `CREATE_SUSPENDED`, assigns the process to the job, and only then calls
+`ResumeThread`. `System.Diagnostics.Process` cannot express `CREATE_SUSPENDED`, which is the whole
+reason that P/Invoke exists rather than the managed API. The same call passes `CREATE_NO_WINDOW`:
+without it the core's console window appears on screen, showing ASP.NET request logs — that was a
+real, user-reported bug, not a theoretical one.
+
+**One shell per logon session, not per machine.** The single-instance mutex is
+`Local\Hades.Shell.SingleInstance` (`Windows/Hades.Shell/App.xaml.cs`). `Global\` would let
+whichever user logged in first lock everyone else out of their own copy — and since the MSI installs
+per-user, two users on one machine legitimately have two installs and two data roots.
+
+Closing the window hides it to the tray; only **Quit** exits. Quitting is as safe as on the Mac, and
+for the same reason: Claude Code's transport reconnects on its own.
 
 ### 2.3 The plugin — `UnityPlugin/Assets/Hades`
 
@@ -602,11 +652,12 @@ rules out project-local leftovers; it says nothing about the rest of the machine
 
 ## 8. Distribution
 
-Three install units, each with one job: **`Hades.app`** (DMG, core + shell), the **Claude Code
-plugin** (`hades@arcforge` — 22 skills under `skills/`, 6 `/hades:*` commands under `commands/`, and
-the static MCP server declaration), and **`Assets/Hades/`** (written by the app itself, per project,
-optional — §2.3). What is *not* an install unit anymore: the UPM package, `Packages/manifest.json`,
-`.mcp.json`, a `CLAUDE.md` block, `claude_desktop_config.json`, and Node.js.
+Three install units, each with one job: **the app** (a DMG on macOS, an MSI on Windows — core +
+shell either way), the **Claude Code plugin** (`hades@arcforge` — 22 skills under `skills/`, 6
+`/hades:*` commands under `commands/`, and the static MCP server declaration), and
+**`Assets/Hades/`** (written by the app itself, per project, optional — §2.3). What is *not* an
+install unit anymore: the UPM package, `Packages/manifest.json`, `.mcp.json`, a `CLAUDE.md` block,
+`claude_desktop_config.json`, and Node.js.
 
 A Release build (`Mac/HadesApp/scripts/build-app.sh Release`) publishes `Hades.Server`
 self-contained for `osx-arm64` (`dotnet publish -r osx-arm64 --self-contained true`) into
@@ -640,3 +691,50 @@ the same DMG downloaded through a browser (measured, not assumed). Homebrew is *
 a cask was evaluated and removed once measurement showed Homebrew quarantines its own downloads
 (`ReleasePipeline.md` §6.2 and §6.6). Notarization is deferred to a later signed release — not
 blocking today's distribution, but it is what makes every channel work without this explanation.
+
+### 8.1 Windows — the MSI
+
+**Two MSIs, one per architecture** (`win-x64`, `win-arm64`), built by
+`Windows/Installer/build-msi.ps1` from `Windows/Installer/Hades.wxs` with WiX 7. An MSI carries a
+single architecture in its Template summary, which is what stops an arm64 package installing on x64
+and vice versa — so this is two artifacts, not one artifact with two payloads. Shell, CLI and core
+are each published **self-contained**: a user installing a tray app has not agreed to install a .NET
+runtime. Measured against an actual build: 862 files, 103 MB for x64.
+
+The layout is not arbitrary. Shell and CLI sit side by side at the install root so that `hades.exe`
+lands directly in the directory the MSI puts on `PATH`; the core goes under `core\` because that is
+exactly where both `Hades.Shell`'s `CoreLifetime` and `Hades.Cli`'s `CoreLocator` look for it.
+Publishing two self-contained apps into one directory is safe because they carry the same .NET
+version — the shared runtime files are byte-identical, and everything app-specific is named after
+its own assembly.
+
+**Per-user, to `%LOCALAPPDATA%\Programs\Hades`.** That is the whole reason there is no UAC prompt: a
+per-machine install writes to Program Files and must elevate, and a tray utility asking for
+administrator rights to install is asking for more trust than it needs. It also means two users on
+one machine get their own copy and their own data, matching the shell's `Local\` mutex (§2.2).
+Launch-at-login is deliberately an in-app setting rather than an MSI feature, matching the Mac — an
+installer that silently registered a startup entry would be deciding something the user never did,
+and the app's own toggle would then disagree with the OS.
+
+**Uninstall never removes `%LOCALAPPDATA%\Hades`.** That directory holds the graph, trace and
+memory-index databases *and* the user's authored memory documents. `uninstall.sh` makes the same
+promise on macOS, and an MSI that deleted it would be the one irreversible thing this installer
+could do. Verified: 7 files before uninstall, 7 after.
+
+**The OS floor is read from the registry, not from MSI's own property.** `WindowsBuild` and
+`VersionNT` are frozen at Windows 8.1's values for unmanifested packages — a verbose install log on
+Windows 11 build 26200 records `Property(S): WindowsBuild = 9600` — so a launch condition written
+against them is false on *every* supported Windows. The condition reads
+`HKLM\…\CurrentVersion\CurrentBuildNumber` instead, and the floor is 14393 (Windows 10 1607), which
+is .NET 10's own documented floor. What no MSI condition can express is **edition**, so .NET 10's
+"Enterprise/IoT/LTSC only" nuance for some Windows 10 servicing branches is a documented support
+statement rather than something the installer prevents.
+
+Both MSIs are **unsigned**, and SmartScreen's warning is therefore correct. As on macOS the channel
+decides the friction, but the mechanism differs: Windows warns only about files carrying a
+**Mark-of-the-Web** (`Zone.Identifier`), which browsers attach and command-line downloaders do not.
+Measured on Windows 11 26200, with a control file proving the check could see a mark if one were
+there: `curl.exe`, `Invoke-WebRequest` and `System.Net.WebClient` all wrote none. `install.ps1` uses
+`curl.exe` for that reason. The one case with no workaround is **Smart App Control** (Windows 11
+clean installs only), which blocks unsigned code outright — untested, and recorded from
+documentation rather than measurement.

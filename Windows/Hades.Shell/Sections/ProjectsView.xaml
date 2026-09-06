@@ -1,0 +1,96 @@
+<UserControl x:Class="Hades.Shell.Sections.ProjectsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Hades.Shell.ViewModels">
+
+    <!-- As with MainWindow, no colours are named here: the active theme supplies them, which is
+         what keeps this legible in both. The one exception is the warning glyph, which carries
+         meaning rather than decoration. -->
+
+    <UserControl.Resources>
+        <vm:SeverityGlyphConverter x:Key="SeverityGlyph" />
+        <vm:EmptyToCollapsedConverter x:Key="EmptyToCollapsed" />
+        <vm:RebuildProgressConverter x:Key="RebuildProgress" />
+        <FontFamily x:Key="GlyphFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+    </UserControl.Resources>
+
+    <Grid Margin="24,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+            <TextBlock Text="Projects" FontSize="24" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <Button Content="Add Project…" Click="OnAddProject" Margin="16,0,0,0" Padding="12,4" VerticalAlignment="Center" />
+        </StackPanel>
+
+        <!-- The last action's result, straight from the server. Collapsed when there is nothing to
+             say, rather than showing an empty box. -->
+        <Border Grid.Row="1"
+                Padding="10,8"
+                Margin="0,0,0,12"
+                BorderThickness="1"
+                Visibility="{Binding LastActionMessage, Converter={StaticResource EmptyToCollapsed}}">
+            <TextBlock Text="{Binding LastActionMessage}" TextWrapping="Wrap" />
+        </Border>
+
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding Projects}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border BorderThickness="1" Padding="14,12" Margin="0,0,0,10" CornerRadius="4">
+                            <StackPanel>
+                                <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding Path}" Opacity="0.7" FontSize="12" TextTrimming="CharacterEllipsis" />
+
+                                <!-- indexStatus and editor.status are the core's own sentences.
+                                     Printed verbatim, never rebuilt from nodeCount/edgeCount. -->
+                                <TextBlock Text="{Binding IndexStatus}" Margin="0,6,0,0" FontSize="13" />
+                                <TextBlock Text="{Binding Editor.Status}" Opacity="0.8" FontSize="12" />
+
+                                <ItemsControl ItemsSource="{Binding Warnings}" Margin="0,8,0,0">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal" Margin="0,2">
+                                                <TextBlock Text="{Binding Severity, Converter={StaticResource SeverityGlyph}}"
+                                                           FontFamily="{StaticResource GlyphFont}"
+                                                           Margin="0,0,6,0"
+                                                           VerticalAlignment="Top" />
+                                                <StackPanel>
+                                                    <!-- message and remedy are the core's, verbatim.
+                                                         The shell never re-words a warning. -->
+                                                    <TextBlock Text="{Binding Message}" TextWrapping="Wrap" FontSize="12" />
+                                                    <TextBlock Text="{Binding Remedy}" TextWrapping="Wrap" FontSize="12" Opacity="0.7" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <TextBlock Margin="0,8,0,0" FontSize="12" Opacity="0.85" TextWrapping="Wrap">
+                                    <TextBlock.Text>
+                                        <MultiBinding Converter="{StaticResource RebuildProgress}">
+                                            <Binding Path="ProductGuid" />
+                                            <Binding Path="DataContext.RebuildProgress"
+                                                     RelativeSource="{RelativeSource AncestorType=UserControl}" />
+                                        </MultiBinding>
+                                    </TextBlock.Text>
+                                </TextBlock>
+
+                                <WrapPanel Margin="0,10,0,0">
+                                    <Button Content="Rebuild" Click="OnRebuild" Tag="{Binding ProductGuid}" Padding="10,3" Margin="0,0,6,0" />
+                                    <Button Content="Install Plugin" Click="OnInstallPlugin" Tag="{Binding ProductGuid}" Padding="10,3" Margin="0,0,6,0" />
+                                    <Button Content="Reveal in Explorer" Click="OnReveal" Tag="{Binding ProductGuid}" Padding="10,3" Margin="0,0,6,0" />
+                                    <Button Content="Open in Unity" Click="OnOpenInUnity" Tag="{Binding ProductGuid}" Padding="10,3" Margin="0,0,6,0" />
+                                    <Button Content="Remove…" Click="OnRemove" Tag="{Binding ProductGuid}" Padding="10,3" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

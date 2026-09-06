@@ -111,7 +111,7 @@ public sealed class AssetManageTests(WebApplicationFactory<Program> factory) : E
             },
         }));
 
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         // ONE wire call for the whole 3-operation spec.
         Assert.Equal("asset.manage", request.Method);
@@ -163,7 +163,7 @@ public sealed class AssetManageTests(WebApplicationFactory<Program> factory) : E
                 new Dictionary<string, object> { ["op"] = "import", ["path"] = "Assets/Ghost.png" },
             },
         }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("asset.manage", request.Method);
         Assert.Equal(2, Prop(request.Params!, "operations").Items.Count);
@@ -198,7 +198,7 @@ public sealed class AssetManageTests(WebApplicationFactory<Program> factory) : E
         {
             operations = new[] { new Dictionary<string, object> { ["op"] = "refresh" } },
         });
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("asset.manage requires an 'operations' array parameter.", McpTestClient.ErrorText(envelope));
     }

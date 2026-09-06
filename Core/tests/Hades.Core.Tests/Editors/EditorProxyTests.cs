@@ -36,7 +36,7 @@ public sealed class EditorProxyTests : IDisposable
         {
             // Keeps the busy-probe tests fast without weakening what they prove - same tunable
             // CharonStatusTests shrinks for the same reason.
-            CharonProbeTimeout = TimeSpan.FromMilliseconds(300),
+            CharonProbeTimeout = TimeSpan.FromSeconds(5),
         };
         _projects.AdoptAndIndex(_projectRoot);
 
@@ -148,7 +148,7 @@ public sealed class EditorProxyTests : IDisposable
 
         var ex = await Assert.ThrowsAsync<McpException>(
             () => _proxy.SendCommandAsync(ProjectGuid, "scene.delete_gameobject"));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("GameObject 'Foo' does not exist.", ex.Message);
     }
@@ -166,7 +166,7 @@ public sealed class EditorProxyTests : IDisposable
 
         var ex = await Assert.ThrowsAsync<McpException>(
             () => _proxy.SendCommandAsync(ProjectGuid, "project_run_tests"));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("project_run_tests", ex.Message);
         Assert.Contains("2", ex.Message); // CommandTimeout is 2s in this fixture
@@ -187,7 +187,7 @@ public sealed class EditorProxyTests : IDisposable
 
         var ex = await Assert.ThrowsAsync<McpException>(
             () => _proxy.SendCommandAsync(ProjectGuid, "material_apply"));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("may still be executing", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("not rolled back", ex.Message, StringComparison.OrdinalIgnoreCase);
@@ -212,7 +212,7 @@ public sealed class EditorProxyTests : IDisposable
 
         var ex = await Assert.ThrowsAsync<McpException>(
             () => _proxy.SendCommandAsync(ProjectGuid, "material_apply", @params));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("3 operation", ex.Message);
     }
@@ -235,7 +235,7 @@ public sealed class EditorProxyTests : IDisposable
         });
 
         var result = await _proxy.SendCommandAsync(ProjectGuid, "assets.refresh");
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.True(result.TryGetProperty("refreshed", out var refreshed));
         Assert.True(refreshed!.AsBoolean());

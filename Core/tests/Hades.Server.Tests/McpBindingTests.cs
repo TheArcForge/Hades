@@ -224,11 +224,17 @@ public sealed class McpBindingPortInUseTests
 
         var ex = Assert.Throws<McpPortBindException>(() => McpBinding.Run(app, boundUrl));
 
+        // The find-the-holder command is platform-specific: `lsof` is not on Windows. Spelled out
+        // here rather than delegated to McpBinding, so this stays a test of the text users see.
+        var expectedFind = OperatingSystem.IsWindows()
+            ? $"netstat -ano | findstr :{occupiedPort}"
+            : $"lsof -nP -iTCP:{occupiedPort} -sTCP:LISTEN";
+
         Assert.Equal(
             $"Hades could not start: port {occupiedPort} is already in use. The MCP endpoint binds this port "
             + "deliberately and always, so Claude Code and other MCP clients can find it at a fixed address — "
             + $"Hades will not silently switch to a different one. Find and stop whatever is using port {occupiedPort} "
-            + $"(`lsof -nP -iTCP:{occupiedPort} -sTCP:LISTEN`), or set ASPNETCORE_URLS to run Hades at a different address.",
+            + $"(`{expectedFind}`), or set ASPNETCORE_URLS to run Hades at a different address.",
             ex.Message);
 
         // Never a raw, un-actionable trace - the real exception is available (InnerException), not lost.

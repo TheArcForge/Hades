@@ -74,7 +74,10 @@ public static class AssetIndexer
         };
     }
 
-    public static IndexResult IndexProject(string projectRoot, GraphDatabase database)
+    /// <param name="progress">Optional, per file. See <see cref="ScriptIndexer.IndexProject"/>'s own
+    /// parameter for why it is opt-in.</param>
+    public static IndexResult IndexProject(
+        string projectRoot, GraphDatabase database, IProgress<IndexProgressUpdate>? progress = null)
     {
         var stopwatch = Stopwatch.StartNew();
         var warnings = new List<string>();
@@ -83,17 +86,56 @@ public static class AssetIndexer
 
         var unreachablePackagePrefixes = ProjectWalker.UnreachablePackagePrefixes(projectRoot);
 
-        foreach (var root in ProjectWalker.ResolveScanRoots(projectRoot, warnings))
-        {
-            var visited = new HashSet<string>(StringComparer.Ordinal);
-            var failedDirectories = new List<string>();
+        var roots = ProjectWalker.ResolveScanRoots(projectRoot, warnings).ToList();
+        var totalFiles = 0;
 
-            foreach (var file in ProjectWalker.EnumerateSourceFiles(root.AbsolutePath, "*", failedDirectories))
+        // Materialised once and reused, never counted in a separate pass - see
+        // <see cref="ScriptIndexer.IndexProject"/>'s own note on why a second walk is a trap.
+        //
+        // Filtered to the indexable extensions HERE, so the total is the number of files that will
+        // actually be indexed. An asset walk is "*", so counting everything on disk would make the
+        // progress read as permanently stalled against a total it was never going to reach.
+        List<(List<string> Files, List<string> Failed)>? prewalked = null;
+
+        if (progress is not null)
+        {
+            prewalked = [];
+            foreach (var root in roots)
             {
+                var failed = new List<string>();
+                var files = ProjectWalker.EnumerateSourceFiles(root.AbsolutePath, "*", failed)
+                    .Where(f => Extensions.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase))
+                    .ToList();
+
+                prewalked.Add((files, failed));
+                totalFiles += files.Count;
+            }
+
+            progress.Report(new IndexProgressUpdate("Assets", 0, totalFiles));
+        }
+
+        for (var rootIndex = 0; rootIndex < roots.Count; rootIndex++)
+        {
+            var root = roots[rootIndex];
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            var failedDirectories = prewalked is null ? [] : prewalked[rootIndex].Failed;
+
+            var walk = prewalked is null
+                ? ProjectWalker.EnumerateSourceFiles(root.AbsolutePath, "*", failedDirectories)
+                : prewalked[rootIndex].Files;
+
+            foreach (var file in walk)
+            {
+                // Already filtered when prewalked; still needed for the lazy path.
                 if (!Extensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase))
                     continue;
 
                 filesScanned++;
+
+                if (progress is not null && filesScanned % 25 == 0)
+                {
+                    progress.Report(new IndexProgressUpdate("Assets", filesScanned, totalFiles));
+                }
                 var relativePath = ProjectWalker.ToRecordedPath(root, file);
 
                 // Recorded even when the read below fails: a file that exists but could not be
@@ -134,7 +176,14 @@ public static class AssetIndexer
         // A full, independent walk of the same project — BinaryAssetIndexer resolves its own
         // scan roots and sweeps only the extensions it owns (see its own IndexProject), so this
         // cannot double-count or step on the YAML loop above.
+        progress?.Report(new IndexProgressUpdate("Assets", filesScanned, totalFiles));
+
         var binary = BinaryAssetIndexer.IndexProject(projectRoot, database);
+
+        // Reported as its own phase rather than folded into "Assets": the binary walk covers a
+        // different extension set with its own total, so adding its count to a total that never
+        // included it would show more done than there was to do.
+        progress?.Report(new IndexProgressUpdate("Binary assets", binary.FilesScanned, binary.FilesScanned));
 
         return new IndexResult
         {

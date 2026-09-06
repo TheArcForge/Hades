@@ -210,19 +210,58 @@ public sealed class ProjectStore(AppPaths paths)
         var file = paths.ProjectFile(productGuid);
         if (!File.Exists(file)) return (ReadOutcome.Missing, null);
 
-        try
+        // Retried, and read with permissive sharing, because Save() REPLACES this file rather than
+        // editing it in place - and a replace and a concurrent read collide on Windows.
+        //
+        // File.ReadAllText opens with FileShare.Read, which grants others read access and denies
+        // them write and DELETE. Save()'s File.Move(temp, target, overwrite: true) needs delete
+        // access on the target, so the two cannot hold the file at once: whichever loses gets an
+        // IOException. On the read side that became ReadOutcome.Unreadable, which Get() collapses
+        // to null - the same null as a project Hades has never heard of. A tool call landing in
+        // that window told the user "Unknown project 'X'. Call hades_status for details" about a
+        // project that was perfectly well known and whose file was busy for a millisecond.
+        //
+        // Unix never showed this: rename(2) is atomic and does not need the reader to stand aside,
+        // so a reader always sees either the old file or the new one. Windows CI hit it.
+        //
+        // FileShare.Delete lets the replace proceed while this read is in flight (the handle keeps
+        // reading the old, complete file - never a partial one, which is the whole point of writing
+        // to a temp and moving). The retry covers what sharing alone cannot: a collision that has
+        // already begun. Only an IO failure is retried - a genuinely missing project still answers
+        // immediately, and corrupt JSON is a verdict, not a transient.
+        for (var attempt = 1; ; attempt++)
         {
-            var project = JsonSerializer.Deserialize<UnityProject>(File.ReadAllText(file), JsonOptions);
-            return (ReadOutcome.Ok, project);
+            try
+            {
+                var project = JsonSerializer.Deserialize<UnityProject>(ReadAllTextShared(file), JsonOptions);
+                return (ReadOutcome.Ok, project);
+            }
+            catch (JsonException)
+            {
+                return (ReadOutcome.Corrupt, null);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                if (attempt >= MaxReadAttempts) return (ReadOutcome.Unreadable, null);
+                Thread.Sleep(attempt * 2);
+            }
         }
-        catch (JsonException)
-        {
-            return (ReadOutcome.Corrupt, null);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            return (ReadOutcome.Unreadable, null);
-        }
+    }
+
+    /// <summary>Attempts before a read gives up - see <see cref="ReadProjectFile"/>. Five attempts
+    /// with a 2ms-per-attempt backoff is ~30ms of patience, far longer than a file replace, and
+    /// paid only by a read that has actually collided.</summary>
+    const int MaxReadAttempts = 5;
+
+    /// <summary>Reads a file without standing in the way of a concurrent replace - see
+    /// <see cref="ReadProjectFile"/> for why <see cref="FileShare.Delete"/> is the load-bearing
+    /// part.</summary>
+    static string ReadAllTextShared(string path)
+    {
+        using var stream = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     /// <summary>

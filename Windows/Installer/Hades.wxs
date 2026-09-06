@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Hades MSI.
+
+  PER-USER, to %LOCALAPPDATA%\Programs\Hades. That is the whole reason there is no UAC prompt: a
+  per-machine install writes to Program Files and must elevate, and an app that asks for admin to
+  install a menu-bar-shaped tray utility is asking for more trust than it needs. It also means two
+  users on one machine get their own copy and their own data, which matches how the shell already
+  scopes its single-instance mutex (Local\, not Global\).
+
+  Launch-at-login is deliberately NOT an MSI feature. It is an in-app setting, matching the Mac -
+  see Hades.Shell/ShellFacts/LaunchAtLogin.cs. An installer that silently registered a startup entry
+  would be making a decision the user never made, and the app's own toggle would then disagree with
+  what the OS actually does.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <Package Name="Hades"
+           Manufacturer="ArcForge"
+           Version="$(var.Version)"
+           Scope="perUser"
+           Compressed="yes"
+           UpgradeCode="CE41CF62-CFE0-4F72-93B5-2E4E33E3A0FF">
+
+    <!--
+      UpgradeCode is generated ONCE and never changed. It is the identity Windows uses to decide
+      whether a new MSI replaces this product or installs a second copy alongside it; changing it
+      later strands every existing install, which then has to be uninstalled by hand.
+    -->
+    <!--
+      AllowSameVersionUpgrades IS LOAD-BEARING, and its absence was a real bug.
+
+      WiX regenerates the ProductCode on every build (Package has no explicit Id, so it is auto),
+      and MajorUpgrade by default only removes products with a STRICTLY LOWER version. Every build
+      of 2.1.0 is therefore a brand-new product that does not replace the last one: rebuilding
+      during development left THREE "Hades" entries registered at once, three rows in Settings >
+      Apps, and an install directory whose files belonged to whichever product happened to write
+      last. A user who installs 2.1.0 twice would get exactly the same.
+
+      The 2.1.0 -> 2.1.1 upgrade test passed throughout, because those versions differ - which is
+      precisely why this was never caught: the same-version case was the one nobody ran.
+    -->
+    <MajorUpgrade
+        AllowDowngrades="no"
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of Hades is already installed. Uninstall it first if you really want to go back to !(bind.property.ProductVersion)." />
+
+    <!--
+      The OS floor.
+
+      READ THE BUILD FROM THE REGISTRY, NEVER FROM MSI's WindowsBuild. WindowsBuild and VersionNT
+      are frozen at Windows 8.1's values for unmanifested packages: this machine runs Windows 11
+      build 26200, and a verbose install log of the first build of this installer recorded
+      `Property(S): WindowsBuild = 9600` followed by `LaunchConditions. Return value 3`. A condition
+      written against WindowsBuild is thus false on EVERY supported Windows - that first MSI would
+      have refused to install for every user, which is precisely how this was found.
+
+      HKLM\...\CurrentVersion\CurrentBuildNumber is not subject to that shim and reports the real
+      26200. It is a REG_SZ, and MSI converts it to an integer when the other side is an integer
+      literal - measured with a throwaway probe package rather than assumed: a floor of 9999 PASSED
+      against "26200", which a lexicographic comparison would have failed ('2' < '9'). A floor of
+      999999 was blocked, so the guard genuinely refuses rather than merely never firing.
+
+      14393 is Windows 10 1607, .NET 10's own documented floor - below it the runtime this app
+      carries will not start, so installing would produce a broken app rather than a helpful one.
+
+      WHAT THIS STILL CANNOT DO: check the EDITION. .NET 10's supported-OS list carries an
+      "Enterprise/IoT/LTSC only" nuance for some Windows 10 servicing branches, and no MSI condition
+      can express that. That is a documented support statement, NOT something the installer
+      prevents - do not describe it as enforced anywhere, because it is not.
+    -->
+    <Property Id="WINDOWSBUILDNUMBER" Secure="yes">
+      <RegistrySearch Id="WindowsBuildNumberSearch"
+                      Root="HKLM"
+                      Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+                      Name="CurrentBuildNumber"
+                      Type="raw" />
+    </Property>
+
+    <Launch Condition="Installed OR (WINDOWSBUILDNUMBER &gt;= 14393)"
+            Message="Hades needs Windows 10 version 1607 (build 14393) or later. This machine reports build [WINDOWSBUILDNUMBER]." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!--
+      The icon Settings > Apps and Control Panel's Programs and Features show for this product.
+      Add/Remove Programs is the ONE surface that cannot inherit the mark from the executable: the
+      Start menu shortcut resolves its icon from its target, and both windows get theirs from the
+      exe's Win32 resource, but ARP reads only what the MSI recorded at install time. Left unset it
+      shows the generic MSI package box.
+
+      SAME FILE the shell compiles in as its ApplicationIcon, passed in by build-msi.ps1 rather
+      than written as a path here, so there is one icon and one place that knows where it lives.
+    -->
+    <Icon Id="HadesIcon" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="HadesIcon" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Hades" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ShortcutFolder" Name="Hades" />
+    </StandardDirectory>
+
+    <!--
+      The payload is harvested from the staging directory build-msi.ps1 assembles: the shell and the
+      CLI published side by side at the root (so hades.exe lands directly on PATH), and the core
+      under core\. That core\ placement is not incidental - both Hades.Shell's CoreLifetime and
+      Hades.Cli's CoreLocator look for exactly `core\Hades.Server.exe` beside themselves.
+
+      Harvested rather than hand-listed because a self-contained publish is a couple of hundred
+      files; a hand-maintained list would go stale on the next runtime bump and fail at install time
+      rather than build time.
+    -->
+    <ComponentGroup Id="Payload" Directory="INSTALLFOLDER">
+      <Files Include="$(var.StagingDir)\**" />
+    </ComponentGroup>
+
+    <Component Id="StartMenuShortcut" Directory="ShortcutFolder" Guid="*">
+      <Shortcut Id="HadesShortcut"
+                Name="Hades"
+                Description="Unity project intelligence for coding agents"
+                Target="[INSTALLFOLDER]Hades.Shell.exe"
+                WorkingDirectory="INSTALLFOLDER">
+
+        <!--
+          THIS SHORTCUT IS WHAT WINDOWS READS NOTIFICATION IDENTITY FROM, which is a larger job than
+          "appears in the Start menu" and the reason this property is not optional.
+
+          A non-packaged desktop app has no manifest for the shell to consult, so for anything
+          notification-related - the caption on a toast, and the name and icon in Settings >
+          Notifications - Windows resolves the process's AppUserModelID to a Start menu shortcut
+          carrying the SAME id, and takes the name and icon from there. With no such shortcut it has
+          only the executable name and no icon: this app was listed as "Hades.Shell" behind a blank
+          blue placeholder until this was set.
+
+          The value MUST equal NotificationIdentity.AppUserModelId in the shell, exactly. Nothing
+          enforces that but the two strings being equal, and if they diverge the lookup silently
+          fails back to the anonymous form rather than erroring.
+
+          The NAME and ICON both come from this shortcut: Name="Hades" above is what a toast is
+          captioned, and the icon is the target executable's (see Hades.Shell.csproj's
+          ApplicationIcon, and the deliberate absence of an Icon attribute here so there is one
+          source rather than a copy that can disagree).
+        -->
+        <ShortcutProperty Key="System.AppUserModel.ID" Value="ArcForge.Hades" />
+      </Shortcut>
+
+      <RemoveFolder Id="RemoveShortcutFolder" Directory="ShortcutFolder" On="uninstall" />
+
+      <!-- A per-user component needs a per-user keypath, and HKCU is the only one available here. -->
+      <RegistryValue Root="HKCU" Key="Software\ArcForge\Hades" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Component Id="PathEntry" Directory="INSTALLFOLDER" Guid="*">
+      <!--
+        System="no": the per-user PATH, which needs no elevation. Part="last" so Hades never shadows
+        a tool the user already has earlier on their PATH. Permanent="no" so uninstall takes it back
+        out - a PATH entry pointing at a deleted directory is exactly the kind of debris
+        uninstall.sh's own promise refuses to leave on the Mac.
+      -->
+      <Environment Id="HadesPath"
+                   Name="PATH"
+                   Value="[INSTALLFOLDER]"
+                   Action="set"
+                   Part="last"
+                   System="no"
+                   Permanent="no" />
+
+      <RegistryValue Root="HKCU" Key="Software\ArcForge\Hades" Name="PathEntry" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Feature Id="Main" Title="Hades" Level="1">
+      <ComponentGroupRef Id="Payload" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="PathEntry" />
+    </Feature>
+
+    <!--
+      NOTE ON UNINSTALL, stated because its absence is deliberate: nothing here removes
+      %LOCALAPPDATA%\Hades, the data root. That directory holds the graph, trace and memory-index
+      databases AND the user's authored memory documents. uninstall.sh makes the same promise on
+      macOS - never destroy authored data as a side effect of removing the app - and an MSI that
+      deleted it would be the one irreversible thing this installer could do.
+    -->
+  </Package>
+</Wix>

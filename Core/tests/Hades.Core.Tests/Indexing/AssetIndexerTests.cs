@@ -235,7 +235,7 @@ public class AssetIndexerTests : IDisposable
         Directory.CreateDirectory(Path.Combine(external, "Runtime"));
         File.WriteAllText(Path.Combine(external, "Runtime", "Ext.prefab"),
             Header + "--- !u!1 &9\nGameObject:\n  m_Name: External\n");
-        Write("Packages/manifest.json", $"{{\"dependencies\":{{\"com.example.pkg\":\"file:{external}\"}}}}");
+        Write("Packages/manifest.json", ManifestJson.WithLocalPackage("com.example.pkg", external));
         using var db = OpenGraph();
 
         AssetIndexer.IndexProject(_projectRoot, db);

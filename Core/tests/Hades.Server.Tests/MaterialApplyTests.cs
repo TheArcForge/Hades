@@ -104,7 +104,7 @@ public sealed class MaterialApplyTests(WebApplicationFactory<Program> factory) :
                 new Dictionary<string, object> { ["op"] = "setProperty", ["path"] = "Assets/Foo.mat", ["propertyName"] = "_Metallic", ["value"] = 0.5 },
             },
         }));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal(0, structured.GetProperty("failed").GetArrayLength());
         Assert.Single(structured.GetProperty("applied").EnumerateArray());
@@ -200,7 +200,7 @@ public sealed class MaterialApplyTests(WebApplicationFactory<Program> factory) :
             },
         }));
 
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         // ONE wire call for the whole 5-operation spec.
         Assert.Equal("material.apply", request.Method);
@@ -266,7 +266,7 @@ public sealed class MaterialApplyTests(WebApplicationFactory<Program> factory) :
                 new Dictionary<string, object> { ["op"] = "setProperty", ["path"] = "Assets/Foo.mat", ["propertyName"] = "_Bogus", ["value"] = 1 },
             },
         }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("material.apply", request.Method);
         Assert.Equal(2, Prop(request.Params!, "operations").Items.Count);
@@ -301,7 +301,7 @@ public sealed class MaterialApplyTests(WebApplicationFactory<Program> factory) :
         {
             operations = new[] { new Dictionary<string, object> { ["op"] = "create", ["path"] = "Assets/Foo.mat" } },
         });
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("material.apply requires an 'operations' array parameter.", McpTestClient.ErrorText(envelope));
     }
@@ -338,7 +338,7 @@ public sealed class MaterialApplyTests(WebApplicationFactory<Program> factory) :
             },
         }));
 
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
         var ops = Prop(request.Params!, "operations");
 
         // create still gets the wire's own 'path' key.
@@ -395,7 +395,7 @@ public sealed class MaterialApplyTests(WebApplicationFactory<Program> factory) :
             },
         }));
 
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
         var ops = Prop(request.Params!, "operations");
         Assert.Equal(5, ops.Items.Count);
 

@@ -159,14 +159,23 @@ public sealed class V12DetectorTests : IDisposable
     [Fact]
     public void Detect_ManifestEntry_FileForm_ReportsValueAndResolvedAbsolutePath()
     {
-        WriteManifest("file:/Users/mike/Projects/Hades");
+        // Absolute in the shape the running platform actually uses. This used to hardcode
+        // "/Users/mike/Projects/Hades", which IS rooted on Windows — but rooted without a drive, so
+        // Path.GetFullPath correctly resolves it against the current one and returns
+        // "D:\Users\mike\Projects\Hades". The assertion was pinning the literal the test wrote
+        // rather than the contract, which is "an already-absolute file: path resolves to itself".
+        var absolute = OperatingSystem.IsWindows()
+            ? @"C:\Projects\Hades"
+            : "/Users/mike/Projects/Hades";
+
+        WriteManifest($"file:{absolute}");
 
         var result = V12Detector.Detect(_projectRoot);
 
         Assert.True(result.IsV12Project);
         Assert.True(result.ManifestEntry.Present);
-        Assert.Equal("file:/Users/mike/Projects/Hades", result.ManifestEntry.Value);
-        Assert.Equal("/Users/mike/Projects/Hades", result.ManifestEntry.ResolvedPath);
+        Assert.Equal($"file:{absolute}", result.ManifestEntry.Value);
+        Assert.Equal(absolute, result.ManifestEntry.ResolvedPath);
     }
 
     [Fact]

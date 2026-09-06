@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The .NET twin of Mac/HadesControl (Swift). Platform-neutral net10.0 on purpose: this is
+    consumed by Hades.Cli, which ships on macOS, and by the coming Windows WPF shell. It is NOT
+    Windows code and does not live under a Windows/ tree.
+
+    It must never reference Hades.Core or Hades.Server. That rule is NOT enforced by an
+    EnsureShellIsAClient target here, deliberately: this project IS the client/core boundary
+    object, so putting a direct-ProjectReference guard on it too would blur where the real coverage
+    comes from. The direct-reference guard (EnsureShellIsAClient) lives on the projects that CONSUME
+    this one - Hades.Cli.csproj and the Windows/Directory.Build.props tree - and empirically (see
+    the task's probe log) it already catches an added-but-unused ProjectReference here: SDK-style
+    MSBuild expands @(ProjectReference) to the full transitive project closure by Build time, so
+    Hades.Cli's own guard sees straight through this project to Hades.Core.
+
+    What Hades.Cli's guard canNOT see - and what actually needs Core/tests/Hades.Control.Client.Tests/
+    ArchitectureTests.cs - is a dependency that never shows up as an XML <ProjectReference> at all:
+    a renamed project, a <Reference> with a HintPath to a prebuilt DLL sitting only on THIS project
+    (not inherited into a consumer's item list the way ProjectReference is), or - the case that
+    forced ArchitectureTests.cs to walk the BUILT assembly's actual metadata instead of just checking
+    "is a ProjectReference present" - real code in this project actually calling into Hades.Core.
+    Roslyn trims an assembly reference that no code ever touches from the compiled AssemblyRef table,
+    so a bare unused reference doesn't even reach that test; the moment someone writes a line of code
+    that does, the reference stops being theoretical and ArchitectureTests.cs is what catches it.
+
+    Banned APIs (Assembly.LoadFrom, a raw SqliteConnection) are guarded separately below - neither a
+    ProjectReference check nor a metadata walk can see those; see BannedSymbols.txt.
+  -->
+  <PropertyGroup>
+    <RootNamespace>Hades.Control.Client</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" PrivateAssets="all" />
+    <AdditionalFiles Include="..\..\..\BannedSymbols.txt" Link="BannedSymbols.txt" />
+  </ItemGroup>
+
+</Project>

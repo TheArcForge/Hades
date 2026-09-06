@@ -4,18 +4,26 @@ using System.Text;
 namespace Hades.Server.Tests;
 
 /// <summary>
-/// TEMPORARY instrumentation for root-causing the "Directory not empty" teardown flake (rotates
-/// across MaterialApplyTests/QueryToolsTests/AnimationApplyTests/ToolCallTests/MemoryToolsTests,
-/// ~1 in 2-4 full <c>Hades.Server.Tests</c> runs). Wraps the exact same
-/// <c>Directory.Delete(dir, recursive: true)</c> every one of those classes' own <c>Dispose()</c>
+/// Opt-in instrumentation that root-caused the "Directory not empty" teardown flake, kept as a
+/// tripwire in case it ever comes back. Wraps the exact same
+/// <c>Directory.Delete(dir, recursive: true)</c> every affected class' own <c>Dispose()</c>
 /// already performs - see e.g. <see cref="EditorToolTestBase"/>'s own Dispose comment for the
 /// history - and on failure captures what is actually still in the directory, plus (best-effort)
 /// which process holds it open via <c>lsof</c>, before rethrowing UNCHANGED so pass/fail behaviour
-/// is otherwise identical to today. Diagnostic capture only fires when
-/// <c>HADES_TEARDOWN_DIAG_LOG</c> is set (a run not investigating this flake pays zero cost beyond
-/// one extra env var read per delete).
+/// is identical either way. Capture only fires when <c>HADES_TEARDOWN_DIAG_LOG</c> is set (a run
+/// not investigating this pays one extra env var read per delete).
 ///
-/// Not a fix - this only makes the next reproduction self-explaining instead of a bare exception.
+/// <para><b>What it found.</b> The flake rotated across
+/// MaterialApplyTests/QueryToolsTests/AnimationApplyTests/ToolCallTests/MemoryToolsTests at ~1 in
+/// 2-4 full <c>Hades.Server.Tests</c> runs, which is what made it look like an unlucky test rather
+/// than a defect. The cause was <c>ObservationService.Dispose()</c> not waiting for a sweep already
+/// in flight, so a sweep could recreate an entry underneath a directory mid-delete. It is fixed
+/// there, and <see cref="HostTeardown"/> carries the full account of why the same bug presented as
+/// a rare flake on macOS and a hard failure on Windows. 14 consecutive full-suite runs after the
+/// fix produced none.</para>
+///
+/// This was never itself a fix - it only made the reproduction self-explaining instead of a bare
+/// exception, which is exactly what it did.
 /// </summary>
 internal static class TeardownDiagnostics
 {

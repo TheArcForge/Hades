@@ -1,0 +1,93 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <!-- WinForms is here for exactly one type: System.Windows.Forms.NotifyIcon, the in-box tray
+         API. WPF has no tray primitive of its own, and this avoids a third-party package. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <!--
+      The product icon, compiled into the executable as a Win32 resource. Its absence was a real
+      gap rather than a stylistic one: without it the shell carries .NET's generic default, and the
+      Start menu, taskbar, Alt+Tab, Explorer and the window title bar all show a blank page with a
+      blue square on it. The Mac has had its equivalent from the start - build-app.sh generates
+      AppIcon.icns into the bundle - and the Windows port simply never grew the step.
+
+      This is also what the Start menu SHORTCUT and both windows' title bars pick up, so it is the
+      one place the mark has to be declared: Hades.wxs deliberately leaves the shortcut's icon
+      unset so it inherits from the target executable rather than becoming a second copy that can
+      disagree with this one. Add/Remove Programs is the exception - it has no executable to
+      inherit from - and Hades.wxs points ARPPRODUCTICON at this same file.
+    -->
+    <ApplicationIcon>Icons\app.ico</ApplicationIcon>
+
+    <!--
+      A TRAP, measured here rather than inferred: changing this property alone does NOT rebuild the
+      executable. The apphost is regenerated from its template plus the icon FILE, and an
+      incremental build that sees neither of those change skips it. The asymmetry is the nasty part
+      and it was watched happening: REMOVING this line rebuilt the apphost correctly (543,744 bytes
+      with the icon, down to 162,304 without), but RESTORING it did not - app.ico's timestamp was
+      older than the exe just built, so the inputs looked up to date and a shell with no icon
+      survived a full solution build.
+
+      If you change this line, force a non-incremental build (dotnet build's no-incremental switch,
+      or just delete bin\) before believing what the executable shows you. ProductIconTests will
+      catch the mistake, but only on a build that actually ran.
+    -->
+
+    <!-- ShellFacts/PowerStatus.cs uses [LibraryImport] for GetSystemPowerStatus, and the marshalling
+         stub the generator emits for an `out` struct is unsafe. Same reason Hades.Supervision.Tests
+         sets this for its own P/Invoke. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- WFO0003 tells WinForms apps to declare DPI awareness via ApplicationHighDpiMode instead of
+         the manifest. It does not apply here and following it would silently lose DPI awareness:
+         that property only emits a SetHighDpiMode call into ApplicationConfiguration.Initialize(),
+         which is WinForms' bootstrap and something this WPF app never calls. The manifest is the
+         documented mechanism for a WPF app, so the analyzer is answering for a project type this
+         is not. The diagnostic only fires at all because UseWindowsForms is on for NotifyIcon, and
+         it is an error rather than a warning because Directory.Build.props sets
+         TreatWarningsAsErrors. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Enabling UseWindowsForms adds System.Windows.Forms to the implicit usings, which collides
+         with WPF's own namespace on every shared type name - Application, MessageBox, Clipboard,
+         Cursors - and every one of those resolves to the WinForms version silently or fails as
+         CS0104. Dropping the implicit using makes the comment above structurally true: WinForms is
+         reachable only where a file names System.Windows.Forms.NotifyIcon explicitly, and WPF stays
+         the default meaning of an unqualified type everywhere in the shell. -->
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The tray's icon-name mapping and menu adapter are internals, not API anyone outside the
+         shell should call. Widening them to public just so tests can reach them would make the
+         accessibility describe the test project rather than the design. -->
+    <InternalsVisibleTo Include="Hades.Shell.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Resource, not Content: the tray icons are embedded in the assembly rather than copied
+         beside it, so a published shell cannot be missing its icon because a file did not travel.
+         Reachable at runtime as pack://application:,,,/Icons/<name>.ico. Generated, not hand-drawn -
+         see Icons/generate-icons.ps1 for the codepoints and for why they are committed rather than
+         built. -->
+    <!--
+      app.ico is EXCLUDED, and not because it is unwanted. ApplicationIcon above already embeds it
+      as a Win32 resource; including it here as well would embed the same 372 KB a second time as a
+      WPF resource, for a copy nothing reads. WPF windows with no explicit Icon fall back to the
+      executable's Win32 icon, which is the copy that is already there.
+    -->
+    <Resource Include="Icons\*.ico" Exclude="Icons\app.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Core\src\Hades.Control.Client\Hades.Control.Client.csproj" />
+    <ProjectReference Include="..\Hades.Supervision\Hades.Supervision.csproj" />
+  </ItemGroup>
+
+</Project>

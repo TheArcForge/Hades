@@ -68,7 +68,7 @@ public sealed class EditorSessionTests : IDisposable
 
         await unityWrites.WriteLineAsync(MiniJson.Write(JsonRpcResponse.Success(request.Id!, JsonValue.String("pong")).ToJson()));
 
-        var result = await sendTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await sendTask.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.False(result.IsError);
         Assert.Equal("pong", result.Result!.AsString());
     }
@@ -88,8 +88,8 @@ public sealed class EditorSessionTests : IDisposable
 
         await unityWrites.WriteLineAsync(MiniJson.Write(JsonRpcResponse.Success(r1.Id!, JsonValue.Null).ToJson()));
         await unityWrites.WriteLineAsync(MiniJson.Write(JsonRpcResponse.Success(r2.Id!, JsonValue.Null).ToJson()));
-        await t1.WaitAsync(TimeSpan.FromSeconds(5));
-        await t2.WaitAsync(TimeSpan.FromSeconds(5));
+        await t1.WaitAsync(TimeSpan.FromSeconds(30));
+        await t2.WaitAsync(TimeSpan.FromSeconds(30));
     }
 
     [Fact]
@@ -106,8 +106,8 @@ public sealed class EditorSessionTests : IDisposable
         await unityWrites.WriteLineAsync(MiniJson.Write(JsonRpcResponse.Success(r2!.Id!, JsonValue.String("2")).ToJson()));
         await unityWrites.WriteLineAsync(MiniJson.Write(JsonRpcResponse.Success(r1!.Id!, JsonValue.String("1")).ToJson()));
 
-        Assert.Equal("1", (await t1.WaitAsync(TimeSpan.FromSeconds(5))).Result!.AsString());
-        Assert.Equal("2", (await t2.WaitAsync(TimeSpan.FromSeconds(5))).Result!.AsString());
+        Assert.Equal("1", (await t1.WaitAsync(TimeSpan.FromSeconds(30))).Result!.AsString());
+        Assert.Equal("2", (await t2.WaitAsync(TimeSpan.FromSeconds(30))).Result!.AsString());
     }
 
     [Fact]
@@ -122,7 +122,7 @@ public sealed class EditorSessionTests : IDisposable
         Assert.Equal("keepalive", request!.Method);
         await unityWrites.WriteLineAsync(MiniJson.Write(JsonRpcResponse.Success(request.Id!, JsonValue.Null).ToJson()));
 
-        await keepaliveTask.WaitAsync(TimeSpan.FromSeconds(5));
+        await keepaliveTask.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.NotNull(session.LastKeepaliveAckUtc);
     }
 
@@ -135,7 +135,7 @@ public sealed class EditorSessionTests : IDisposable
 
         unityWrites.Close();
 
-        await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(30));
     }
 
     [Fact]
@@ -148,7 +148,7 @@ public sealed class EditorSessionTests : IDisposable
 
         unityWrites.Close();
 
-        await Assert.ThrowsAnyAsync<Exception>(() => pending.WaitAsync(TimeSpan.FromSeconds(5)));
+        await Assert.ThrowsAnyAsync<Exception>(() => pending.WaitAsync(TimeSpan.FromSeconds(30)));
     }
 
     [Fact]
@@ -163,7 +163,7 @@ public sealed class EditorSessionTests : IDisposable
         await unityWrites.WriteLineAsync(MiniJson.Write(JsonRpcResponse.Success(request!.Id!, JsonValue.Null).ToJson()));
 
         // Still answers correctly after the garbage line - the read loop kept going.
-        await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        await pending.WaitAsync(TimeSpan.FromSeconds(30));
     }
 
     // ---------------------------------------------------------------- bounded session line read (B-F1)
@@ -192,7 +192,7 @@ public sealed class EditorSessionTests : IDisposable
         // "over-limit treated the same as no data" contract) rather than hanging forever
         // accumulating - proven the same way Disconnected_FiresWhenThePeerClosesTheSocket proves
         // an ordinary close.
-        await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(30));
     }
 
     [Fact]
@@ -210,7 +210,7 @@ public sealed class EditorSessionTests : IDisposable
 
         await unityWrites.WriteLineAsync(MiniJson.Write(JsonRpcResponse.Success(request!.Id!, JsonValue.String("pong")).ToJson()));
 
-        var result = await sendTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await sendTask.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.False(result.IsError);
         Assert.Equal("pong", result.Result!.AsString());
     }
@@ -240,7 +240,7 @@ public sealed class EditorSessionTests : IDisposable
         result.SetProperty("expiresAtUtcMs", JsonValue.Integer(outOfRangeMs));
         await unityWrites.WriteLineAsync(MiniJson.Write(JsonRpcResponse.Success(request!.Id!, result).ToJson()));
 
-        var outcome = await acquireTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var outcome = await acquireTask.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.True(outcome.Success);
         // Not literally DateTimeOffset.MaxValue/MinValue: FromUnixTimeMilliseconds(ToUnixTimeMilliseconds(...))

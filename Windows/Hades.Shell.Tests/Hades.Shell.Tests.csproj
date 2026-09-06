@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <!-- Needed to exercise TrayMenuAdapter against a real ContextMenuStrip. That adapter was
+         written off as "too thin to test" and promptly crashed the shell on its second call, so it
+         is tested here despite being UI code. -->
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Same reason as Hades.Shell's own: with both WPF and WinForms in the implicit usings, every
+         shared type name (Application, MessageBox) resolves to the WinForms twin silently. -->
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The product icon, embedded here ONLY as the reference ProductIconTests compares the compiled
+      executable against. It cannot be read the way the tray icons are: app.ico is deliberately not
+      a WPF resource of the shell (ApplicationIcon already embeds it as a Win32 resource, and a
+      second copy would be 372 KB nothing reads), so the test needs its own copy of the expected
+      bytes. That cost lands in a test assembly, which ships to nobody.
+    -->
+    <EmbeddedResource Include="..\Hades.Shell\Icons\app.ico" LogicalName="app.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Referencing the shell (a WinExe) is deliberate and normal for .NET: it is the only way to
+         test the shell's own types. These tests stay HEADLESS - they touch view-model and mapping
+         logic like StatusGlyph, never a Window or a Dispatcher - so nothing here needs an STA
+         thread or a message pump. -->
+    <ProjectReference Include="..\Hades.Shell\Hades.Shell.csproj" />
+  </ItemGroup>
+
+</Project>

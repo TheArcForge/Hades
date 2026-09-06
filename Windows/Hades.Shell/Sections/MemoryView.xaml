@@ -1,0 +1,177 @@
+<UserControl x:Class="Hades.Shell.Sections.MemoryView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Hades.Shell.ViewModels">
+
+    <UserControl.Resources>
+        <vm:EmptyToCollapsedConverter x:Key="EmptyToCollapsed" />
+        <vm:MemoryDocumentKindConverter x:Key="DocumentKind" />
+    </UserControl.Resources>
+
+    <Grid Margin="24,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+            <TextBlock Text="Asphodel" FontSize="24" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <TextBlock Text="Project memory" Opacity="0.7" FontSize="13"
+                       VerticalAlignment="Bottom" Margin="12,0,0,4" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
+            <TextBlock Text="Project" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <ComboBox ItemsSource="{Binding KnownProjects}"
+                      SelectedValuePath="ProductGuid"
+                      DisplayMemberPath="Name"
+                      SelectedValue="{Binding ProjectFilter, Mode=OneWay}"
+                      SelectionChanged="OnProjectChanged"
+                      MinWidth="200">
+
+                      <!-- DisplayMemberPath sets the visible text but NOT the item's accessible name, which falls
+                           back to the bound record's ToString() - so assistive technology announced the whole
+                           "ProjectRow { Name = ..., Path = ..., NodeCount = ... }" dump. Same defect and same fix
+                           as the lists; see the Sequences ListBox for the measurement. -->
+                      <ComboBox.ItemContainerStyle>
+                          <Style TargetType="ComboBoxItem">
+                              <Setter Property="AutomationProperties.Name" Value="{Binding Name}" />
+                          </Style>
+                      </ComboBox.ItemContainerStyle>
+                      </ComboBox>
+        </StackPanel>
+
+        <!-- Refresh failures and action results are separate on purpose: a poll failure must not
+             overwrite a just-seen action result, or the reverse. -->
+        <StackPanel Grid.Row="2">
+            <Border Padding="10,8" Margin="0,0,0,8" BorderThickness="1"
+                    Visibility="{Binding RefreshError, Converter={StaticResource EmptyToCollapsed}}">
+                <TextBlock Text="{Binding RefreshError}" TextWrapping="Wrap" />
+            </Border>
+            <Border Padding="10,8" Margin="0,0,0,8" BorderThickness="1"
+                    Visibility="{Binding LastActionMessage, Converter={StaticResource EmptyToCollapsed}}">
+                <TextBlock Text="{Binding LastActionMessage}" TextWrapping="Wrap" />
+            </Border>
+        </StackPanel>
+
+        <Grid Grid.Row="3">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="300" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <TabControl Grid.Column="0" Margin="0,0,12,0">
+                <TabItem Header="Documents">
+                    <ListBox ItemsSource="{Binding Documents}" SelectionChanged="OnDocumentSelected"
+                             BorderThickness="0" HorizontalContentAlignment="Stretch">
+
+                        <!--
+                          An accessible name, because a ListBoxItem with none falls back to the bound
+                          item's ToString() - a record, so assistive technology announced the whole
+                          "MemoryDocumentRow { ... }" dump instead of the document's name. Same defect
+                          and same fix as the three lists in TracesView; see the Sequences one there
+                          for the measurement.
+                        -->
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="AutomationProperties.Name">
+                                    <Setter.Value>
+                                        <MultiBinding StringFormat="{}{0}, {1}">
+                                            <Binding Path="Name" />
+                                            <Binding Path="SizeDisplay" />
+                                        </MultiBinding>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="0,3">
+                                    <TextBlock Text="{Binding Name}" FontSize="13" />
+                                    <TextBlock FontSize="11" Opacity="0.65">
+                                        <!-- sizeDisplay is the core's own formatting, not re-derived
+                                             from sizeBytes here. -->
+                                        <Run Text="{Binding SizeDisplay, Mode=OneWay}" />
+                                    </TextBlock>
+                                    <TextBlock Text="{Binding LastReviewed}" FontSize="11" Opacity="0.6"
+                                               Visibility="{Binding LastReviewed, Converter={StaticResource EmptyToCollapsed}}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </TabItem>
+
+                <TabItem Header="Proposals">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding Proposals}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderThickness="1" Padding="10" Margin="0,0,0,8" CornerRadius="4">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding TargetFile}" FontSize="13" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding CreatedAgo}" FontSize="11" Opacity="0.6"
+                                                       Visibility="{Binding CreatedAgo, Converter={StaticResource EmptyToCollapsed}}" />
+
+                                            <!-- The agent's own rationale and the proposed text,
+                                                 verbatim. This is what the user is deciding about. -->
+                                            <TextBlock Text="{Binding Rationale}" FontSize="12" TextWrapping="Wrap"
+                                                       Margin="0,6,0,0" Opacity="0.85" />
+                                            <Border BorderThickness="1" Padding="8" Margin="0,6,0,0">
+                                                <TextBlock Text="{Binding Content}" FontSize="12"
+                                                           TextWrapping="Wrap" FontFamily="Consolas" />
+                                            </Border>
+
+                                            <WrapPanel Margin="0,8,0,0">
+                                                <Button Content="Accept" Click="OnAccept" Tag="{Binding FileName}"
+                                                        Padding="10,3" Margin="0,0,6,0" />
+                                                <Button Content="Defer" Click="OnDefer" Tag="{Binding FileName}"
+                                                        Padding="10,3" Margin="0,0,6,0" />
+                                                <!-- Dismiss deletes the proposal file, so it asks. -->
+                                                <Button Content="Dismiss…" Click="OnDismiss" Tag="{Binding FileName}"
+                                                        Padding="10,3" />
+                                            </WrapPanel>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </TabItem>
+            </TabControl>
+
+            <Border Grid.Column="1" BorderThickness="1" Padding="12">
+                <Grid>
+                    <TextBlock Text="Select a document to read or edit it."
+                               Opacity="0.6" FontSize="12" VerticalAlignment="Top"
+                               Visibility="{Binding SelectedDocument, Converter={StaticResource DocumentKind}, ConverterParameter=NotSelected}" />
+
+                    <TextBlock Text="{Binding SelectedDocument.Message}" TextWrapping="Wrap" FontSize="12"
+                               VerticalAlignment="Top"
+                               Visibility="{Binding SelectedDocument, Converter={StaticResource DocumentKind}, ConverterParameter=Failed}" />
+
+                    <DockPanel Visibility="{Binding SelectedDocument, Converter={StaticResource DocumentKind}, ConverterParameter=Loaded}">
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                            <TextBlock Text="{Binding SelectedDocument.Document.Name}"
+                                       FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" />
+                            <!-- Saving OVERWRITES an authored file with no version history, so it
+                                 asks first - see MemoryViewModel's confirmed gate. -->
+                            <Button Content="Save…" Click="OnSave" Padding="12,3" Margin="16,0,0,0" />
+                        </StackPanel>
+
+                        <TextBox x:Name="DocumentEditor"
+                                 Text="{Binding SelectedDocument.Document.Content, Mode=OneWay}"
+                                 AcceptsReturn="True"
+                                 TextWrapping="NoWrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 FontFamily="Consolas"
+                                 FontSize="12" />
+                    </DockPanel>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

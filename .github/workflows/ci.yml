@@ -58,4 +58,55 @@ jobs:
       # exercised - do not quote it as full coverage of this suite.
       - name: dotnet test
         working-directory: Core
-        run: dotnet test
+        # Platform!=Windows excludes tests that can only run on Windows (the token DACL, the Job
+        # Object supervisor). A filtered test is not reported at all - see PlatformTraits for why
+        # traits rather than skips (xUnit 2.9.3 has no dynamic skip).
+        run: dotnet test --filter "Platform!=Windows"
+
+  dotnet-tests-windows:
+    name: App (.NET) Tests — Windows
+    # The point of this job is precisely what the macOS job cannot see: path handling,
+    # case-insensitivity, and the Windows file-security branch on token files. It is also the ONLY
+    # place the LocalApplicationData storage root and the token DACL are ever actually executed -
+    # both ship compile-verified only until this job runs them.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same isolation as the macOS job, and for the same reason: only Hades.Server.Tests has a
+      # [ModuleInitializer] safety net, so the other three test projects would otherwise write
+      # into the runner's real application-data directory. Exported through $GITHUB_ENV rather
+      # than a job-level env: block because `runner` is not among the contexts a job-level env may
+      # use - see the macOS job's own comment for what that mistake costs.
+      - name: Set up an isolated HADES_HOME
+        shell: bash
+        run: |
+          echo "HADES_HOME=$RUNNER_TEMP/hades-home" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/hades-home"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: Core/global.json
+
+      # Honesty note, matching the macOS job's own: 15 test files require a developer-local Unity
+      # project that is absent here and guard themselves with an early return, which xUnit reports
+      # as PASSED rather than skipped. CorpusAvailabilityTests documents that and fails loudly when
+      # HADES_REQUIRE_CORPUS=1 is set - which CI deliberately does not set. Read this job's pass
+      # count with that in mind.
+      #
+      # Platform!=Unix excludes the tests that assert POSIX-only behaviour (File.SetUnixFileMode).
+      - name: dotnet test
+        working-directory: Core
+        run: dotnet test --filter "Platform!=Unix"
+
+      # The Windows solution is deliberately NOT part of Core/Hades.sln: no net10.0-windows project
+      # may enter it, or every macOS build and the macOS job above would have to deal with Windows
+      # targeting. So it needs its own step here.
+      #
+      # This is the ONLY place Windows/Hades.Supervision's Job Object and CreateProcess P/Invoke
+      # ever execute. Every other environment can compile that code (EnableWindowsTargeting works
+      # on macOS) but not run a line of it - JobObjectTests fail with DllNotFoundException:
+      # kernel32.dll anywhere else, which is exactly why they carry the Windows platform trait.
+      - name: dotnet test (Windows solution)
+        working-directory: Windows
+        run: dotnet test --filter "Platform!=Unix"

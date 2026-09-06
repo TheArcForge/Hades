@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using Hades.Contract.Wire;
+using Hades.Core.Storage;
 
 namespace Hades.Core.Editors;
 
@@ -192,10 +193,15 @@ public sealed class EditorListener : IDisposable
             _liveSessions.Add(session);
         }
 
+        // Set by the handler below, read after Register() - see the re-check there.
+        var disconnected = 0;
+
         // Subscribed before Start() - see EditorSession.Start's doc comment on why that ordering
         // matters: the read loop can observe EOF and raise Disconnected as soon as it runs.
         session.Disconnected += () =>
         {
+            Volatile.Write(ref disconnected, 1);
+
             // Deregister unconditionally, as always - EditorRegistry.Deregister's own newest-wins
             // guard (see its doc comment) already makes this safe for a stale, superseded
             // session: it only actually removes the registration - and only THEN returns true -
@@ -232,7 +238,30 @@ public sealed class EditorListener : IDisposable
             client.Close();
         };
 
+        // Started BEFORE the registration below, not after it.
+        //
+        // Register publishes this editor to every caller at once - GetCharonStatus's busy probe
+        // included - but EditorSession.SendRequestAsync throws outright until Start() has run
+        // ("EditorSession.Start() must be called before sending requests"). Registering first
+        // therefore published an Editor that could not answer, and ProjectService's probe collapses
+        // every failure to the same "not responsive" verdict, so the caller was told "Unity is
+        // attached but busy - its main thread has not answered within the probe window ... this is
+        // not a disconnect. Retry shortly" about an Editor that had simply not finished attaching.
+        //
+        // The window was not theoretical: it spanned the RecordEditorAttached project.json write
+        // below, which on a loaded machine is milliseconds of real disk. It cost three tests per
+        // run on a 2-core Windows CI runner, rotating across classes, and was immune to raising the
+        // probe timeout because nothing was ever slow - the send failed instantly. Starting first
+        // makes the registry's own invariant true: an Editor visible there can answer.
+        session.Start();
+
         _registry.Register(new AttachedEditor { Hello = hello, ConnectedAtUtc = DateTimeOffset.UtcNow, Session = session });
+
+        // Starting first means the read loop can now see EOF and raise Disconnected BEFORE the
+        // registration above exists, in which case that handler's own Deregister found nothing to
+        // remove and this registration would linger, dead, until the next connect. Undo it here.
+        // Racing with the handler is harmless: Deregister is idempotent and newest-wins.
+        if (Volatile.Read(ref disconnected) == 1) _registry.Deregister(projectGuid, session);
 
         // Persists the Hello's own UnityVersion and bumps LastSeen (see
         // ProjectService.RecordEditorAttached's own doc comment: project.json otherwise stayed
@@ -251,11 +280,9 @@ public sealed class EditorListener : IDisposable
             }
         }
 
-        session.Start();
-
         // Reconnect reconciliation (see LeaseRegistry's own class doc comment): resynchronise
         // this app's believed lease state against what the plugin actually reports, now that the
-        // session can answer requests (Start() just above). Fire-and-forget, deliberately -
+        // session can answer requests (Start() ran before the registration above). Fire-and-forget, deliberately -
         // registration has already happened unconditionally on the lines above, and must not be
         // gated on this succeeding: a plugin that cannot answer (dropped mid-probe, or an older
         // plugin version erroring on lease.renew) must leave the editor attached, not un-register
@@ -288,45 +315,14 @@ public sealed class EditorListener : IDisposable
 
     static string GenerateToken() => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
 
+    // Mode-0600 protection (and the reasoning behind exactly how it is applied) lives in
+    // TokenFileWriter, shared with ControlAuth.WriteConnectionFile's identical discovery-file
+    // write.
     void WriteConnectionFile(string token, int port)
     {
-        var directory = Path.GetDirectoryName(_tokenFilePath);
-        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
-
         var info = new EditorConnectionInfo { Port = port, Token = token };
         var json = MiniJson.Write(info.ToJson());
-
-        // Hades targets macOS (see the Mac Shell spec); File.SetUnixFileMode /
-        // FileStreamOptions.UnixCreateMode are unsupported on Windows. OperatingSystem.IsWindows()
-        // is the analyzer-recognised platform-guard pattern, so this stays warning-free without a
-        // project-wide platform declaration that would also constrain every other public member of
-        // this assembly.
-        if (OperatingSystem.IsWindows())
-        {
-            File.WriteAllText(_tokenFilePath, json);
-            return;
-        }
-
-        // Create the inode at 0600 in the SAME syscall that creates it (FileStreamOptions.
-        // UnixCreateMode), so the token is never briefly sitting in a file at the wider,
-        // umask-determined default mode a plain WriteAllText-then-chmod would leave it at for the
-        // instant in between. UnixCreateMode only takes effect when this call actually creates a
-        // NEW inode, so the SetUnixFileMode below still runs unconditionally afterward, as a
-        // defensive fallback for a pre-existing file at this path (a stale token from a previous
-        // run, or one some other tool wrote) that FileMode.Create reuses/truncates instead of
-        // replacing - which is what the "reused inode" test asserts.
-        using (var stream = File.Open(_tokenFilePath, new FileStreamOptions
-        {
-            Mode = FileMode.Create,
-            Access = FileAccess.Write,
-            UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
-        }))
-        {
-            var bytes = Encoding.UTF8.GetBytes(json);
-            stream.Write(bytes, 0, bytes.Length);
-        }
-
-        File.SetUnixFileMode(_tokenFilePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        TokenFileWriter.Write(_tokenFilePath, json);
     }
 
     /// <summary>Constant-time comparison so a mismatched token cannot be brute-forced faster by

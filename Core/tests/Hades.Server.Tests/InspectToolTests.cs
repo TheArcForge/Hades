@@ -1092,7 +1092,12 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
         // WebApplicationFactory whose own background services can still be touching
         // _appRoot/_projectRoot until the host itself is disposed - which must happen before
         // the recursive delete below.
-        _factory.Dispose();
+        //
+        // DisposeBlocking, not Dispose: the sync Dispose returns BEFORE those background
+        // services have finished shutting down, so the delete below can race handles that are
+        // still open. See HostTeardown for why that is a silent flake on macOS and a hard
+        // failure on Windows.
+        _factory.DisposeBlocking();
 
         foreach (var dir in new[] { _appRoot, _projectRoot })
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);

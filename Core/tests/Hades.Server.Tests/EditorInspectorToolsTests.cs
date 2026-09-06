@@ -59,7 +59,7 @@ public sealed class EditorInspectorToolsTests(WebApplicationFactory<Program> fac
         var responder = AnswerBusyProbeThenRespondAsync(reads, writes, pluginResult);
 
         var structured = Structured(await McpTestClient.CallTool(Factory, "inspector_inspect", new { path = "Player" }));
-        var request = await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("inspector.inspect", request.Method);
         Assert.True(request.Params!.TryGetProperty("path", out var p) && p!.AsString() == "Player");
@@ -110,7 +110,7 @@ public sealed class EditorInspectorToolsTests(WebApplicationFactory<Program> fac
 
         var responder = AnswerBusyProbeThenRespondAsync(reads, writes, pluginResult);
         var structured = Structured(await McpTestClient.CallTool(Factory, "inspector_inspect", new { path = "Empty" }));
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal(0, structured.GetProperty("children").GetArrayLength());
         Assert.Equal(0, structured.GetProperty("components").GetArrayLength());
@@ -131,7 +131,7 @@ public sealed class EditorInspectorToolsTests(WebApplicationFactory<Program> fac
         var responder = AnswerBusyProbeThenFailAsync(reads, writes, "GameObject not found: 'Ghost'.");
 
         var envelope = await McpTestClient.CallTool(Factory, "inspector_inspect", new { path = "Ghost" });
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("GameObject not found: 'Ghost'.", McpTestClient.ErrorText(envelope));
     }

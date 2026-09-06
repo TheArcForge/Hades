@@ -1,0 +1,1 @@
+{"traceId":"trace-1","tool":"hades_search","startUtcMs":1700000000000,"outcome":"ok","spans":[{"spanId":"span-1","parentSpanId":"span-0","name":"hades_search","kind":"tool","startUtcMs":1700000000000,"endUtcMs":1700000000120,"durationMs":120,"status":"ok","attributes":[{"key":"resultSizeBytes","valueDisplay":"1024"}],"events":[{"key":"resultSizeBytes","valueDisplay":"1024"}]}]}

@@ -37,6 +37,28 @@ public sealed class PluginInstallerTests : IDisposable
 
     string PluginRoot => Path.Combine(_projectRoot, "Assets", "Hades");
 
+    /// <summary>
+    /// The repository root, walked up from the test assembly's own location rather than hardcoded
+    /// to one developer's checkout path. This test needs THIS repository - which CI always has,
+    /// just at its own path (D:\a\Hades\Hades on a Windows runner) - so hardcoding made it skip
+    /// everywhere except one machine, for no reason. Anchored on directories only the repo root
+    /// has, so it cannot silently latch onto some other directory.
+    /// </summary>
+    static string RepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null
+               && !(Directory.Exists(Path.Combine(directory.FullName, "UnityPlugin"))
+                    && Directory.Exists(Path.Combine(directory.FullName, "Core"))))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName
+               ?? throw new InvalidOperationException(
+                   $"Could not locate the repository root from {AppContext.BaseDirectory}.");
+    }
+
     [Fact]
     public void Install_RejectsNullOrBlankProjectRoot()
     {
@@ -157,20 +179,20 @@ public sealed class PluginInstallerTests : IDisposable
         // NOT the separately-maintained UnityPlugin/Assets/Hades/Contract/ copy used for Unity-side
         // development. That is the whole point of embedding: the app ships the contract it
         // actually compiled, so the two sides cannot silently drift.
-        const string PluginSourceDir = "/Users/mike/Projects/Hades/UnityPlugin/Assets/Hades";
-        const string ContractSourceDir = "/Users/mike/Projects/Hades/Core/src/Hades.Contract/Wire";
-        if (!Directory.Exists(PluginSourceDir) || !Directory.Exists(ContractSourceDir)) return;
+        var repositoryRoot = RepositoryRoot();
+        var pluginSourceDir = Path.Combine(repositoryRoot, "UnityPlugin", "Assets", "Hades");
+        var contractSourceDir = Path.Combine(repositoryRoot, "Core", "src", "Hades.Contract", "Wire");
 
         PluginInstaller.Install(_projectRoot);
 
         var expected = new Dictionary<string, byte[]>
         {
-            ["Hades.asmdef"] = File.ReadAllBytes(Path.Combine(PluginSourceDir, "Hades.asmdef")),
+            ["Hades.asmdef"] = File.ReadAllBytes(Path.Combine(pluginSourceDir, "Hades.asmdef")),
         };
         foreach (var folder in new[] { "Runtime", "Transport", "Tools" })
-        foreach (var file in Directory.EnumerateFiles(Path.Combine(PluginSourceDir, folder)))
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(pluginSourceDir, folder)))
             expected[$"{folder}/{Path.GetFileName(file)}"] = File.ReadAllBytes(file);
-        foreach (var file in Directory.EnumerateFiles(ContractSourceDir))
+        foreach (var file in Directory.EnumerateFiles(contractSourceDir))
             expected[$"Contract/{Path.GetFileName(file)}"] = File.ReadAllBytes(file);
 
         var actual = Snapshot(PluginRoot);

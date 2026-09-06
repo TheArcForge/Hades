@@ -1,0 +1,1 @@
+{"id":"seq-1","tools":["hades_search","hades_read"],"pattern":"hades_search -\u003E hades_read","callCount":2,"startUtcMs":1700000000000,"endUtcMs":1700000000500,"durationMs":500,"outcome":"ok","traceIds":["trace-1","trace-2"]}

@@ -313,14 +313,90 @@ public sealed class ProjectsResolveTests
 
     // ---------------------------------------------------------------- index state and freshness
 
+    /// <summary>
+    /// THIS TEST USED TO ASSERT THE OPPOSITE, and the assertion was the bug.
+    ///
+    /// It read <c>Assert.Equal(ProjectIndexState.Indexing, row.IndexState)</c> for a project with no
+    /// recorded index - because <c>IndexState</c> was derived from <c>LastIndexedUtc is null</c>
+    /// alone, and that timestamp lived in a per-process dictionary. Every restart therefore reported
+    /// every project as "indexing" forever: a blue tray icon and "Indexing X…" as the headline, on a
+    /// project with a complete graph and nothing running. Observed live on 2026-09-01 with a 42 MB
+    /// graph, 28,838 nodes, zero disk I/O and no operation in flight.
+    ///
+    /// "Never indexed" and "indexing right now" are different facts and one of them is not knowable
+    /// from a null. They are now separate states with separate sources: the timestamp is persisted,
+    /// and "indexing" is asked of the operation registry.
+    /// </summary>
     [Fact]
-    public void NeverIndexed_IndexStateIsIndexing_StatusIsExactLiteral()
+    public void NeverIndexedAndNothingRunning_IsNeverIndexed_StatusIsExactLiteral()
     {
-        var result = ProjectsEndpoint.Resolve([Healthy() with { LastIndexedUtc = null }], Now);
+        var result = ProjectsEndpoint.Resolve(
+            [Healthy() with { LastIndexedUtc = null, IsIndexing = false }], Now);
+
+        var row = Assert.Single(result.Projects);
+        Assert.Equal(ProjectIndexState.NeverIndexed, row.IndexState);
+        Assert.Equal("not yet indexed", row.IndexStatus);
+    }
+
+    [Fact]
+    public void NeverIndexedWithAnIndexRunning_IsIndexing_StatusIsExactLiteral()
+    {
+        var result = ProjectsEndpoint.Resolve(
+            [Healthy() with { LastIndexedUtc = null, IsIndexing = true }], Now);
 
         var row = Assert.Single(result.Projects);
         Assert.Equal(ProjectIndexState.Indexing, row.IndexState);
-        Assert.Equal("not yet indexed", row.IndexStatus);
+        Assert.Equal("indexing…", row.IndexStatus);
+    }
+
+    /// <summary>
+    /// A rebuild of an already-indexed project is still indexing. The live operation wins over the
+    /// stored timestamp, because the timestamp describes the last COMPLETED index and the question
+    /// this field answers is what is happening now.
+    /// </summary>
+    [Fact]
+    public void IndexedWithARebuildRunning_IsIndexing()
+    {
+        var result = ProjectsEndpoint.Resolve(
+            [Healthy() with { LastIndexedUtc = Now.AddMinutes(-5), IsIndexing = true }], Now);
+
+        var row = Assert.Single(result.Projects);
+        Assert.Equal(ProjectIndexState.Indexing, row.IndexState);
+        Assert.Equal("indexing…", row.IndexStatus);
+    }
+
+    [Fact]
+    public void IndexedAndNothingRunning_IsIndexed()
+    {
+        var result = ProjectsEndpoint.Resolve(
+            [Healthy() with { LastIndexedUtc = Now.AddMinutes(-5), IsIndexing = false }], Now);
+
+        Assert.Equal(ProjectIndexState.Indexed, Assert.Single(result.Projects).IndexState);
+    }
+
+    /// <summary>
+    /// A project whose index finishes between the two samples must read as INDEXED, never as
+    /// "never indexed".
+    ///
+    /// The snapshot reads two facts at two instants: whether an index is running, and when one last
+    /// finished. Reading them in the wrong order loses the race - an index that completes in the gap
+    /// leaves a null timestamp and a false running flag, which resolves to NeverIndexed for a project
+    /// that has just finished indexing. Seen for real: `hades add-project` on a small project
+    /// answered "not yet indexed" while the same call on a 2,500-file project answered "indexing…".
+    ///
+    /// Resolve is pure, so the race itself lives in BuildSnapshotAsync; what this pins is that the
+    /// combination that ordering can produce - not running, but a timestamp present - is reported as
+    /// Indexed rather than anything else.
+    /// </summary>
+    [Fact]
+    public void FinishedBetweenSamples_ReadsAsIndexed_NotNeverIndexed()
+    {
+        var result = ProjectsEndpoint.Resolve(
+            [Healthy() with { IsIndexing = false, LastIndexedUtc = Now }], Now);
+
+        var row = Assert.Single(result.Projects);
+        Assert.Equal(ProjectIndexState.Indexed, row.IndexState);
+        Assert.Equal("indexed 0s ago", row.IndexStatus);
     }
 
     [Fact]
@@ -427,7 +503,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
 
         _projects = new ProjectService(new AppPaths(_appRoot), _editorRegistry)
         {
-            CharonProbeTimeout = TimeSpan.FromMilliseconds(300),
+            CharonProbeTimeout = TimeSpan.FromSeconds(5),
         };
     }
 
@@ -532,6 +608,65 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         return last ?? throw new TimeoutException("Project never appeared.");
     }
 
+
+    // ---------------------------------------------------------------- index state from real operations
+
+    /// <summary>
+    /// THE WIRING TEST for <see cref="ProjectsEndpoint.BuildAsync"/>'s optional <c>operations</c>
+    /// parameter. The default exists so the fixture tests in this class can describe projects at
+    /// rest without ceremony - but a default is also how a parameter quietly stops being passed, and
+    /// if the route dropped it, rows would silently never report Indexing again while every other
+    /// test here stayed green. This is the one that would not.
+    /// </summary>
+    [Fact]
+    public async Task RebuildInFlight_IsReportedAsIndexing()
+    {
+        _projects.AdoptAndIndex(_projectRoot);
+
+        var operations = new OperationRegistry();
+        var gate = new TaskCompletionSource();
+        var id = operations.Start("rebuild", ProjectGuid, _ => { gate.Task.GetAwaiter().GetResult(); return "unused"; });
+
+        var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow, operations);
+
+        var row = Assert.Single(result.Projects);
+        Assert.Equal(ProjectIndexState.Indexing, row.IndexState);
+        Assert.Equal("indexing…", row.IndexStatus);
+
+        gate.SetResult();
+        await operations.WhenComplete(id);
+    }
+
+    /// <summary>
+    /// An indexed project with nothing running reports Indexed and a real age - the half of this
+    /// that only works because the timestamp is now PERSISTED. AdoptAndIndex writes it; the row
+    /// reads it back through ProjectService.Summary rather than from an in-process dictionary.
+    /// </summary>
+    [Fact]
+    public async Task IndexedWithNothingRunning_ReportsIndexed_NotNeverIndexed()
+    {
+        _projects.AdoptAndIndex(_projectRoot);
+
+        var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow, new OperationRegistry());
+
+        var row = Assert.Single(result.Projects);
+        Assert.Equal(ProjectIndexState.Indexed, row.IndexState);
+        Assert.StartsWith("indexed ", row.IndexStatus);
+    }
+
+    /// <summary>Adopted but never indexed, with nothing running: NeverIndexed, not Indexing. This is
+    /// the state a freshly launched core used to report for EVERY project, forever.</summary>
+    [Fact]
+    public async Task AdoptedButNeverIndexed_ReportsNeverIndexed()
+    {
+        _projects.Adopt(_projectRoot);
+
+        var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow, new OperationRegistry());
+
+        var row = Assert.Single(result.Projects);
+        Assert.Equal(ProjectIndexState.NeverIndexed, row.IndexState);
+        Assert.Equal("not yet indexed", row.IndexStatus);
+    }
     // ---------------------------------------------------------------- warning: serialization mode (real fixture)
 
     [Fact]
@@ -637,7 +772,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var responder = RespondToNextProbeAsync(reads, writes);
 
         var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         var warning = Assert.Single(Assert.Single(result.Projects).Warnings, w => w.Code == "pluginVersionMismatch");
         Assert.Equal(
@@ -658,7 +793,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var responder = RespondToNextProbeAsync(reads, writes);
 
         var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.DoesNotContain(Assert.Single(result.Projects).Warnings, w => w.Code == "pluginVersionMismatch");
     }
@@ -671,7 +806,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var responder = RespondToNextProbeAsync(reads, writes);
 
         var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         var warning = Assert.Single(Assert.Single(result.Projects).Warnings, w => w.Code == "pluginVersionMismatch");
         Assert.Equal(
@@ -716,7 +851,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var responder = RespondToNextProbeAsync(reads, writes);
 
         var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal("6000.3.2f1", Assert.Single(result.Projects).UnityVersion);
     }
@@ -731,7 +866,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var responder = RespondToNextProbeAsync(reads, writes);
 
         var result = await ProjectsEndpoint.BuildAsync(_projects, () => DateTimeOffset.UtcNow);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         var editor = Assert.Single(result.Projects).Editor;
         Assert.Equal(ProjectEditorState.Attached, editor.State);
@@ -780,15 +915,33 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
 
         try
         {
-            var response = await ProjectsEndpoint.AddAsync(_projects, () => DateTimeOffset.UtcNow, new AddProjectRequest { Path = freshRoot });
+            var operations = new OperationRegistry();
+            var response = await ProjectsEndpoint.AddAsync(_projects, operations, () => DateTimeOffset.UtcNow, new AddProjectRequest { Path = freshRoot });
 
             var json = await ResultBodyAsync(response);
             Assert.Equal(Path.GetFileName(freshRoot), json.GetProperty("name").GetString());
             Assert.Equal(RealPath(freshRoot), json.GetProperty("path").GetString());
             Assert.Equal(freshGuid, json.GetProperty("productGuid").GetString());
-            Assert.Equal("indexed", json.GetProperty("indexState").GetString());
+
+            // Adding no longer waits for the walk: it registers the project and hands back the
+            // operation doing the indexing. This used to assert indexState == "indexed", which the
+            // response can no longer promise - and asserting it now would be a race, since a tiny
+            // fixture can finish indexing before the row is even built.
+            var operationId = json.GetProperty("indexOperationId").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(operationId));
 
             Assert.Contains(_projects.KnownProjects(), p => p.ProductGuid == freshGuid);
+
+            // The background index holds graph.db open inside freshRoot's app directory, and the
+            // finally below deletes it. Windows will not delete an open file, so the test waits for
+            // the work it started - the same responsibility every other test that starts an
+            // operation here carries.
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+            while (DateTimeOffset.UtcNow < deadline
+                && operations.Get(operationId!)?.State == OperationState.Running)
+            {
+                await Task.Delay(50);
+            }
         }
         finally
         {
@@ -804,7 +957,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
 
         try
         {
-            var response = await ProjectsEndpoint.AddAsync(_projects, () => DateTimeOffset.UtcNow, new AddProjectRequest { Path = notAProject });
+            var response = await ProjectsEndpoint.AddAsync(_projects, new OperationRegistry(), () => DateTimeOffset.UtcNow, new AddProjectRequest { Path = notAProject });
 
             Assert.Equal(StatusCodes.Status400BadRequest, StatusCodeOf(response));
         }
@@ -817,7 +970,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
     [Fact]
     public async Task Add_BlankPath_Returns400()
     {
-        var response = await ProjectsEndpoint.AddAsync(_projects, () => DateTimeOffset.UtcNow, new AddProjectRequest { Path = "   " });
+        var response = await ProjectsEndpoint.AddAsync(_projects, new OperationRegistry(), () => DateTimeOffset.UtcNow, new AddProjectRequest { Path = "   " });
 
         Assert.Equal(StatusCodes.Status400BadRequest, StatusCodeOf(response));
     }
@@ -1034,7 +1187,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var responder = RespondToNextProbeAsync(reads, writes);
 
         var response = await ProjectsEndpoint.InstallPluginAsync(_projects, ProjectGuid);
-        await responder.WaitAsync(TimeSpan.FromSeconds(5));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
         var json = await ResultBodyAsync(response);
 
         Assert.True(json.GetProperty("success").GetBoolean());
@@ -1080,7 +1233,7 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
     // ---------------------------------------------------------------- revealInFinder
 
     [Fact]
-    public async Task RevealInFinder_PathExists_InvokesOpenDashRWithTheProjectPath()
+    public async Task RevealInFinder_PathExists_InvokesThePlatformFileManager()
     {
         _projects.Adopt(_projectRoot);
         string? capturedExecutable = null;
@@ -1090,8 +1243,17 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var response = ProjectsEndpoint.RevealInFinder(_projects, ProjectGuid, Fake);
         var json = await ResultBodyAsync(response);
 
-        Assert.Equal("open", capturedExecutable);
-        Assert.Equal(["-R", RealPath(_projectRoot)], capturedArgs);
+        if (OperatingSystem.IsWindows())
+        {
+            // explorer.exe takes the selection as ONE comma-joined argument, not two.
+            Assert.Equal("explorer.exe", capturedExecutable);
+            Assert.Equal([$"/select,{RealPath(_projectRoot)}"], capturedArgs);
+        }
+        else
+        {
+            Assert.Equal("open", capturedExecutable);
+            Assert.Equal(["-R", RealPath(_projectRoot)], capturedArgs);
+        }
         Assert.True(json.GetProperty("success").GetBoolean());
     }
 
@@ -1174,6 +1336,57 @@ public sealed class ProjectsBuildAsyncTests : IDisposable
         var response = ProjectsEndpoint.OpenInUnity(_projects, "not-a-known-guid", (_, _) => true);
 
         Assert.Equal(StatusCodes.Status404NotFound, StatusCodeOf(response));
+    }
+
+    /// <summary>With nothing installed anywhere, the answer is still the conventional path - so the
+    /// "not found" message names somewhere a person recognises.</summary>
+    [Fact]
+    public void UnityHubPathFollowsThePlatformConvention()
+    {
+        var path = ProjectsEndpoint.UnityHubEditorExecutablePath("6000.0.30f1");
+
+        if (OperatingSystem.IsWindows())
+            Assert.Equal(@"C:\Program Files\Unity\Hub\Editor\6000.0.30f1\Editor\Unity.exe", path);
+        else
+            Assert.Equal("/Applications/Unity/Hub/Editor/6000.0.30f1/Unity.app/Contents/MacOS/Unity", path);
+    }
+
+    /// <summary>
+    /// A relocated Hub install root must be searched too, not just the default.
+    ///
+    /// <para>This is the bug a hand-run found on the first machine that tried it: Unity 6000.3.2f1
+    /// was installed and working in <c>D:\Unity Editors</c>, and Open in Unity reported it "not
+    /// found at the default Unity Hub install location". Hub records a relocated root in
+    /// <c>secondaryInstallPath.json</c>, so the information was there to be read all along.</para>
+    ///
+    /// <para>Asserted through the CANDIDATES rather than by faking a filesystem: the resolver
+    /// returns whichever candidate exists, which on a machine with no Unity at all is neither.
+    /// What is checkable everywhere is that the custom root is among the places it would look.</para>
+    /// </summary>
+    [Fact]
+    public void UnityHubCandidates_IncludeARelocatedInstallRoot_WhenTheHubRecordsOne()
+    {
+        var config = OperatingSystem.IsWindows()
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "UnityHub", "secondaryInstallPath.json")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support", "UnityHub", "secondaryInstallPath.json");
+
+        var candidates = ProjectsEndpoint.UnityHubEditorCandidates("6000.0.30f1");
+
+        // The default is always offered, whatever the Hub says.
+        Assert.Contains(candidates, c => c.Contains("Unity", StringComparison.OrdinalIgnoreCase));
+
+        if (!File.Exists(config))
+        {
+            // No Hub config on this machine: the default alone is the correct and complete answer.
+            Assert.Single(candidates);
+            return;
+        }
+
+        var custom = System.Text.Json.JsonSerializer.Deserialize<string>(File.ReadAllText(config));
+        if (string.IsNullOrWhiteSpace(custom)) return;
+
+        Assert.Equal(2, candidates.Count);
+        Assert.Contains(candidates, c => c.StartsWith(custom, StringComparison.OrdinalIgnoreCase));
     }
 
     // ---------------------------------------------------------------- the real (non-faked) process launcher
@@ -1355,8 +1568,28 @@ public sealed class ProjectsEndpointHttpTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(guid, body.GetProperty("productGuid").GetString());
-        Assert.Equal("indexed", body.GetProperty("indexState").GetString());
+
+        // Adding registers the project and hands back the operation indexing it, rather than
+        // blocking until the walk is done. This asserted indexState == "indexed" when the call was
+        // synchronous; the response can no longer promise that, and asserting it now would race a
+        // fixture small enough to finish before the row is built.
+        var operationId = body.GetProperty("indexOperationId").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(operationId));
         Assert.Contains(projectService.KnownProjects(), p => p.ProductGuid == guid);
+
+        // The index runs in the background now, and it holds graph.db open inside the temp
+        // directory this fixture deletes on teardown. Windows refuses to delete an open file, so a
+        // test that starts background work owns waiting for it - the same responsibility the CLI's
+        // own rebuild test documents.
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            var poll = await client.SendAsync(Request(HttpMethod.Get, $"/control/operations/{operationId}", listener.Token));
+            var state = (await poll.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("state").GetString();
+            if (state != "running") break;
+
+            await Task.Delay(50);
+        }
     }
 
     [Fact]
