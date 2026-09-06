@@ -826,7 +826,7 @@ Bump these together to the release version (`X.Y.Z`, e.g. `2.0.0`):
 | `Core/src/Hades.Server/Mcp/HadesTools.cs` | `ServerVersion` constant |
 | `Mac/HadesApp/scripts/build-app.sh` | Info.plist `CFBundleShortVersionString` |
 | `Mac/HadesApp/scripts/build-app.sh` | Info.plist `CFBundleVersion` (build number - bump too) |
-| `install.sh` | `VERSION` (and `SHA256`, once 8.3 has produced the DMG - see 8.4) |
+| `install.sh` | `VERSION` (and `SHA256`, once the tag run has built and attached the DMG - see 8.4) |
 | `ClaudeCodePlugin/.claude-plugin/plugin.json` | `version` - `release.yml` FAILS the release if this does not match the tag |
 
 This table must stay identical to section 2's. It previously listed only the first three, which is
@@ -865,84 +865,115 @@ only and skips those). Expected counts per suite and what each one actually pins
 
 ### 8.3 Build
 
+**You do not build release artifacts by hand.** All three - the DMG and both MSIs - are built by
+`release.yml` when the tag is pushed, and attached to a draft Release by the jobs themselves.
+`build-dmg.sh` and `build-msi.ps1` are for testing locally; an artifact you build is **not** the
+artifact users download, and must never be the one you take a checksum from (8.4, step 3).
+
+This section used to say the opposite - build the DMG here, attach it by hand in 8.4 - and that was
+true until the `macos` job existed. Pinning `install.sh` from a locally built DMG now ships a
+checksum that can never match: the DMG is not byte-reproducible (9.5), so `install.sh` would refuse
+to install for every Mac user.
+
+To test a build locally without releasing anything:
+
 ```bash
-Mac/HadesApp/scripts/build-dmg.sh Release --allow-unsigned
+Mac/HadesApp/scripts/build-dmg.sh Release --allow-unsigned      # -> DerivedData/dmg/
+Windows\Installer\build-msi.ps1 -Rid win-x64 -Version X.Y.Z    # -> Windows\Installer\bin\
 ```
 
-→ `Mac/HadesApp/DerivedData/dmg/Hades-X.Y.Z-unsigned.dmg`. `--allow-unsigned` is deliberate, not
-a placeholder flag - v1 has no Apple Developer ID certificate, so this is the only build this repo
-can produce today (6.1, 6.4 above).
+`--allow-unsigned` is deliberate, not a placeholder flag - there is no Apple Developer ID
+certificate, so this is the only build this repo can produce today (6.1, 6.4 above).
 
-**The Windows MSIs are not built here.** `release.yml`'s `windows` job builds both of them on the
-tag and attaches them itself (section 9). You do not run `build-msi.ps1` as part of a release - only
-when testing locally. That asymmetry between the two platforms is deliberate for now and recorded as
-debt in 9.5.
+You can also run the whole pipeline without releasing anything, via `workflow_dispatch` with
+`dry_run` - every job runs and nothing is uploaded.
 
-Before running the gate, note that it checks the version sites only:
+Before tagging, run the gate. It checks the version sites only:
 
 ```bash
 bash scripts/check-version-lockstep.sh X.Y.Z --skip-checksums
 ```
 
-The unflagged run belongs in 8.4, after the MSI checksums exist.
+The unflagged run belongs in 8.4, after the artifacts exist and their checksums are known.
 
 ### 8.4 Publish
 
-**Order matters here, and an earlier version of this section had it wrong.** It said to create the
-Release first and pin `install.sh` afterwards - but `install.sh` is served from
-`raw.githubusercontent.com/.../main/install.sh`, so pinning after the merge leaves `main` carrying a
-stale checksum until a second commit lands. The digest is known as soon as 8.3 builds the DMG, so
-pin it *before* merging, not after publishing.
+**Order matters here, and this section has now had it wrong twice.** The first version said to
+create the Release before pinning `install.sh`, which left `main` carrying a stale checksum until a
+second commit landed. The fix was to pin *before* merging - correct at the time, because 8.3 built
+the DMG locally and the local digest and the released one were the same file.
 
-1. **Pin `install.sh`** from the DMG built in 8.3: `shasum -a 256` it, set `SHA256` and `VERSION`.
-   Nothing is uploaded yet - the digest of the local artifact and the released one are the same file.
-2. **Commit, then merge the release branch to `main`.** Both `install.sh` and `uninstall.sh` are
-   fetched from `main` by their documented curl URLs, so until this lands, every install command in
-   the README 404s. This step used to be absent from this checklist entirely.
-3. **Tag `vX.Y.Z` and push the tag.** This fires `release.yml`: it verifies `plugin.json` matches the
-   tag (8.1), syncs the plugin, and pushes to `TheArcForge/hades-plugin` (8.5). It does NOT create
-   the GitHub Release or upload anything.
-4. **Create the GitHub Release** for that tag and attach the DMG from 8.3. Until the asset exists,
-   `install.sh` downloads nothing - this is the one step that makes the documented install work.
-   Three traps, all hit for real on 2026-08-20:
-   - **Create it on `TheArcForge/Hades`, not the plugin repo.** `release.yml` used to push `--tags`
-     to `TheArcForge/hades-plugin`, so `vX.Y.Z` existed in BOTH repos and appeared in the plugin
-     repo's "draft a new release" tag dropdown looking entirely correct. The 2.0.0 release was
-     published there by mistake, 61 MB DMG and all, on a repo that holds only skills and commands.
-     Fixed at the source - `release.yml` no longer tags that repo - but check the URL anyway.
-   - **A release and its assets are separate objects.** Deleting the misplaced release deleted the
-     uploaded DMG with it; recreating the release on the right repo produced a page that looked
-     complete (title, notes, Latest badge) with **zero assets** and an install URL still 404ing.
-     After publishing, assert the asset count, not the page.
-   - **A freshly uploaded asset 404s for a short while** before the CDN catches up. A 404 within a
-     minute of upload is propagation, not failure - re-check before re-uploading.
-5. **Verify `install.sh` end to end** against the published release, running the real documented
-   command (`curl ... | bash`) rather than a local variant with the URL swapped - the variant tests
-   the installer, not the release. Ideally on a Mac that has never had Hades installed. Expect no
-   Gatekeeper prompt (curl does not quarantine - 6.2), `codesign -v` valid, and **the first-run
-   wizard on screen**: Hades is `LSUIElement`, so an install that does not launch the app produces
-   no Dock icon, no window and no menu-bar item - indistinguishable from an install that did
-   nothing. That is exactly how it was reported ("I never saw the wizard") before `install.sh`
-   learned to launch. `uninstall.sh` is worth the same pass. There is no cask to publish; Homebrew
-   was evaluated and dropped (6.6).
+They are not the same file any more. Since the `macos` job exists, the artifact users download is
+built by CI on the tag, and neither the DMG nor the MSIs are byte-reproducible. **So the checksums
+cannot be known until after the tag**, on both platforms - the deadlock 9.5 documented for Windows
+now governs macOS too. The order below is the consequence, and the draft Release is what makes it
+safe: nothing is public until you publish it, so nobody can download an asset whose checksum is not
+yet pinned.
 
-   **Confirm the checksum of the PUBLISHED file**, not the local one:
-   `curl -fsSL <asset-url> | shasum -a 256` against `install.sh`'s `SHA256`. Matching the artifact
-   you built proves nothing about what GitHub actually stored.
-6. **Pin the Windows checksums and close the gate.** The `windows` job prints both MSI SHA-256s in a
-   paste-ready form. Put them into `install.ps1`'s `$Sha256`, then run the gate **without**
-   `--skip-checksums`:
+1. **Merge the release branch to `main`.** `install.sh` and `uninstall.sh` are fetched from
+   `raw.githubusercontent.com/.../main/`, so until this lands, every install command in the README
+   404s. Their checksums are still unpinned at this point; that is expected, and it is why nothing
+   is published yet.
+
+2. **Tag `vX.Y.Z` and push the tag.** This fires `release.yml`, which:
+   - re-runs the version gate (8.1) before building anything;
+   - verifies `plugin.json` matches the tag, syncs the plugin, and pushes to
+     `TheArcForge/hades-plugin` (8.5);
+   - builds the DMG (`macos` job) and both MSIs (`windows` job);
+   - **creates a draft Release and attaches all three**, then prints each checksum in a paste-ready
+     form.
+
+   Whichever job gets there first creates the draft; both assert the asset count afterwards rather
+   than trusting that the upload worked.
+
+3. **Pin all three checksums from the run's output** - never from a local build. `install.sh` takes
+   the DMG's `VERSION`/`SHA256`; `install.ps1` takes both MSI digests in `$Sha256`. Then close the
+   gate **without** `--skip-checksums`:
 
    ```bash
    bash scripts/check-version-lockstep.sh X.Y.Z
    ```
 
-   It must be green before you publish. Until this lands on `main`, `install.ps1` refuses to run -
-   which is the safe failure, but it is still a broken install command for Windows users in that
-   window. Why this cannot happen before the tag, and what the alternatives are, is 9.5.
+   It must be green. Commit this to `main`. Until it lands, both installers refuse to run rather
+   than install unverified bytes - the safe failure, but still a broken install command, which is
+   why the Release is still a draft.
 
-   Then verify `install.ps1` end to end against the published release, as step 5 does for
-   `install.sh` - and **confirm the checksum of the PUBLISHED MSI**, not the local one.
+4. **Confirm the checksums of the PUBLISHED files**, not the ones you pinned from the log:
+
+   ```bash
+   curl -fsSL <asset-url> | shasum -a 256
+   ```
+
+   Matching what CI printed proves the build; matching what GitHub stored proves the release.
+
+5. **Publish the draft.** Write the real notes first - the CI-generated placeholder says to. Three
+   traps, all hit for real on 2026-08-20, and worth re-reading even though CI now does the attaching:
+   - **It must be on `TheArcForge/Hades`, not the plugin repo.** `release.yml` used to push `--tags`
+     to `TheArcForge/hades-plugin`, so `vX.Y.Z` existed in BOTH repos and appeared in the plugin
+     repo's tag dropdown looking entirely correct. The 2.0.0 release was published there by mistake,
+     61 MB DMG and all, on a repo that holds only skills and commands. Fixed at the source -
+     `release.yml` no longer tags that repo - but check the URL anyway.
+   - **A release and its assets are separate objects.** Deleting the misplaced release deleted the
+     uploaded DMG with it; recreating it produced a page that looked complete (title, notes, Latest
+     badge) with **zero assets** and an install URL still 404ing. Assert the asset count, not the
+     page.
+   - **A freshly uploaded asset 404s for a short while** before the CDN catches up. A 404 within a
+     minute of upload is propagation, not failure - re-check before re-uploading.
+
+6. **Verify both installers end to end** against the published release, running the real documented
+   commands (`curl ... | bash`, `irm ... | iex`) rather than local variants with the URL swapped -
+   the variant tests the installer, not the release. Ideally on machines that have never had Hades
+   installed.
+
+   On macOS expect no Gatekeeper prompt (curl does not quarantine - 6.2), `codesign -v` valid, and
+   **the first-run wizard on screen**: Hades is `LSUIElement`, so an install that does not launch
+   the app produces no Dock icon, no window and no menu-bar item - indistinguishable from an install
+   that did nothing. That is exactly how it was reported ("I never saw the wizard") before
+   `install.sh` learned to launch. `uninstall.sh` is worth the same pass. There is no cask to
+   publish; Homebrew was evaluated and dropped (6.6).
+
+   On Windows expect no UAC prompt and no SmartScreen dialog (9.1, and `install.ps1`'s own header on
+   why the Mark-of-the-Web is what actually decides that).
 
 7. **Update the GitHub repo description.** It is the first line anyone reads, and it long advertised
    the retired tool count. Confirm it matches what this release actually ships.
@@ -1093,13 +1124,16 @@ shipped.
 
 ### 9.5 Known debt
 
-**Two artifacts, two provenances.** The MSIs are built and attached by CI (`windows` job); the DMG is
-still built by hand on a Mac and attached by hand (8.3, 8.4). That is a drift risk in both
-directions: the MSIs get whatever the runner has, the DMG gets whatever the maintainer's machine has,
-and only one of the two is reproducible by anyone else. **The fix is to move the DMG build into CI**
-on a `macos-latest` runner, at which point 8.3 and 8.4's manual steps collapse into the same shape
-section 9 already has. Not done, and not blocking — but the longer the two paths diverge, the more
-the release procedure has to describe two ways of doing one thing.
+**Two artifacts, one provenance — resolved.** This used to read "the MSIs are built and attached by
+CI; the DMG is still built by hand on a Mac", and called moving the DMG into CI the fix. That is
+done: `release.yml` has a `macos` job on `macos-latest` alongside the `windows` job, and both build
+their artifacts, upload them to the same **draft** release, and print their checksums in a
+paste-ready form. Neither path depends on a maintainer's machine any more.
+
+What did **not** collapse is the checksum step, and it could not: neither artifact is
+byte-reproducible (see the next item for the MSI; the DMG was measured non-reproducible too — two
+builds of identical sources gave `83e21e5b…` and `99e72bfc…`). So both jobs still print rather than
+pin, and a maintainer still pins both by hand before publishing.
 
 **The icons are committed, not built, so a changed master would ship the old icon silently.**
 `Windows/Hades.Shell/Icons/*.ico` are generated by hand (`generate-icons.ps1`) and checked in, and
@@ -1111,19 +1145,24 @@ about when the icon is regenerated. **If that master ever changes, re-run the sc
 result**: nothing in CI, and nothing in the version-lockstep gate, will notice that it did not
 happen.
 
-**The Windows checksums cannot be pinned before the tag exists.** `install.ps1` pins a SHA256 per
-architecture, exactly as `install.sh` does — but `install.sh` works because the DMG is built locally
-*before* tagging, and the MSIs are built by the tag run itself. An MSI is not byte-reproducible
-(fresh package code and cab timestamps per build), so a locally-built MSI's hash will not match CI's.
-That is a genuine deadlock, and it is currently resolved by splitting the gate:
+**No checksum can be pinned before the tag exists — on either platform.** `install.ps1` pins a
+SHA256 per architecture and `install.sh` pins one for the DMG. This item used to say that macOS
+escaped the problem because the DMG was built locally *before* tagging; that stopped being true when
+the `macos` job took over building it, and the escape was never as real as it looked — the DMG is not
+byte-reproducible either (measured 2026-09-05: two builds of an identical tree gave `83e21e5b…` and
+`99e72bfc…`, the bundle carrying build timestamps and an ad-hoc signature). An MSI is not
+reproducible for its own reasons (fresh package code and cab timestamps per build). So for all three
+artifacts, a locally built file's hash will not match CI's, and the pin must come from the run that
+produced the asset. That is a genuine deadlock, resolved by splitting the gate:
 
 - CI runs the gate with `--skip-checksums` at tag time, because it *cannot* know them yet.
-- The `windows` job prints both checksums in a paste-ready form.
-- **The maintainer pins them and runs the gate without the flag before publishing the release.**
+- The `windows` and `macos` jobs each print their checksums in a paste-ready form.
+- **The maintainer pins all three and runs the gate without the flag before publishing.**
 
-So there is a real window in which `main` carries unpinned checksums while the release exists. It
-fails safe — `install.ps1` refuses to run rather than installing unverified bytes — but it is the
-same class of hazard 8.4 documents for `install.sh`, and it is not fixed, only made loud. **The
+So there is a real window in which `main` carries unpinned checksums. What keeps it safe is that the
+Release is a **draft** until the maintainer publishes it: the assets are not downloadable, so nobody
+can fetch bytes a stale pin would reject. Both installers also fail safe on their own — they refuse
+to run rather than install unverified bytes. It is not fixed, only made loud. **The
 options if it becomes painful**, none of them taken yet: have CI commit the pinned checksums back to
 `main`; publish a `SHA256SUMS` release asset and have `install.ps1` fetch it (weaker — the checksum
 would then share the artifact's provenance); or make the MSI build reproducible and pin from a local

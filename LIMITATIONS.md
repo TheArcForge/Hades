@@ -65,7 +65,7 @@ If something misbehaves, run `hades diagnose` and put its output in the issue. I
 
 ## Maturity
 
-Hades 2.0.0 has been field-tested on a large production Unity project, but **not yet across many projects, Unity versions, or OS versions.** Treat surprising results on your project as a chance to help — file an issue with a concrete repro.
+Hades has been field-tested on a large production Unity project, but **not yet across many projects, Unity versions, or OS versions.** Treat surprising results on your project as a chance to help — file an issue with a concrete repro.
 
 **macOS is the more proven platform; Windows is beta.** Both run the same core and pass the same suites, so the analysis is the same. The difference is exposure: the Mac app has real field use behind it and the Windows one does not yet.
 
