@@ -1022,7 +1022,7 @@ When you do it:
    cost of being wrong in the window between shipping the docs and pushing the tag. Confirm each
    still reads correctly post-sync; the work to do here is checking, not rewriting.
 2. Re-verify the marketplace install end to end: `/plugin marketplace add TheArcForge/hades-plugin`
-   → `/plugin install hades` → `/mcp` reports `hades` at 32 tools over the HTTP URL, not a `node`
+   → `/plugin install hades` → `/mcp` reports `hades` at 37 tools over the HTTP URL, not a `node`
    command.
 
 ## 9. Windows distribution (Windows/Installer)

@@ -14,11 +14,17 @@ public static class UnityClassIds
     {
         [1] = "GameObject", [2] = "Component", [3] = "LevelGameManager", [4] = "Transform",
         [8] = "Behaviour", [20] = "Camera", [21] = "Material", [23] = "MeshRenderer",
+        // [74] added by DESIGN-07 §11: ".anim" moved from the binary/meta-only path to this YAML
+        // reader (it is plain Unity YAML, class id 74), and without this entry every AnimationClip
+        // document would decode to the synthetic "UnityType_74" instead - verified missing (and
+        // now fixed) against a real corpus file's own "--- !u!74 &7400000\nAnimationClip:" header.
+        [74] = "AnimationClip",
         [25] = "Renderer", [28] = "Texture2D", [29] = "OcclusionCullingSettings",
         [30] = "GraphicsSettings", [33] = "MeshFilter", [43] = "Mesh", [48] = "Shader",
         [54] = "Rigidbody", [64] = "MeshCollider", [65] = "BoxCollider", [81] = "AudioListener",
         [82] = "AudioSource", [91] = "AnimatorController", [95] = "Animator",
         [1101] = "AnimatorStateTransition", [1102] = "AnimatorState", [1107] = "AnimatorStateMachine",
+        [206] = "BlendTree",
         [104] = "RenderSettings", [108] = "Light", [114] = "MonoBehaviour", [115] = "MonoScript",
         [136] = "CapsuleCollider", [143] = "CharacterController", [147] = "ResourceManager",
         [157] = "LightmapSettings", [196] = "NavMeshSettings", [212] = "SpriteRenderer",

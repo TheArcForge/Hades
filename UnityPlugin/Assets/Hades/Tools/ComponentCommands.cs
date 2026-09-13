@@ -173,15 +173,23 @@ namespace Hades.Tools
                     totalProps + " properties set across " + results.Items.Count + " operation(s), " + errors.Items.Count + " error(s)"));
         }
 
-        static (JsonValue applied, JsonValue failed, int propsSet) ApplyProperties(Component component, JsonValue properties)
+        /// <summary>Parameter widened from <see cref="Component"/> to <see cref="UnityEngine.Object"/>
+        /// (DESIGN-04 Lane D) so <see cref="ScriptableObjectApplyCommands"/>' own setProperties op can
+        /// reuse this verbatim - <see cref="SerializedObject"/> and <see cref="Undo.RecordObject"/> both
+        /// already take <c>UnityEngine.Object</c>, so nothing in the body needed to change, only the
+        /// signature (and visibility - internal, not the implicit private, so a sibling file in the
+        /// same assembly can call it). Behaviourally identical for every existing caller
+        /// (SetProperties above, which passes a Component): same per-field applied/failed reporting,
+        /// same "one bad field never fails the others" contract.</summary>
+        internal static (JsonValue applied, JsonValue failed, int propsSet) ApplyProperties(UnityEngine.Object target, JsonValue properties)
         {
             var applied = JsonValue.NewArray();
             var failed = JsonValue.NewArray();
             if (properties == null || properties.Kind != JsonValueKind.Object || properties.Members.Count == 0)
                 return (applied, failed, 0);
 
-            var so = new SerializedObject(component);
-            Undo.RecordObject(component, "Hades Set Properties " + component.GetType().Name);
+            var so = new SerializedObject(target);
+            Undo.RecordObject(target, "Hades Set Properties " + target.GetType().Name);
 
             var propsSet = 0;
             foreach (var member in properties.Members)
@@ -443,7 +451,10 @@ namespace Hades.Tools
                 + string.Join(", ", available) + ".");
         }
 
-        static (UnityEngine.Object target, MethodInfo method) FindListenerMethod(GameObject go, string methodName, bool hasArgument)
+        // internal, not private: AnimationCommands.SetEvents (DESIGN-05 §5.5) reuses this and
+        // ListAvailableMethods verbatim for animation event method-existence validation, rather
+        // than re-rolling the identical reflection walk a second time.
+        internal static (UnityEngine.Object target, MethodInfo method) FindListenerMethod(GameObject go, string methodName, bool hasArgument)
         {
             var expectedParams = hasArgument ? 1 : 0;
             foreach (var comp in go.GetComponents<Component>())
@@ -461,7 +472,7 @@ namespace Hades.Tools
             return goMethod != null ? (go, goMethod) : (null, null);
         }
 
-        static string[] ListAvailableMethods(GameObject go)
+        internal static string[] ListAvailableMethods(GameObject go)
         {
             var methods = new List<string>();
             foreach (var comp in go.GetComponents<Component>())
@@ -521,31 +532,62 @@ namespace Hades.Tools
 
     /// <summary>Component-type-by-name resolution, shared by SceneCommands (scene.setup's
     /// per-object components) and every ComponentCommands handler - port of the old package's
-    /// FindComponentType, unchanged in behaviour.</summary>
+    /// FindComponentType, unchanged in behaviour. The assembly walk itself now lives in
+    /// <see cref="UnityTypeSearch.FindAll"/> (DESIGN-04 Lane D extraction) - this is just its
+    /// first-match-wins special case over <c>typeof(Component)</c>, identical to what this method
+    /// did inline before the extraction, including which assembly's match wins when the same short
+    /// name appears in more than one (walk order, first hit).</summary>
     internal static class ComponentTypes
     {
-        public static Type Find(string typeName)
-        {
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                Type[] types;
-                try { types = assembly.GetTypes(); }
-                catch (ReflectionTypeLoadException) { continue; }
-
-                var exact = assembly.GetType(typeName);
-                if (exact != null && typeof(Component).IsAssignableFrom(exact)) return exact;
-
-                foreach (var t in types)
-                    if (t.Name == typeName && typeof(Component).IsAssignableFrom(t)) return t;
-            }
-            return null;
-        }
+        public static Type Find(string typeName) => UnityTypeSearch.FindAll(typeName, typeof(Component), out _).FirstOrDefault();
 
         public static ArgumentException NotFoundError(string typeName) =>
             new ArgumentException(
                 "Component type not found: '" + typeName + "'. Provide the exact type name (case-sensitive), e.g. "
                 + "'Rigidbody' or 'BoxCollider' for built-in types, or your script's class name for a MonoBehaviour. "
                 + "Use search_by_name to confirm the exact name and check the assembly containing it is compiled.");
+    }
+
+    /// <summary>Shared type-by-name assembly walk, extracted from <see cref="ComponentTypes.Find"/>
+    /// (DESIGN-04 Lane D) rather than copied - the same "one shared helper instead of a second,
+    /// near-identical implementation" precedent <see cref="AssetFolders"/> already set for folder
+    /// creation (see that class's own doc comment). <see cref="ComponentTypes.Find"/> keeps its own
+    /// first-match-wins behaviour by taking only the first element of what this returns; a caller
+    /// that needs to know about (and refuse) ambiguity - <c>ScriptableObjectApplyCommands.create</c> -
+    /// uses the full list instead.
+    ///
+    /// <para>Walks <see cref="AppDomain.CurrentDomain"/>'s loaded assemblies in enumeration order,
+    /// collecting every type assignable to <paramref name="requiredBase"/> whose name matches
+    /// <c>typeName</c> either as a fully-qualified name within that specific assembly
+    /// (<see cref="Assembly.GetType(string)"/>, which only succeeds for a caller-supplied
+    /// namespace-qualified name) or as a bare short name via a per-type scan. An assembly whose
+    /// <see cref="Assembly.GetTypes"/> throws <see cref="ReflectionTypeLoadException"/> is skipped
+    /// entirely (both checks) - the same silent skip <c>ComponentTypes.Find</c> always did - except
+    /// its simple name is now recorded in <paramref name="unloadableAssemblies"/> so a caller that
+    /// wants to explain a "not found" result can name the assemblies that could not even be
+    /// searched.</para></summary>
+    internal static class UnityTypeSearch
+    {
+        public static List<Type> FindAll(string typeName, Type requiredBase, out List<string> unloadableAssemblies)
+        {
+            var matches = new List<Type>();
+            unloadableAssemblies = new List<string>();
+
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type[] types;
+                try { types = assembly.GetTypes(); }
+                catch (ReflectionTypeLoadException) { unloadableAssemblies.Add(assembly.GetName().Name); continue; }
+
+                var exact = assembly.GetType(typeName);
+                if (exact != null && requiredBase.IsAssignableFrom(exact) && !matches.Contains(exact)) matches.Add(exact);
+
+                foreach (var t in types)
+                    if (t.Name == typeName && requiredBase.IsAssignableFrom(t) && !matches.Contains(t)) matches.Add(t);
+            }
+
+            return matches;
+        }
     }
 
     /// <summary>SerializedProperty <-> JsonValue conversion, plus the fuzzy property-name resolver

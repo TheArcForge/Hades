@@ -416,6 +416,133 @@ public class TypedAssetReadingTests : IDisposable
         Assert.Null(transition.DestinationState);
     }
 
+    // ---------------------------------------------------------------- DESIGN-05 Wave 1 Tier 2: layers, parameters, motion
+
+    [Fact]
+    public void GetAnimatorController_ReportsLayersAndParameters()
+    {
+        Write("Assets/SmokeTest.controller", Header + ControllerBody);
+
+        var controller = ReadThrough.GetAnimatorController(_projectRoot, "Assets/SmokeTest.controller");
+
+        var layer = Assert.Single(controller.Layers);
+        Assert.Equal("Base Layer", layer.Name);
+
+        var parameter = Assert.Single(controller.Parameters);
+        Assert.Equal("Speed", parameter.Name);
+        Assert.Equal("1", parameter.Type);
+        Assert.Equal("0", parameter.DefaultValue);
+    }
+
+    [Fact]
+    public void GetAnimatorController_EveryStateReportsItsOwningLayerByName()
+    {
+        Write("Assets/SmokeTest.controller", Header + ControllerBody);
+
+        var controller = ReadThrough.GetAnimatorController(_projectRoot, "Assets/SmokeTest.controller");
+
+        Assert.All(controller.States, s => Assert.Equal("Base Layer", s.Layer));
+    }
+
+    [Fact]
+    public void GetAnimatorController_AStateWithNoMotionReportsNull()
+    {
+        Write("Assets/SmokeTest.controller", Header + ControllerBody);
+
+        var controller = ReadThrough.GetAnimatorController(_projectRoot, "Assets/SmokeTest.controller");
+
+        Assert.All(controller.States, s => Assert.Null(s.Motion));
+    }
+
+    [Fact]
+    public void GetAnimatorController_AStateMotionReferencingAnExternalClipResolvesItsPath()
+    {
+        const string guid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const string withClip = $$"""
+            --- !u!91 &9100000
+            AnimatorController:
+              m_Name: ClipTest
+              serializedVersion: 5
+              m_AnimatorLayers:
+              - serializedVersion: 5
+                m_Name: Base Layer
+                m_StateMachine: {fileID: 100}
+                m_Controller: {fileID: 9100000}
+            --- !u!1107 &100
+            AnimatorStateMachine:
+              serializedVersion: 6
+              m_Name: Base Layer
+              m_ChildStates:
+              - serializedVersion: 1
+                m_State: {fileID: 200}
+                m_Position: {x: 0, y: 0, z: 0}
+              m_ChildStateMachines: []
+              m_AnyStateTransitions: []
+              m_DefaultState: {fileID: 200}
+            --- !u!1102 &200
+            AnimatorState:
+              serializedVersion: 6
+              m_Name: Idle
+              m_Transitions: []
+              m_Motion: {fileID: 7400000, guid: {{guid}}, type: 2}
+            """;
+        Write("Assets/ClipTest.controller", Header + withClip);
+        Write("Assets/Idle.anim", Header + "--- !u!74 &7400000\nAnimationClip:\n  m_Name: Idle\n", guid);
+
+        var controller = ReadThrough.GetAnimatorController(_projectRoot, "Assets/ClipTest.controller");
+
+        var idle = Assert.Single(controller.States);
+        Assert.NotNull(idle.Motion);
+        Assert.False(idle.Motion!.IsBlendTree);
+        Assert.Equal("Assets/Idle.anim", idle.Motion.Path);
+        Assert.Null(idle.Motion.SubAssetName);
+    }
+
+    [Fact]
+    public void GetAnimatorController_AStateMotionReferencingASameFileBlendTreeIsFlaggedButNotDescended()
+    {
+        const string withTree = """
+            --- !u!91 &9100000
+            AnimatorController:
+              m_Name: TreeTest
+              serializedVersion: 5
+              m_AnimatorLayers:
+              - serializedVersion: 5
+                m_Name: Base Layer
+                m_StateMachine: {fileID: 100}
+                m_Controller: {fileID: 9100000}
+            --- !u!1107 &100
+            AnimatorStateMachine:
+              serializedVersion: 6
+              m_Name: Base Layer
+              m_ChildStates:
+              - serializedVersion: 1
+                m_State: {fileID: 200}
+                m_Position: {x: 0, y: 0, z: 0}
+              m_ChildStateMachines: []
+              m_AnyStateTransitions: []
+              m_DefaultState: {fileID: 200}
+            --- !u!1102 &200
+            AnimatorState:
+              serializedVersion: 6
+              m_Name: Locomotion
+              m_Transitions: []
+              m_Motion: {fileID: 300}
+            --- !u!206 &300
+            BlendTree:
+              m_Name: Locomotion Tree
+            """;
+        Write("Assets/TreeTest.controller", Header + withTree);
+
+        var controller = ReadThrough.GetAnimatorController(_projectRoot, "Assets/TreeTest.controller");
+
+        var state = Assert.Single(controller.States);
+        Assert.NotNull(state.Motion);
+        Assert.True(state.Motion!.IsBlendTree);
+        Assert.Equal("Locomotion Tree", state.Motion.SubAssetName);
+        Assert.Null(state.Motion.Path);
+    }
+
     [Fact]
     public void GetAnimatorController_PathEscapingTheProjectIsRefused()
     {

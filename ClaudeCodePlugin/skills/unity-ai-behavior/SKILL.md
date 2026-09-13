@@ -86,12 +86,14 @@ How many discrete states does the NPC have?
 
 ### NavMesh Navigation
 
+Every technique below presupposes a baked NavMesh. Call `scene_bake(action:'start', target:'navmesh')` first (poll `action:'status'` — a bake can take seconds to minutes); a `NavMeshAgent` on an unbaked NavMesh silently fails at runtime rather than erroring at author time.
+
 | Scenario | Approach |
 |---|---|
 | Simple point-to-point movement | `agent.SetDestination(target.position)` once on state enter, then poll `agent.remainingDistance` |
 | Patrol between fixed waypoints | Waypoint Transform array on an SO or component; advance index on arrival |
 | Dynamic obstacle avoidance | Add `NavMeshObstacle` (Carve mode) on moving blockers; keep agent `updatePosition = true` |
-| Jump/climb between surfaces | Bake Off-Mesh Links at navmesh bake time, or add `OffMeshLink` component manually |
+| Jump/climb between surfaces | Bake Off-Mesh Links at navmesh bake time (`scene_bake(action:'start', target:'navmesh')`), or add `OffMeshLink` component manually |
 | Partial paths (unreachable target) | Check `agent.pathStatus == NavMeshPathStatus.PathPartial` after `SetDestination` |
 | Warp without animation | `agent.Warp(position)` — teleports and snaps to navmesh without pathfinding |
 
@@ -1107,4 +1109,4 @@ switch (_state)
 - Related skills: `hades:component-design`, `hades:unity-performance`, `hades:unity-architect`
 - Review skill: `hades:unity-reviewer`
 - Hades MCP tools: `graph_query`, `search_by_name`, `recall_memory`, `propose_memory_update`
-- Unity docs: [NavMeshAgent](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/AI.NavMeshAgent.html), [NavMesh baking](https://docs.unity3d.com/6000.0/Documentation/Manual/nav-BuildingNavMesh.html), [Physics.OverlapSphere](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/Physics.OverlapSphere.html), [Off-Mesh Links](https://docs.unity3d.com/6000.0/Documentation/Manual/nav-CreateOffMeshLink.html)
+- Unity docs: [NavMeshAgent](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/AI.NavMeshAgent.html), [NavMesh baking](https://docs.unity3d.com/6000.0/Documentation/Manual/nav-BuildingNavMesh.html) (background/manual reference only — `scene_bake` is the tool that actually bakes one), [Physics.OverlapSphere](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/Physics.OverlapSphere.html), [Off-Mesh Links](https://docs.unity3d.com/6000.0/Documentation/Manual/nav-CreateOffMeshLink.html)

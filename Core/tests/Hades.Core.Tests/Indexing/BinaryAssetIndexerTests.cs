@@ -57,7 +57,8 @@ public class BinaryAssetIndexerTests : IDisposable
     [InlineData("Assets/A.shader", "Shader")]
     [InlineData("Assets/A.shadergraph", "ShaderGraph")]
     [InlineData("Assets/A.compute", "ComputeShader")]
-    [InlineData("Assets/A.anim", "AnimationClip")]
+    // ".anim" deliberately absent - DESIGN-07 §11 moved it to AssetIndexer (plain Unity YAML, not
+    // binary). See AssetIndexerTests for its coverage there.
     public void EveryRecognisedKindIndexesEndToEnd(string path, string expectedKind)
     {
         WriteBinaryAsset(path, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");

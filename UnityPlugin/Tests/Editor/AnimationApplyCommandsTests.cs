@@ -267,5 +267,264 @@ namespace Hades.Tests.Editor
                 "the whole batch must revert together - createController's asset must be undone too, not just the last op "
                 + "(this is what would fail if editController still opened its OWN Undo group mid-batch, splitting this into two steps)");
         }
+
+        // ================================================================== DESIGN-05 Wave 1-3
+
+        static JsonValue Dispatch(string method, JsonValue @params)
+        {
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+            return CommandTable.Dispatch(gate, Request(method, @params));
+        }
+
+        static JsonValue Apply(params JsonValue[] operations) => Dispatch("animation.apply", Params(operations));
+
+        // ---------------------------------------------------------------- setBlendTree: round trip (the keystone test, DESIGN-05 §9.2)
+
+        [Test]
+        public void SetBlendTree_Describe_RoundTrip_ReturnsTheSameTypeParameterAndChildren()
+        {
+            var controllerPath = ScratchDir + "/Loco.controller";
+            var idlePath = ScratchDir + "/Idle.anim";
+            var walkPath = ScratchDir + "/Walk.anim";
+            AnimatorController.CreateAnimatorControllerAtPath(controllerPath);
+            AssetDatabase.CreateAsset(new AnimationClip(), idlePath);
+            AssetDatabase.CreateAsset(new AnimationClip(), walkPath);
+
+            var tree = JsonValue.NewObject()
+                .SetProperty("type", JsonValue.String("Simple1D"))
+                .SetProperty("parameter", JsonValue.String("Speed"))
+                .SetProperty("children", JsonValue.NewArray()
+                    .Add(JsonValue.NewObject().SetProperty("clip", JsonValue.String(idlePath)).SetProperty("threshold", JsonValue.Float(0)))
+                    .Add(JsonValue.NewObject().SetProperty("clip", JsonValue.String(walkPath)).SetProperty("threshold", JsonValue.Float(1))));
+
+            var setResult = Apply(Op("setBlendTree",
+                ("controllerPath", JsonValue.String(controllerPath)),
+                ("stateName", JsonValue.String("Locomotion")),
+                ("tree", tree)));
+            Assert.AreEqual(1, AppliedIndices(setResult).Length, "setBlendTree must have applied cleanly");
+
+            var describeResult = Apply(Op("describe", ("controllerPath", JsonValue.String(controllerPath))));
+            Assert.AreEqual(1, AppliedIndices(describeResult).Length, "describe must have applied cleanly");
+
+            Assert.IsTrue(ResultsItems(describeResult).Items[0].TryGetProperty("result", out var describePayload) && describePayload != null);
+
+            Assert.IsTrue(describePayload.TryGetProperty("layers", out var layers) && layers.Items.Count > 0);
+            Assert.IsTrue(layers.Items[0].TryGetProperty("states", out var states) && states != null);
+            var locomotion = states.Items.Single(st => Str(st, "name") == "Locomotion");
+            var describedTree = locomotion.TryGetProperty("tree", out var t) ? t : null;
+            Assert.IsNotNull(describedTree, "the state's motion must describe back as a tree, not a clip");
+
+            Assert.AreEqual("Simple1D", Str(describedTree, "type"));
+            Assert.AreEqual("Speed", Str(describedTree, "parameter"));
+            var children = describedTree.TryGetProperty("children", out var c) ? c : null;
+            Assert.AreEqual(2, children.Items.Count);
+            Assert.AreEqual(idlePath, Str(children.Items[0], "clip"));
+            Assert.AreEqual(0.0, children.Items[0].TryGetProperty("threshold", out var th0) ? th0.AsDouble() : -1, 0.0001);
+            Assert.AreEqual(walkPath, Str(children.Items[1], "clip"));
+            Assert.AreEqual(1.0, children.Items[1].TryGetProperty("threshold", out var th1) ? th1.AsDouble() : -1, 0.0001);
+        }
+
+        // ---------------------------------------------------------------- setBlendTree: pre-flight atomicity (DESIGN-05 §4.4)
+
+        [Test]
+        public void SetBlendTree_InvalidTree_FailsAtomically_ControllerLeftUntouched_ReportsEveryProblem()
+        {
+            var controllerPath = ScratchDir + "/Bad.controller";
+            AnimatorController.CreateAnimatorControllerAtPath(controllerPath);
+
+            // Two independent problems in one tree: an unknown key on child[0], and child[1] (a
+            // FreeformCartesian2D type) missing its required 'position'. Both must be reported from
+            // ONE pass, not just the first hit.
+            var tree = JsonValue.NewObject()
+                .SetProperty("type", JsonValue.String("FreeformCartesian2D"))
+                .SetProperty("parameterX", JsonValue.String("X"))
+                .SetProperty("parameterY", JsonValue.String("Y"))
+                .SetProperty("children", JsonValue.NewArray()
+                    .Add(JsonValue.NewObject()
+                        .SetProperty("clip", JsonValue.String(ScratchDir + "/DoesNotMatter.anim"))
+                        .SetProperty("threshhold", JsonValue.Float(0))) // typo'd key, and this type doesn't use 'threshold' anyway
+                    .Add(JsonValue.NewObject().SetProperty("clip", JsonValue.String(ScratchDir + "/AlsoMissing.anim"))));
+
+            var result = Apply(Op("setBlendTree",
+                ("controllerPath", JsonValue.String(controllerPath)),
+                ("stateName", JsonValue.String("Locomotion")),
+                ("tree", tree)));
+
+            var failed = FailedItems(result);
+            Assert.AreEqual(1, failed.Items.Count);
+            var error = Str(failed.Items[0], "error");
+            StringAssert.Contains("threshhold", error);
+            StringAssert.Contains("position", error);
+
+            // Nothing was created or replaced - the controller is exactly as it was before the call.
+            var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(controllerPath);
+            Assert.AreEqual(0, controller.layers[0].stateMachine.states.Length, "no state may have been created by a rejected tree");
+            var allAssets = AssetDatabase.LoadAllAssetsAtPath(controllerPath);
+            Assert.IsFalse(allAssets.Any(a => a is BlendTree), "no BlendTree sub-asset may have been created by a rejected tree");
+        }
+
+        // ---------------------------------------------------------------- setBlendTree: orphan-accumulation guard (DESIGN-05 §4.7)
+
+        [Test]
+        public void SetBlendTree_Replace_DestroysSupersededTree_ExactlyOneBlendTreeSubAssetRemains()
+        {
+            var controllerPath = ScratchDir + "/Replace.controller";
+            var clipPath = ScratchDir + "/Clip.anim";
+            AnimatorController.CreateAnimatorControllerAtPath(controllerPath);
+            AssetDatabase.CreateAsset(new AnimationClip(), clipPath);
+
+            JsonValue TreeWithThreshold(double threshold) => JsonValue.NewObject()
+                .SetProperty("type", JsonValue.String("Simple1D"))
+                .SetProperty("parameter", JsonValue.String("Speed"))
+                .SetProperty("children", JsonValue.NewArray()
+                    .Add(JsonValue.NewObject().SetProperty("clip", JsonValue.String(clipPath)).SetProperty("threshold", JsonValue.Float(threshold))));
+
+            var first = Apply(Op("setBlendTree", ("controllerPath", JsonValue.String(controllerPath)), ("stateName", JsonValue.String("Locomotion")), ("tree", TreeWithThreshold(0))));
+            Assert.AreEqual(1, AppliedIndices(first).Length);
+
+            var second = Apply(Op("setBlendTree", ("controllerPath", JsonValue.String(controllerPath)), ("stateName", JsonValue.String("Locomotion")), ("tree", TreeWithThreshold(1))));
+            Assert.AreEqual(1, AppliedIndices(second).Length);
+            Assert.IsTrue(second.TryGetProperty("results", out _));
+            var replacedFlag = ResultsItems(second).Items[0].TryGetProperty("result", out var r) && r.TryGetProperty("replacedExistingTree", out var rf) && rf.AsBoolean();
+            Assert.IsTrue(replacedFlag, "the second call must report that it replaced an existing tree");
+
+            var allAssets = AssetDatabase.LoadAllAssetsAtPath(controllerPath);
+            Assert.AreEqual(1, allAssets.Count(a => a is BlendTree), "replacing a tree must leave EXACTLY ONE BlendTree sub-asset, not an accumulating orphan");
+        }
+
+        // ---------------------------------------------------------------- setCurve: easing sampled from the curve itself (DESIGN-05 §9 test 5a)
+
+        [Test]
+        public void SetCurve_EveryEasing_ActuallyEasesTheEvaluatedCurve()
+        {
+            var clipPath = ScratchDir + "/Eased.anim";
+            AssetDatabase.CreateAsset(new AnimationClip(), clipPath);
+
+            JsonValue KeysFor(string easing) => JsonValue.NewArray()
+                .Add(JsonValue.NewObject().SetProperty("time", JsonValue.Float(0)).SetProperty("value", JsonValue.Float(0)))
+                .Add(JsonValue.NewObject().SetProperty("time", JsonValue.Float(1)).SetProperty("value", JsonValue.Float(1)).SetProperty("easing", JsonValue.String(easing)));
+
+            AnimationCurve CurveFor(string easing)
+            {
+                var result = Apply(Op("setCurve",
+                    ("clipPath", JsonValue.String(clipPath)),
+                    ("path", JsonValue.String("")),
+                    ("type", JsonValue.String("Transform")),
+                    ("property", JsonValue.String("m_LocalPosition.x")),
+                    ("keys", KeysFor(easing))));
+                Assert.AreEqual(1, AppliedIndices(result).Length, "setCurve(" + easing + ") must have applied cleanly: " + result);
+
+                var clip = AssetDatabase.LoadAssetAtPath<AnimationClip>(clipPath);
+                var binding = new EditorCurveBinding { path = "", type = typeof(Transform), propertyName = "m_LocalPosition.x" };
+                return AnimationUtility.GetEditorCurve(clip, binding);
+            }
+
+            const float epsilon = 0.01f;
+
+            Assert.AreEqual(0.5f, CurveFor("linear").Evaluate(0.5f), epsilon);
+
+            var easeOut = CurveFor("easeOut").Evaluate(0.5f);
+            Assert.AreEqual(0.75f, easeOut, epsilon, "easeOut at the midpoint must be the exact quadratic 0.75, strictly ahead of linear");
+
+            var easeIn = CurveFor("easeIn").Evaluate(0.5f);
+            Assert.AreEqual(0.25f, easeIn, epsilon, "easeIn at the midpoint must be the exact quadratic 0.25, strictly behind linear");
+
+            // A symmetric S-curve passes exactly through the midpoint even when broken (design's own
+            // warning) - sample the QUARTER points instead, which the midpoint cannot fake.
+            var easeInOutCurve = CurveFor("easeInOut");
+            Assert.AreEqual(0.5f, easeInOutCurve.Evaluate(0.5f), epsilon);
+            Assert.AreEqual(0.156f, easeInOutCurve.Evaluate(0.25f), 0.02f, "easeInOut must LAG linear at the quarter point");
+            Assert.AreEqual(0.844f, easeInOutCurve.Evaluate(0.75f), 0.02f, "easeInOut must LEAD linear at the three-quarter point");
+
+            Assert.AreEqual(0f, CurveFor("constant").Evaluate(0.99f), epsilon, "constant must still hold the SOURCE key's value just before the next key");
+        }
+
+        // ---------------------------------------------------------------- setEvents: replace-all, [] clears everything
+
+        [Test]
+        public void SetEvents_EmptyArray_ClearsEveryPreviouslySetEvent()
+        {
+            var clipPath = ScratchDir + "/Events.anim";
+            AssetDatabase.CreateAsset(new AnimationClip(), clipPath);
+
+            var withEvents = Apply(Op("setEvents",
+                ("clipPath", JsonValue.String(clipPath)),
+                ("events", JsonValue.NewArray()
+                    .Add(JsonValue.NewObject().SetProperty("time", JsonValue.Float(0.1)).SetProperty("function", JsonValue.String("OnFoo")))
+                    .Add(JsonValue.NewObject().SetProperty("time", JsonValue.Float(0.2)).SetProperty("function", JsonValue.String("OnBar"))))));
+            Assert.AreEqual(1, AppliedIndices(withEvents).Length);
+            var clip = AssetDatabase.LoadAssetAtPath<AnimationClip>(clipPath);
+            Assert.AreEqual(2, AnimationUtility.GetAnimationEvents(clip).Length);
+
+            var cleared = Apply(Op("setEvents", ("clipPath", JsonValue.String(clipPath)), ("events", JsonValue.NewArray())));
+            Assert.AreEqual(1, AppliedIndices(cleared).Length);
+            Assert.AreEqual(0, AnimationUtility.GetAnimationEvents(clip).Length, "an explicit empty 'events' array must clear every event");
+        }
+
+        // ---------------------------------------------------------------- setCurve/setEvents: imported-clip refusal names the other tool
+
+        [Test]
+        public void SetCurve_AgainstAnImportedClip_RefusesNamingProjectSettingsApply()
+        {
+            // A non-clip main asset with an AnimationClip SUB-asset - the same shape an FBX has
+            // (main asset is the imported model, the clip is a sub-asset), without needing a real
+            // FBX import. An AnimatorController stands in for "some other main asset type".
+            var fakeImportedPath = ScratchDir + "/FakeImported.controller";
+            var mainAsset = AnimatorController.CreateAnimatorControllerAtPath(fakeImportedPath);
+            var subClip = new AnimationClip { name = "EmbeddedClip" };
+            AssetDatabase.AddObjectToAsset(subClip, mainAsset);
+            AssetDatabase.SaveAssets();
+
+            var result = Apply(Op("setCurve",
+                ("clipPath", JsonValue.String(fakeImportedPath)),
+                ("path", JsonValue.String("")),
+                ("type", JsonValue.String("Transform")),
+                ("property", JsonValue.String("m_LocalPosition.x")),
+                ("keys", JsonValue.NewArray().Add(JsonValue.NewObject().SetProperty("time", JsonValue.Float(0)).SetProperty("value", JsonValue.Float(0)))
+                    .Add(JsonValue.NewObject().SetProperty("time", JsonValue.Float(1)).SetProperty("value", JsonValue.Float(1))))));
+
+            var failed = FailedItems(result);
+            Assert.AreEqual(1, failed.Items.Count);
+            var error = Str(failed.Items[0], "error");
+            StringAssert.Contains("project_settings_apply", error);
+            LiveMcpToolNames.AssertMessageNamesOnlyLiveTools(error);
+        }
+
+        // ---------------------------------------------------------------- addLayer + layer field back-compat
+
+        [Test]
+        public void AddLayer_ThenAssignClipAndEditController_TargetTheNamedLayer_LayerOmitted_StaysOnLayer0()
+        {
+            var controllerPath = ScratchDir + "/Layers.controller";
+            AnimatorController.CreateAnimatorControllerAtPath(controllerPath);
+            var clipPath = ScratchDir + "/Punch.anim";
+            AssetDatabase.CreateAsset(new AnimationClip(), clipPath);
+
+            var addLayerResult = Apply(Op("addLayer", ("controllerPath", JsonValue.String(controllerPath)), ("name", JsonValue.String("Combat"))));
+            Assert.AreEqual(1, AppliedIndices(addLayerResult).Length);
+
+            var editResult = Apply(Op("editController",
+                ("controllerPath", JsonValue.String(controllerPath)),
+                ("layer", JsonValue.String("Combat")),
+                ("addStates", JsonValue.NewArray().Add(JsonValue.NewObject().SetProperty("name", JsonValue.String("Punch"))))));
+            Assert.AreEqual(1, AppliedIndices(editResult).Length);
+
+            var assignResult = Apply(Op("assignClip",
+                ("controllerPath", JsonValue.String(controllerPath)),
+                ("layer", JsonValue.String("Combat")),
+                ("stateName", JsonValue.String("Punch")),
+                ("clipPath", JsonValue.String(clipPath))));
+            Assert.AreEqual(1, AppliedIndices(assignResult).Length);
+
+            var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(controllerPath);
+            Assert.AreEqual(2, controller.layers.Length);
+            var combatLayer = controller.layers.Single(l => l.name == "Combat");
+            var punch = combatLayer.stateMachine.states.Single(cs => cs.state.name == "Punch");
+            Assert.AreEqual(clipPath, AssetDatabase.GetAssetPath(punch.state.motion));
+
+            // Layer 0 (Base Layer) must be untouched - 'layer' scoped both ops to Combat only.
+            Assert.AreEqual(0, controller.layers[0].stateMachine.states.Length);
+        }
     }
 }

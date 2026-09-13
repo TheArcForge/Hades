@@ -45,7 +45,11 @@ namespace Hades.Tools
     /// </summary>
     internal static class AnimationApplyCommands
     {
-        static readonly string[] ValidOps = { "assignController", "assignClip", "createController", "editController" };
+        static readonly string[] ValidOps =
+        {
+            "assignController", "assignClip", "createController", "editController",
+            "addLayer", "setBlendTree", "createClip", "setCurve", "setEvents", "describe",
+        };
 
         internal static JsonValue Apply(ReloadGate gate, JsonValue @params)
         {
@@ -104,11 +108,23 @@ namespace Hades.Tools
                     // animation.assign_clip's own wire field is ALREADY 'controllerPath' (unlike
                     // create_controller/edit_controller's 'path') - so no rename, just the same
                     // "copy only these keys" adapter every other op uses.
-                    return AnimationCommands.AssignClip(gate, CopyFields(op, "controllerPath", "stateName", "clipPath"));
+                    return AnimationCommands.AssignClip(gate, CopyFields(op, "controllerPath", "layer", "stateName", "clipPath"));
                 case "createController":
                     return DoCreateController(gate, op);
                 case "editController":
                     return DoEditController(op);
+                case "addLayer":
+                    return AnimationCommands.AddLayer(gate, CopyFields(op, "controllerPath", "name", "weight", "blending", "avatarMask", "ikPass"));
+                case "setBlendTree":
+                    return AnimationCommands.SetBlendTree(gate, CopyFields(op, "controllerPath", "layer", "stateName", "tree"));
+                case "createClip":
+                    return AnimationCommands.CreateClip(gate, CopyFields(op, "clipPath", "frameRate", "loop", "defaultEasing"));
+                case "setCurve":
+                    return AnimationCommands.SetCurve(gate, CopyFields(op, "clipPath", "path", "type", "property", "keys"));
+                case "setEvents":
+                    return AnimationCommands.SetEvents(gate, CopyFields(op, "clipPath", "events", "receiver"));
+                case "describe":
+                    return AnimationCommands.Describe(gate, CopyFields(op, "controllerPath", "clipPath"));
                 default:
                     throw new ArgumentException(
                         "animation_apply: unknown op '" + (opName ?? "(missing)") + "'. Valid ops: " + string.Join(", ", ValidOps) + ".");
@@ -129,7 +145,7 @@ namespace Hades.Tools
         static JsonValue DoEditController(JsonValue op)
         {
             var adapted = ControllerPathToPath(op);
-            CopyInto(op, adapted, "addParameters", "removeParameters", "addStates", "removeStates", "addTransitions", "removeTransitions");
+            CopyInto(op, adapted, "layer", "addParameters", "removeParameters", "addStates", "removeStates", "addTransitions", "removeTransitions");
             return AnimationCommands.DoEditController(adapted);
         }
 

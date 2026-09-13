@@ -110,7 +110,7 @@ How is this asset used?
 - One asset per group = maximum flexibility, maximum bundle overhead. Use only for very large standalone assets (a full cinematic video, a large music track).
 - 10–50 related assets per group = good balance. Related assets load together, bundle count stays manageable.
 - Hundreds of unrelated assets in one group = too coarse. One changed asset invalidates the entire bundle download.
-- Duplicate assets (same asset referenced from two groups without being extracted to a shared group) bloat build size. Run the Analyze tool in the Addressables window before every release build.
+- Duplicate assets (same asset referenced from two groups without being extracted to a shared group) bloat build size. Run the Analyze tool in the Addressables window before every release build. Hades has no tool for the Analyze tool, or for Addressables groups/entries/addresses at all - see LIMITATIONS.md; this is a human step.
 
 ---
 
@@ -148,6 +148,8 @@ Are you loading an asset?
 ### Content Update Workflow (CCD)
 
 For live games that need post-launch asset patches:
+
+Hades has no tool for Addressables groups, the Analyze tool, or content builds - these are human steps. Hades indexes Addressables assets only as generic ScriptableObjects (see LIMITATIONS.md).
 
 1. Tag assets that may change as **Remote** group members (remote Build & Load paths).
 2. On release build, run `Build → New Build → Default Build Script` — produces catalog and bundles.

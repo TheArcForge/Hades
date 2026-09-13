@@ -67,6 +67,23 @@ namespace Hades.Runtime
             // does.
             Tools.ConsoleLogBuffer.Install();
 
+            // DESIGN-01: subscribes to EditorApplication.update and runs one immediate
+            // reconciliation pass (covering the post-reload boot case) - see PlayModeWatchdog's own
+            // class doc comment for why this must re-run every domain reload, same as Gate below.
+            Tools.PlayModeWatchdog.Install();
+
+            // DESIGN-03: subscribes to EditorApplication.update and runs one immediate
+            // reconciliation pass over Library/Hades/build-status.json (boot nonce + intra-session
+            // liveness) - see BuildWatchdog's own class doc comment for why this must re-run every
+            // domain reload, same reasoning as PlayModeWatchdog just above.
+            Tools.BuildWatchdog.Install();
+
+            // DESIGN-06 (Lane G): the reload-epoch increment (§4.4's ownership token) - folded into
+            // BakeWatchdog.Install's own idempotent-once-per-reload guard, alongside subscribing its
+            // EditorApplication.update tick observer, so this is the ONE line ROADMAP.md §4's
+            // HadesBoot row allots this lane - see BakeWatchdog's own class doc comment.
+            Tools.BakeWatchdog.Install();
+
             Pump = new MainThreadPump();
             Pump.Start();
 
@@ -159,6 +176,11 @@ namespace Hades.Runtime
                 UnityVersion = Application.unityVersion,
                 PluginVersion = PluginVersion,
                 ProcessId = Process.GetCurrentProcess().Id,
+
+                // DESIGN-06 §6.2 Layer 2 - computed once per domain load, in this same boot path,
+                // exactly as that section specifies. See Tools.CapabilityProbe's own class doc
+                // comment.
+                Capabilities = Tools.CapabilityProbe.Compute(),
             };
         }
 

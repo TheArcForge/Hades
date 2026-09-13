@@ -19,6 +19,7 @@ public class AssetTypeTests
     [InlineData("Assets/Prefabs/Enemy.prefab", "Prefab")]
     [InlineData("Assets/Materials/M_Enemy.mat", "Material")]
     [InlineData("Assets/Animations/SmokeTest.controller", "AnimatorController")]
+    [InlineData("Assets/Animations/Idle.anim", "AnimationClip")]
     [InlineData("Assets/Settings/PC_RPAsset.asset", "ScriptableObject")]
     public void RecognisedExtensions_MapToTheirFriendlyKind(string path, string expected)
     {

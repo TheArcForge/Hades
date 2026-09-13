@@ -157,7 +157,18 @@ public sealed class QueryTools(ProjectService projects)
                + "\"BoxCollider\"/\"SphereCollider\"/\"CapsuleCollider\" alike), which exact 'kind' "
                + "cannot express. Refused together with 'kind' (same axis, pick one). "
                + "This is a fixed set of scalar filters, not a query language - there is no way to "
-               + "pass raw SQL through any of them, by construction." + ToolSupport.SavedStateClause)]
+               + "pass raw SQL through any of them, by construction. "
+               + "Three more filters (DESIGN-07) read binary/imported-asset introspection columns "
+               + "instead of a node's identity: minWidth/minHeight (textures only - a texture's "
+               + "measured source pixel dimensions, sniffed from the file's own header; a texture "
+               + "whose header Hades cannot read never matches, since NULL never satisfies >=) and "
+               + "assetSubtype (exact importer subtype, e.g. a texture's \"Sprite\"/\"NormalMap\"/"
+               + "\"GUI\"/\"Default\", or a model's rig \"Humanoid\"/\"Generic\"/\"Legacy\"/\"None\" - "
+               + "call inspect_asset on one example asset first to see its exact subtype string). "
+               + "These combine freely with kind/kindPattern/namePattern/pathPrefix/edge* (e.g. "
+               + "{\"kind\": \"Texture2D\", \"minWidth\": 2049} for every texture over 2048px), but "
+               + "not with fileType, which answers a different, whole-file question."
+               + ToolSupport.SavedStateClause)]
     public async Task<GraphQueryResult> GraphQuery(
         [Description("Exact node kind, e.g. \"Class\", \"MonoBehaviour\", \"GameObject\", \"Rigidbody\", \"Material\", \"AnimatorController\". Refused together with 'kindPattern'.")] string? kind = null,
         [Description("Substring to match against the node name, case-insensitive")] string? namePattern = null,
@@ -170,6 +181,9 @@ public sealed class QueryTools(ProjectService projects)
         [Description("True to require NO matching edge instead of at least one (finds orphans). Requires edgeKind. Default false.")] bool edgeAbsent = false,
         [Description("Whole-FILE classification by extension, from file identity rather than graph nodes - reproduces asset_find: \"Script\", \"Scene\", \"Prefab\", \"Material\", \"AnimatorController\", \"ScriptableObject\", or \"Asset\". One hit per file. Combines only with 'pathPrefix'; refused together with 'kind', 'kindPattern', 'namePattern', or 'edgeKind'.")] string? fileType = null,
         [Description("Substring to match against the node kind, case-insensitive - e.g. \"Collider\" matches \"BoxCollider\"/\"SphereCollider\"/\"CapsuleCollider\". Reproduces component_find's builtin-kind branch. Refused together with 'kind'.")] string? kindPattern = null,
+        [Description("Textures only. Minimum measured source pixel width (inclusive), sniffed from the file's own header (see inspect_asset). A texture whose header Hades cannot read never matches. Refused together with 'fileType'.")] int? minWidth = null,
+        [Description("Textures only. Minimum measured source pixel height (inclusive), same semantics as minWidth. Refused together with 'fileType'.")] int? minHeight = null,
+        [Description("Exact importer subtype, case-sensitive: a texture's \"Sprite\"/\"NormalMap\"/\"GUI\"/\"Default\"/..., or a model's rig \"Humanoid\"/\"Generic\"/\"Legacy\"/\"None\". Call inspect_asset on one example asset to see its exact subtype string. Refused together with 'fileType'.")] string? assetSubtype = null,
         [Description("Maximum nodes to return (1-500, default 100)")] int limit = 100,
         [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
@@ -204,14 +218,16 @@ public sealed class QueryTools(ProjectService projects)
             if (!string.IsNullOrWhiteSpace(kind) || !string.IsNullOrWhiteSpace(kindPattern)
                 || !string.IsNullOrWhiteSpace(namePattern) || !string.IsNullOrWhiteSpace(edgeKind)
                 || !string.IsNullOrWhiteSpace(edgeTargetPath) || !string.IsNullOrWhiteSpace(edgeTargetNamePattern)
-                || !string.IsNullOrWhiteSpace(edgeTargetKind) || edgeAbsent)
+                || !string.IsNullOrWhiteSpace(edgeTargetKind) || edgeAbsent
+                || minWidth is not null || minHeight is not null || !string.IsNullOrWhiteSpace(assetSubtype))
             {
                 throw new McpException(
                     "graph_query's 'fileType' answers a whole-FILE identity question (from file "
                     + "identity, not graph nodes), so it cannot combine with 'kind', 'kindPattern', "
-                    + "'namePattern', 'edgeKind', 'edgeTargetPath', 'edgeTargetNamePattern', or "
-                    + "'edgeTargetKind' - those filter NODES, a different question. Call again with "
-                    + "just 'fileType' and, optionally, 'pathPrefix'.");
+                    + "'namePattern', 'edgeKind', 'edgeTargetPath', 'edgeTargetNamePattern', "
+                    + "'edgeTargetKind', 'minWidth', 'minHeight', or 'assetSubtype' - those filter "
+                    + "NODES, a different question. Call again with just 'fileType' and, optionally, "
+                    + "'pathPrefix'.");
             }
 
             var (fileTypeProject, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
@@ -219,10 +235,12 @@ public sealed class QueryTools(ProjectService projects)
             return BuildFileTypeResult(assets, clampedLimit);
         }
 
-        if (string.IsNullOrWhiteSpace(kindPattern))
+        if (string.IsNullOrWhiteSpace(kindPattern) && minWidth is null && minHeight is null
+            && string.IsNullOrWhiteSpace(assetSubtype))
         {
-            // kindPattern alone already satisfies "at least one filter" - only reach the shared
-            // (query_graph-shared, byte-for-byte-preserved) check when it is absent too.
+            // kindPattern/minWidth/minHeight/assetSubtype each already satisfy "at least one
+            // filter" on their own - only reach the shared (query_graph-shared,
+            // byte-for-byte-preserved) check when all four are absent too.
             ValidateFilters(kind, namePattern, pathPrefix, edgeKind, "graph_query");
         }
         ValidateEdgeDirection(edgeDirection);
@@ -264,7 +282,7 @@ public sealed class QueryTools(ProjectService projects)
 
         var found = projects.QueryGraph(productGuid, kind, namePattern, pathPrefix, edgeKind,
             edgeDirection.ToLowerInvariant(), clampedLimit + 1, edgeTargetPath, edgeTargetNamePattern, edgeAbsent,
-            kindPattern, edgeTargetKind);
+            kindPattern, edgeTargetKind, minWidth, minHeight, assetSubtype);
 
         // F7: an unrecognised 'kind' (a typo, e.g. "Bananas", or a plausible-but-wrong guess, e.g.
         // "Scene" - a real Hades/Unity concept but never a graph NODE kind) used to return exactly

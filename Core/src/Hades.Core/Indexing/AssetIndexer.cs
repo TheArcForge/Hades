@@ -21,11 +21,15 @@ namespace Hades.Core.Indexing;
 public static class AssetIndexer
 {
     /// <summary>The asset kinds Unity serialises as YAML documents — the shapes this type's own
-    /// reader can actually parse into an object graph. Textures, models, audio, fonts, shaders,
-    /// and animation clips are binary/imported instead; see <see cref="BinaryAssetIndexer"/>,
-    /// which <see cref="IndexFiles"/> and <see cref="IndexProject"/> both also call, for how those
-    /// become meta-only nodes with no content parse.</summary>
-    static readonly string[] Extensions = [".unity", ".prefab", ".asset", ".mat", ".controller"];
+    /// reader can actually parse into an object graph. Textures, models, audio, fonts, and
+    /// shaders are binary/imported instead; see <see cref="BinaryAssetIndexer"/>, which
+    /// <see cref="IndexFiles"/> and <see cref="IndexProject"/> both also call, for how those
+    /// become meta-only nodes with no content parse. ".anim" belongs here, not there — DESIGN-07
+    /// §11: it is plain Unity YAML (class ID 74, DeclaredTypeName "AnimationClip"), verified
+    /// against a real corpus file, and reads through the same UnityYamlReader path as everything
+    /// else on this list; it was misfiled into <see cref="Unity.ImportedAssetKind"/> as binary
+    /// before that fix.</summary>
+    static readonly string[] Extensions = [".unity", ".prefab", ".asset", ".mat", ".controller", ".anim"];
 
     /// <summary>
     /// Indexes ONLY the named files. As with <see cref="ScriptIndexer.IndexFiles"/>, this must not

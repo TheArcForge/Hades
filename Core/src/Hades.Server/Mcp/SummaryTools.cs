@@ -80,6 +80,23 @@ public sealed record CharonStatusResult
     [JsonPropertyName("leaseExpiresAtUtc")] public DateTimeOffset? LeaseExpiresAtUtc { get; init; }
 
     [JsonPropertyName("detail")] public required string Detail { get; init; }
+
+    /// <summary>DESIGN-06 §6.2 (Layer 2): which Editor-only capabilities (bake targets today) this
+    /// attached Editor's AppDomain can actually reach - hello-derived, so populated whenever
+    /// <see cref="Attached"/> is true (including while <see cref="Busy"/>), with NO extra wire round
+    /// trip. Empty while not attached - see get_project_summary's own 'capabilities' (Layer 1) for
+    /// the offline, package-manifest-derived answer to the same question.</summary>
+    [JsonPropertyName("capabilities")] public required IReadOnlyList<CapabilityResult> Capabilities { get; init; }
+}
+
+/// <summary>Wire shape of <see cref="Hades.CapabilityInfo"/> - kept as its own MCP-facing record
+/// (rather than reusing the core one directly) for the same reason every other *Result record in
+/// this file is: JsonPropertyName control independent of the core type's own naming.</summary>
+public sealed record CapabilityResult
+{
+    [JsonPropertyName("id")] public required string Id { get; init; }
+    [JsonPropertyName("available")] public required bool Available { get; init; }
+    [JsonPropertyName("reason")] public string? Reason { get; init; }
 }
 
 /// <summary>
@@ -250,6 +267,9 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
             LeaseHeldForSeconds = lease is not null ? (DateTimeOffset.UtcNow - lease.AcquiredAtUtc).TotalSeconds : null,
             LeaseExpiresAtUtc = lease?.ExpiresAtUtc,
             Detail = DescribeCharonStatus(status, lease),
+            Capabilities = status.Capabilities
+                .Select(c => new CapabilityResult { Id = c.Id, Available = c.Available, Reason = c.Reason })
+                .ToList(),
         };
     }
 

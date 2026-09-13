@@ -43,12 +43,56 @@ public sealed record MaterialProperties
     public required IReadOnlyList<MaterialTexture> Textures { get; init; }
 }
 
+/// <summary>One state's m_Motion reference, as <see cref="ReadThrough.GetAnimatorController"/>
+/// resolves it - either an external asset (an .anim file, <see cref="Path"/> resolved from its
+/// guid when the asset is found under a scan root) or a same-file sub-document (a BlendTree, or
+/// - degraded but not thrown on - some other type a hand-edited file might reference), named by
+/// <see cref="SubAssetName"/> instead. Never both. <see cref="IsBlendTree"/> is the "use `describe`
+/// to see inside" signal DESIGN-05 §6.3 Tier 2 promises: this offline reader intentionally goes no
+/// further than naming the sub-document, since a blend tree's own contents need a live Editor
+/// (animation_apply's `describe` op) to read at all - see that design's §6.2 for why.</summary>
+public sealed record AnimatorMotionInfo
+{
+    public string? Path { get; init; }
+    public string? SubAssetName { get; init; }
+    public required bool IsBlendTree { get; init; }
+}
+
 /// <summary>One state in an Animator Controller's state machine.</summary>
 public sealed record AnimatorStateInfo
 {
     public required long FileId { get; init; }
     public required string Name { get; init; }
     public required bool IsDefaultState { get; init; }
+
+    /// <summary>The layer (by name) whose state machine directly owns this state - null when no
+    /// layer's own m_ChildStates claims it (not expected for a well-formed controller, degrades
+    /// like <see cref="AnimatorTransitionInfo.SourceState"/> does for the same reason).</summary>
+    public string? Layer { get; init; }
+
+    /// <summary>Null when the state has no motion assigned (m_Motion: {fileID: 0}) - a real,
+    /// common state for a freshly added state, not a parse gap.</summary>
+    public AnimatorMotionInfo? Motion { get; init; }
+}
+
+/// <summary>One layer in an Animator Controller, by name only - DESIGN-05 §6.3 Tier 2 scope is
+/// "what layers, what parameters, what states/transitions, which motion" - structure, not the
+/// layer's own weight/blending/mask/ikPass, which stay live-only (`describe`) for now.</summary>
+public sealed record AnimatorLayerInfo
+{
+    public required string Name { get; init; }
+}
+
+/// <summary>One parameter declared on an Animator Controller. <see cref="Type"/> is Unity's own
+/// numeric AnimatorControllerParameterType left uninterpreted (1=Float, 3=Int, 4=Bool, 9=Trigger),
+/// like every other raw enum <see cref="ReadThrough"/> returns elsewhere (see
+/// <see cref="AnimatorConditionInfo.ConditionMode"/>) - and <see cref="DefaultValue"/> is whichever
+/// of m_DefaultFloat/m_DefaultInt/m_DefaultBool the file actually carries for that type, also raw.</summary>
+public sealed record AnimatorParameterInfo
+{
+    public required string Name { get; init; }
+    public required string Type { get; init; }
+    public required string DefaultValue { get; init; }
 }
 
 /// <summary>
@@ -84,6 +128,8 @@ public sealed record AnimatorControllerInfo
     public required string Path { get; init; }
     public required IReadOnlyList<AnimatorStateInfo> States { get; init; }
     public required IReadOnlyList<AnimatorTransitionInfo> Transitions { get; init; }
+    public required IReadOnlyList<AnimatorLayerInfo> Layers { get; init; }
+    public required IReadOnlyList<AnimatorParameterInfo> Parameters { get; init; }
 }
 
 /// <summary>

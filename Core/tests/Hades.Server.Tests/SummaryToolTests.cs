@@ -147,6 +147,58 @@ public class SummaryToolTests : IClassFixture<WebApplicationFactory<Program>>, I
     }
 
     [Fact]
+    public async Task GetRecentlyChanged_AMetaOnlyEditReindexesButDoesNotReorder()
+    {
+        // DESIGN-07 §7.3 (I4) acceptance gate, other direction: the fix that finally makes a
+        // .meta-only edit visible to incremental indexing must NOT do so by folding the .meta's
+        // own timestamp into file_state.mtime_utc — that column is ALSO this tool's own sort key
+        // (GetRecentlyChanged_SortsNewestFirstAndHonoursSince, above), and the first, reverted
+        // attempt at I4 broke exactly that. This is the direct proof the two stayed separate:
+        // touching only a texture's .meta re-indexes it (companion coverage:
+        // Observation.IncrementalIndexTests.AMetaOnlyEditIsDetectedAndReindexesTheAsset) but its
+        // reported "last changed" position is untouched by that edit.
+        var old = DateTimeOffset.UtcNow.AddDays(-2);
+        var texturePath = Path.Combine(_projectRoot, "Assets", "Rock.png");
+        File.WriteAllText(texturePath, "\0not real png bytes, existence is all that matters");
+        File.WriteAllText(texturePath + ".meta", """
+            fileFormatVersion: 2
+            guid: cccc3333cccc3333cccc3333cccc3333
+            TextureImporter:
+              textureType: 0
+            """);
+        File.SetLastWriteTimeUtc(texturePath, old.UtcDateTime);
+        File.SetLastWriteTimeUtc(texturePath + ".meta", old.UtcDateTime);
+
+        var projects = _factory.Services.GetRequiredService<ProjectService>();
+        projects.SyncChanges(ProjectGuid); // records Rock.png's own (old) mtime into file_state
+
+        var before = Structured(await McpTestClient.CallTool(_factory, "get_recently_changed"));
+        var beforeOrder = before.GetProperty("results").EnumerateArray()
+            .Select(r => r.GetProperty("path").GetString()).ToList();
+
+        // Only the .meta changes now — the texture's own content/mtime/size are untouched.
+        File.WriteAllText(texturePath + ".meta", """
+            fileFormatVersion: 2
+            guid: cccc3333cccc3333cccc3333cccc3333
+            TextureImporter:
+              textureType: 2
+            """);
+        File.SetLastWriteTimeUtc(texturePath + ".meta", DateTime.UtcNow);
+
+        var sweep = projects.SyncChanges(ProjectGuid)!;
+        Assert.Contains("Assets/Rock.png", sweep.Changed); // re-indexed...
+
+        var after = Structured(await McpTestClient.CallTool(_factory, "get_recently_changed"));
+        var afterOrder = after.GetProperty("results").EnumerateArray()
+            .Select(r => r.GetProperty("path").GetString()).ToList();
+
+        // ...but get_recently_changed's ordering (keyed on the asset's OWN mtime_utc) is
+        // unaffected - Rock.png must not have jumped to the front just because its .meta changed.
+        Assert.Equal(beforeOrder, afterOrder);
+        Assert.NotEqual("Assets/Rock.png", afterOrder[0]);
+    }
+
+    [Fact]
     public async Task GetRecentlyChanged_InvalidSinceGivesActionableGuidance()
     {
         var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "get_recently_changed",

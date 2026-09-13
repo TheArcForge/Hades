@@ -2,6 +2,7 @@
 // compiled a second time inside Unity's Editor, which caps out at C# 9). Block-scoped namespace
 // and ordinary mutable properties are deliberate here, not an oversight.
 using System;
+using System.Collections.Generic;
 
 namespace Hades.Contract.Wire
 {
@@ -20,6 +21,28 @@ namespace Hades.Contract.Wire
         public string? PluginVersion { get; set; }
         public long ProcessId { get; set; }
 
+        /// <summary>DESIGN-06 §6.2 Layer 2: which Editor-only capabilities (bake targets today - see
+        /// Hades.Tools.CapabilityProbe on the plugin side) this attached Editor's AppDomain can
+        /// actually reach, computed once at boot and sent with every handshake so
+        /// hades_charon_status can serve it with zero round trips, including while the Editor is
+        /// busy. <b>OPTIONAL - <see cref="TryParse(JsonValue?,out Hello?,out string?)"/> must never
+        /// require this field.</b> Defaults to an empty list, both here and on parse, so a plugin
+        /// built before this field existed still hands back a Hello TryParse accepts in full -
+        /// plugin/app version skew is a supported state (see <see cref="CharonStatus.PluginVersionOnDisk"/>'s
+        /// own doc comment on the app side for the general policy this follows).</summary>
+        public List<Capability> Capabilities { get; set; } = new List<Capability>();
+
+        /// <summary>One entry of <see cref="Capabilities"/>: an id ("bake.lighting", "bake.occlusion",
+        /// "bake.navmesh"), whether it is available in this AppDomain right now, and - only when
+        /// unavailable - one actionable sentence naming why (DESIGN-06 §6.3's error-message layer,
+        /// reused here as the discovery layer's own detail rather than a second wording).</summary>
+        public sealed class Capability
+        {
+            public string? Id { get; set; }
+            public bool Available { get; set; }
+            public string? Reason { get; set; }
+        }
+
         public JsonValue ToJson()
         {
             var obj = JsonValue.NewObject();
@@ -28,6 +51,18 @@ namespace Hades.Contract.Wire
             obj.SetProperty("unityVersion", JsonValue.String(UnityVersion ?? string.Empty));
             obj.SetProperty("pluginVersion", JsonValue.String(PluginVersion ?? string.Empty));
             obj.SetProperty("processId", JsonValue.Integer(ProcessId));
+
+            var capabilities = JsonValue.NewArray();
+            foreach (var cap in Capabilities ?? new List<Capability>())
+            {
+                var entry = JsonValue.NewObject()
+                    .SetProperty("id", JsonValue.String(cap.Id ?? string.Empty))
+                    .SetProperty("available", JsonValue.Bool(cap.Available));
+                if (cap.Reason != null) entry.SetProperty("reason", JsonValue.String(cap.Reason));
+                capabilities.Add(entry);
+            }
+            obj.SetProperty("capabilities", capabilities);
+
             return obj;
         }
 
@@ -60,7 +95,8 @@ namespace Hades.Contract.Wire
                     ProjectPath = projectPath,
                     UnityVersion = unityVersion,
                     PluginVersion = pluginVersion,
-                    ProcessId = processIdValue.AsInteger()
+                    ProcessId = processIdValue.AsInteger(),
+                    Capabilities = ParseCapabilities(json),
                 };
                 return true;
             }
@@ -80,6 +116,34 @@ namespace Hades.Contract.Wire
                 return false;
             }
             return TryParse(json, out hello, out error);
+        }
+
+        /// <summary>OPTIONAL - absent, null, or malformed all read as "no capabilities reported",
+        /// never a parse failure: <see cref="Capabilities"/> must not become a fifth required field
+        /// TryParse rejects an older plugin's handshake over (see that property's own doc
+        /// comment).</summary>
+        static List<Capability> ParseCapabilities(JsonValue json)
+        {
+            var result = new List<Capability>();
+            if (!json.TryGetProperty("capabilities", out var capsValue) || capsValue == null || capsValue.Kind != JsonValueKind.Array)
+                return result;
+
+            foreach (var item in capsValue.Items)
+            {
+                if (item == null || item.Kind != JsonValueKind.Object) continue;
+
+                var cap = new Capability();
+                if (item.TryGetProperty("id", out var idValue) && idValue != null && idValue.Kind == JsonValueKind.String)
+                    cap.Id = idValue.AsString();
+                if (item.TryGetProperty("available", out var availableValue) && availableValue != null && availableValue.Kind == JsonValueKind.Boolean)
+                    cap.Available = availableValue.AsBoolean();
+                if (item.TryGetProperty("reason", out var reasonValue) && reasonValue != null && reasonValue.Kind == JsonValueKind.String)
+                    cap.Reason = reasonValue.AsString();
+
+                result.Add(cap);
+            }
+
+            return result;
         }
 
         static bool TryGetRequiredString(JsonValue json, string name, out string? value, out string? error)

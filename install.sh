@@ -194,7 +194,7 @@ Next:
   3. Connect Claude Code. In a claude session:
        /plugin marketplace add TheArcForge/hades-plugin
        /plugin install hades
-     Then run /mcp and confirm 'hades' reports 32 tools.
+     Then run /mcp and confirm 'hades' reports 37 tools.
 
 To uninstall:
   curl -fsSL https://raw.githubusercontent.com/${REPO}/main/uninstall.sh | bash

@@ -292,18 +292,20 @@ public sealed class LeaseVisibilityTests : IClassFixture<WebApplicationFactory<P
     // ---------------------------------------------------------------- tool count
 
     [Fact]
-    public async Task ToolCount_Stays32()
+    public async Task ToolCount_Stays37()
     {
         // Plan 10 Task 6's hard cutover landed: 103 tools (90 pre-Plan-10, +13 new consolidated
         // tools Tasks 1-5 added alongside every granular tool they would eventually replace) minus
         // the 71 granular tools the capability audit proved reachable through those replacements =
-        // 32, the plan's own "90 -> 32" target - see CharonStatusTests.ToolCount_Stays32's own
+        // 32, the plan's own "90 -> 32" target - see CharonStatusTests.ToolCount_Stays37's own
         // comment for the fuller breakdown. This plan (8) itself adds no tools - only changes
-        // hades_charon_status' own behaviour - so a drift here beyond 32 now means a tool was added
+        // hades_charon_status' own behaviour - so a drift here beyond 37 (DESIGN-01's 'play_mode',
+        // DESIGN-03's 'project_build', DESIGN-04's 'scriptable_object_apply', DESIGN-02's
+        // 'capture_view', DESIGN-06's 'scene_bake' - docs/design/ROADMAP.md) means a tool was added
         // or removed as a side effect, not on purpose.
         var tools = (await McpTestClient.ListTools(_factory)).GetProperty("result").GetProperty("tools");
 
-        Assert.Equal(32, tools.GetArrayLength());
+        Assert.Equal(37, tools.GetArrayLength());
     }
 
     public void Dispose()

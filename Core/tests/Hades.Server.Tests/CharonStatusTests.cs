@@ -302,7 +302,7 @@ public sealed class CharonStatusTests : IClassFixture<WebApplicationFactory<Prog
     // ---------------------------------------------------------------- tool count
 
     [Fact]
-    public async Task ToolCount_Stays32()
+    public async Task ToolCount_Stays37()
     {
         // The tool-surface-consolidation plan's own target, reached: 90 pre-Plan-10 tools (38
         // pre-Plan-9, +31 Plan 9 Task 2 class-1, +15 Task 3 class-2, +3 Task 4 class-3, +3 Task 5
@@ -318,9 +318,14 @@ public sealed class CharonStatusTests : IClassFixture<WebApplicationFactory<Prog
         // 103 - 71 = 32, exactly the plan's own "90 -> 32" target.
         // This test (from plan 7) itself only changes hades_charon_status' own behaviour - a drift
         // here beyond 32 now means a tool was added or removed as a side effect, not on purpose.
+        //
+        // 32 -> 33: DESIGN-01 (Lane B, docs/design/ROADMAP.md) adds 'play_mode'. 33 -> 34:
+        // DESIGN-03 (Lane C) adds 'project_build'. 34 -> 35: DESIGN-04 (Lane D) adds
+        // 'scriptable_object_apply'. 35 -> 36: DESIGN-02 (Lane F) adds 'capture_view'. 36 -> 37:
+        // DESIGN-06 (Lane G) adds 'scene_bake' - the programme-wide final count.
         var tools = (await McpTestClient.ListTools(_factory)).GetProperty("result").GetProperty("tools");
 
-        Assert.Equal(32, tools.GetArrayLength());
+        Assert.Equal(37, tools.GetArrayLength());
     }
 
     public void Dispose()

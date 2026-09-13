@@ -84,13 +84,20 @@ public sealed class GraphDatabase : IDisposable
         using var command = _connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            INSERT INTO nodes (kind, name, name_lower, path, namespace, line, guid, file_id)
-            VALUES ($kind, $name, $nameLower, $path, $namespace, $line, $guid, $fileId)
+            INSERT INTO nodes (kind, name, name_lower, path, namespace, line, guid, file_id,
+                                asset_subtype, asset_width, asset_height, asset_max_size, asset_flags)
+            VALUES ($kind, $name, $nameLower, $path, $namespace, $line, $guid, $fileId,
+                    $assetSubtype, $assetWidth, $assetHeight, $assetMaxSize, $assetFlags)
             ON CONFLICT (path, kind, name, COALESCE(namespace, ''), file_id) DO UPDATE SET
-                namespace = excluded.namespace,
-                line      = excluded.line,
-                guid      = excluded.guid,
-                file_id   = excluded.file_id;
+                namespace      = excluded.namespace,
+                line           = excluded.line,
+                guid           = excluded.guid,
+                file_id        = excluded.file_id,
+                asset_subtype  = excluded.asset_subtype,
+                asset_width    = excluded.asset_width,
+                asset_height   = excluded.asset_height,
+                asset_max_size = excluded.asset_max_size,
+                asset_flags    = excluded.asset_flags;
             """;
 
         var kind = command.Parameters.Add("$kind", SqliteType.Text);
@@ -101,6 +108,11 @@ public sealed class GraphDatabase : IDisposable
         var line = command.Parameters.Add("$line", SqliteType.Integer);
         var guid = command.Parameters.Add("$guid", SqliteType.Text);
         var fileId = command.Parameters.Add("$fileId", SqliteType.Integer);
+        var assetSubtype = command.Parameters.Add("$assetSubtype", SqliteType.Text);
+        var assetWidth = command.Parameters.Add("$assetWidth", SqliteType.Integer);
+        var assetHeight = command.Parameters.Add("$assetHeight", SqliteType.Integer);
+        var assetMaxSize = command.Parameters.Add("$assetMaxSize", SqliteType.Integer);
+        var assetFlags = command.Parameters.Add("$assetFlags", SqliteType.Integer);
 
         foreach (var node in nodes)
         {
@@ -112,6 +124,11 @@ public sealed class GraphDatabase : IDisposable
             line.Value = node.Line;
             guid.Value = (object?)node.Guid ?? DBNull.Value;
             fileId.Value = node.FileId;
+            assetSubtype.Value = (object?)node.AssetSubtype ?? DBNull.Value;
+            assetWidth.Value = (object?)node.AssetWidth ?? DBNull.Value;
+            assetHeight.Value = (object?)node.AssetHeight ?? DBNull.Value;
+            assetMaxSize.Value = (object?)node.AssetMaxSize ?? DBNull.Value;
+            assetFlags.Value = (object?)node.AssetFlags ?? DBNull.Value;
             command.ExecuteNonQuery();
         }
 
@@ -570,19 +587,28 @@ public sealed class GraphDatabase : IDisposable
         using var command = _connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            INSERT INTO file_state (path, mtime_utc, size) VALUES ($path, $mtime, $size)
-            ON CONFLICT (path) DO UPDATE SET mtime_utc = excluded.mtime_utc, size = excluded.size;
+            INSERT INTO file_state (path, mtime_utc, size, meta_mtime_utc, meta_size)
+            VALUES ($path, $mtime, $size, $metaMtime, $metaSize)
+            ON CONFLICT (path) DO UPDATE SET
+                mtime_utc      = excluded.mtime_utc,
+                size           = excluded.size,
+                meta_mtime_utc = excluded.meta_mtime_utc,
+                meta_size      = excluded.meta_size;
             """;
 
         var path = command.Parameters.Add("$path", SqliteType.Text);
         var mtime = command.Parameters.Add("$mtime", SqliteType.Integer);
         var size = command.Parameters.Add("$size", SqliteType.Integer);
+        var metaMtime = command.Parameters.Add("$metaMtime", SqliteType.Integer);
+        var metaSize = command.Parameters.Add("$metaSize", SqliteType.Integer);
 
         foreach (var state in states)
         {
             path.Value = state.Path;
             mtime.Value = state.MTimeUtcMs;
             size.Value = state.Size;
+            metaMtime.Value = (object?)state.MetaMTimeUtcMs ?? DBNull.Value;
+            metaSize.Value = (object?)state.MetaSize ?? DBNull.Value;
             command.ExecuteNonQuery();
         }
 
@@ -593,7 +619,7 @@ public sealed class GraphDatabase : IDisposable
     public IReadOnlyDictionary<string, FileState> AllFileState()
     {
         using var command = _connection.CreateCommand();
-        command.CommandText = "SELECT path, mtime_utc, size FROM file_state;";
+        command.CommandText = "SELECT path, mtime_utc, size, meta_mtime_utc, meta_size FROM file_state;";
 
         var results = new Dictionary<string, FileState>(StringComparer.Ordinal);
         using var reader = command.ExecuteReader();
@@ -605,6 +631,8 @@ public sealed class GraphDatabase : IDisposable
                 Path = path,
                 MTimeUtcMs = reader.GetInt64(1),
                 Size = reader.GetInt64(2),
+                MetaMTimeUtcMs = reader.IsDBNull(3) ? null : reader.GetInt64(3),
+                MetaSize = reader.IsDBNull(4) ? null : reader.GetInt64(4),
             };
         }
 
@@ -895,7 +923,8 @@ public sealed class GraphDatabase : IDisposable
 
         using var command = _connection.CreateCommand();
         command.CommandText = """
-            SELECT kind, name, path, namespace, line, guid, file_id
+            SELECT kind, name, path, namespace, line, guid, file_id,
+                   asset_subtype, asset_width, asset_height, asset_max_size, asset_flags
             FROM nodes
             WHERE name_lower LIKE $pattern ESCAPE '\'
               AND ($kind IS NULL OR kind = $kind)
@@ -919,6 +948,11 @@ public sealed class GraphDatabase : IDisposable
                 Line = reader.GetInt32(4),
                 Guid = reader.IsDBNull(5) ? null : reader.GetString(5),
                 FileId = reader.GetInt64(6),
+                AssetSubtype = reader.IsDBNull(7) ? null : reader.GetString(7),
+                AssetWidth = reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                AssetHeight = reader.IsDBNull(9) ? null : reader.GetInt32(9),
+                AssetMaxSize = reader.IsDBNull(10) ? null : reader.GetInt32(10),
+                AssetFlags = reader.IsDBNull(11) ? null : reader.GetInt32(11),
             });
         }
 
@@ -1302,11 +1336,22 @@ public sealed class GraphDatabase : IDisposable
     /// name="edgeKind"/> IS NULL already skips the whole clause - see QueryTools' own validation for
     /// why a caller supplying one WITHOUT edgeKind is refused outright rather than silently doing
     /// nothing.</para>
+    /// <para><b>DESIGN-07 §8.2 - <paramref name="minWidth"/>/<paramref name="minHeight"/>/<paramref
+    /// name="assetSubtype"/>.</b> Three more additive, default-no-effect filters, same shape as
+    /// every Task 4/6 addition above. minWidth/minHeight compare against <see
+    /// cref="GraphNode.AssetWidth"/>/<see cref="GraphNode.AssetHeight"/> (Tier 2, textures only) -
+    /// a row whose header could not be read has both NULL, and SQL's NULL semantics already make
+    /// <c>NULL >= $minWidth</c> false rather than true, so an unreadable texture never matches
+    /// (never a silent false negative disguised as "no big textures"). assetSubtype is an EXACT,
+    /// case-sensitive match against <see cref="GraphNode.AssetSubtype"/>'s own canonical-case
+    /// value (Tier 1) - deliberately not a LIKE pattern like namePattern/kindPattern, so it stays
+    /// a plain indexable equality rather than an unindexable expression scan.</para>
     /// </summary>
     public IReadOnlyList<GraphNode> QueryGraph(string? kind, string? namePattern, string? pathPrefix,
         string? edgeKind, string edgeDirection = "outgoing", int limit = 100,
         string? edgeTargetGuid = null, string? edgeTargetNamePattern = null, bool edgeAbsent = false,
-        string? kindPattern = null, string? edgeTargetKind = null)
+        string? kindPattern = null, string? edgeTargetKind = null,
+        int? minWidth = null, int? minHeight = null, string? assetSubtype = null)
     {
         using var command = _connection.CreateCommand();
         command.CommandText = """
@@ -1316,6 +1361,9 @@ public sealed class GraphDatabase : IDisposable
               AND ($kindPattern IS NULL OR LOWER(n.kind) LIKE $kindPattern ESCAPE '\')
               AND ($namePattern IS NULL OR n.name_lower LIKE $namePattern ESCAPE '\')
               AND ($pathPrefixPattern IS NULL OR n.path LIKE $pathPrefixPattern ESCAPE '\')
+              AND ($minWidth IS NULL OR n.asset_width >= $minWidth)
+              AND ($minHeight IS NULL OR n.asset_height >= $minHeight)
+              AND ($assetSubtype IS NULL OR n.asset_subtype = $assetSubtype)
               AND ($edgeKind IS NULL OR
                 CASE WHEN $edgeAbsent THEN
                   ($direction <> 'incoming' OR n.guid IS NOT NULL) AND NOT EXISTS (
@@ -1353,6 +1401,11 @@ public sealed class GraphDatabase : IDisposable
             namePattern is null ? DBNull.Value : $"%{EscapeLikeWildcards(namePattern.ToLowerInvariant())}%");
         command.Parameters.AddWithValue("$pathPrefixPattern",
             pathPrefix is null ? DBNull.Value : $"{EscapeLikeWildcards(pathPrefix)}%");
+        command.Parameters.AddWithValue("$minWidth", (object?)minWidth ?? DBNull.Value);
+        command.Parameters.AddWithValue("$minHeight", (object?)minHeight ?? DBNull.Value);
+        // Exact match, canonical case, never LOWER()'d — see GraphNode.AssetSubtype's own doc
+        // comment for why this is deliberately not a LIKE pattern like namePattern/kindPattern.
+        command.Parameters.AddWithValue("$assetSubtype", (object?)assetSubtype ?? DBNull.Value);
         command.Parameters.AddWithValue("$edgeKind", (object?)edgeKind ?? DBNull.Value);
         command.Parameters.AddWithValue("$direction", edgeDirection);
         command.Parameters.AddWithValue("$edgeTargetGuid", (object?)edgeTargetGuid ?? DBNull.Value);

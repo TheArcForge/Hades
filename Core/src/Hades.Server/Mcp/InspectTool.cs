@@ -58,11 +58,37 @@ public sealed record InspectMaterialResult
     [JsonPropertyName("textures")] public required IReadOnlyList<InspectMaterialTextureResult> Textures { get; init; }
 }
 
+public sealed record InspectAnimatorMotionResult
+{
+    [JsonPropertyName("path")] public string? Path { get; init; }
+    [JsonPropertyName("subAssetName")] public string? SubAssetName { get; init; }
+    [JsonPropertyName("isBlendTree")] public required bool IsBlendTree { get; init; }
+}
+
 public sealed record InspectAnimatorStateResult
 {
     [JsonPropertyName("fileId")] public required long FileId { get; init; }
     [JsonPropertyName("name")] public required string Name { get; init; }
     [JsonPropertyName("isDefaultState")] public required bool IsDefaultState { get; init; }
+    [JsonPropertyName("layer")] public string? Layer { get; init; }
+
+    /// <summary>Null when the state has no motion assigned. When
+    /// <see cref="InspectAnimatorMotionResult.IsBlendTree"/> is true, this offline reader names the
+    /// sub-document but does not descend into it - use animation_apply's 'describe' op (a live
+    /// Editor read) to see a blend tree's own contents, DESIGN-05 §6.3 Tier 2/Tier 1 split.</summary>
+    [JsonPropertyName("motion")] public InspectAnimatorMotionResult? Motion { get; init; }
+}
+
+public sealed record InspectAnimatorLayerResult
+{
+    [JsonPropertyName("name")] public required string Name { get; init; }
+}
+
+public sealed record InspectAnimatorParameterResult
+{
+    [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonPropertyName("type")] public required string Type { get; init; }
+    [JsonPropertyName("defaultValue")] public required string DefaultValue { get; init; }
 }
 
 public sealed record InspectAnimatorConditionResult
@@ -85,6 +111,8 @@ public sealed record InspectAnimatorControllerResult
     [JsonPropertyName("path")] public required string Path { get; init; }
     [JsonPropertyName("states")] public required IReadOnlyList<InspectAnimatorStateResult> States { get; init; }
     [JsonPropertyName("transitions")] public required IReadOnlyList<InspectAnimatorTransitionResult> Transitions { get; init; }
+    [JsonPropertyName("layers")] public required IReadOnlyList<InspectAnimatorLayerResult> Layers { get; init; }
+    [JsonPropertyName("parameters")] public required IReadOnlyList<InspectAnimatorParameterResult> Parameters { get; init; }
 }
 
 public sealed record InspectAssetInfoResult
@@ -92,6 +120,102 @@ public sealed record InspectAssetInfoResult
     [JsonPropertyName("path")] public required string Path { get; init; }
     [JsonPropertyName("guid")] public string? Guid { get; init; }
     [JsonPropertyName("type")] public required string Type { get; init; }
+}
+
+// ---------------------------------------------------------------- DESIGN-07: binary asset introspection
+
+public sealed record InspectTexturePlatformResult
+{
+    [JsonPropertyName("buildTarget")] public required string BuildTarget { get; init; }
+    [JsonPropertyName("compressed")] public required bool Compressed { get; init; }
+    [JsonPropertyName("compressionLevel")] public string? CompressionLevel { get; init; }
+    [JsonPropertyName("crunched")] public required bool Crunched { get; init; }
+    [JsonPropertyName("quality")] public int? Quality { get; init; }
+    [JsonPropertyName("overridden")] public required bool Overridden { get; init; }
+}
+
+public sealed record InspectModelClipResult
+{
+    [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonPropertyName("firstFrame")] public int? FirstFrame { get; init; }
+    [JsonPropertyName("lastFrame")] public int? LastFrame { get; init; }
+    [JsonPropertyName("loops")] public bool? Loops { get; init; }
+}
+
+/// <summary>
+/// DESIGN-07 — inspect_asset's fifth "structure" branch, populated whenever
+/// <see cref="Unity.ImportedAssetKind.KindForPath"/> recognises the path (alongside, not instead
+/// of, <see cref="InspectAssetResult.AssetInfo"/>, which every "anything else" path already got).
+/// Tier 1 fields (everything except the "source*" ones) come from the sibling .meta, decoded by
+/// <see cref="Unity.MetaIntrospection"/>; Tier 2 ("source*", textures only) is measured straight
+/// from the file's own header by <see cref="Unity.ImageHeaderReader"/> — this naming convention
+/// IS the tier disclosure (DESIGN-07 §6.2c): no separate mode flag. A field that does not apply to
+/// this asset's importer type is simply never populated; <see cref="UnavailableReason"/> explains
+/// when TIER 1 AS A WHOLE could not be read at all (no .meta yet, or it fails to parse) — the same
+/// message <c>ReadThrough.GetImportSettings</c> itself throws, reused verbatim.
+/// </summary>
+public sealed record InspectIntrospectionResult
+{
+    [JsonPropertyName("importer")] public string? Importer { get; init; }
+
+    /// <summary>Set only when Tier 1 as a whole is unavailable (no .meta yet, or it does not
+    /// parse) — every field below is then null too. Distinct from <see
+    /// cref="SourceUnavailableReason"/>, which is Tier 2's own, independent failure.</summary>
+    [JsonPropertyName("unavailableReason")] public string? UnavailableReason { get; init; }
+
+    // -- texture (TextureImporter)
+    [JsonPropertyName("textureType")] public string? TextureType { get; init; }
+
+    /// <summary>The import CEILING Unity was configured with, NOT the source image's size — a
+    /// 64×64 icon and an 8192×8192 texture both report 2048 here under default settings.
+    /// <see cref="SourceWidth"/>/<see cref="SourceHeight"/> are the measured values; they are null
+    /// for formats Hades does not read headers from.</summary>
+    [JsonPropertyName("maxTextureSize")] public int? MaxTextureSize { get; init; }
+    [JsonPropertyName("sRGB")] public bool? SRGB { get; init; }
+    [JsonPropertyName("generateMipMaps")] public bool? GenerateMipMaps { get; init; }
+    [JsonPropertyName("readWriteEnabled")] public bool? ReadWriteEnabled { get; init; }
+    [JsonPropertyName("streamingMipmaps")] public bool? StreamingMipmaps { get; init; }
+    [JsonPropertyName("alphaIsTransparency")] public bool? AlphaIsTransparency { get; init; }
+    [JsonPropertyName("alphaSource")] public string? AlphaSource { get; init; }
+    [JsonPropertyName("compression")] public IReadOnlyList<InspectTexturePlatformResult>? Compression { get; init; }
+
+    /// <summary>Tier 2 — measured straight from the file's own header, never from the extension.
+    /// Textures only; null for every other kind and for a texture Hades could not read the header
+    /// of (see <see cref="SourceUnavailableReason"/>).</summary>
+    [JsonPropertyName("sourceWidth")] public int? SourceWidth { get; init; }
+    [JsonPropertyName("sourceHeight")] public int? SourceHeight { get; init; }
+    [JsonPropertyName("sourceChannels")] public int? SourceChannels { get; init; }
+    [JsonPropertyName("sourceFormat")] public string? SourceFormat { get; init; }
+    [JsonPropertyName("sourceUnavailableReason")] public string? SourceUnavailableReason { get; init; }
+
+    // -- model (ModelImporter)
+    [JsonPropertyName("rigType")] public string? RigType { get; init; }
+    [JsonPropertyName("avatarSetup")] public string? AvatarSetup { get; init; }
+    [JsonPropertyName("modelIsReadable")] public bool? ModelIsReadable { get; init; }
+    [JsonPropertyName("meshCompression")] public string? MeshCompression { get; init; }
+    [JsonPropertyName("materialImportMode")] public string? MaterialImportMode { get; init; }
+    [JsonPropertyName("boneCount")] public int? BoneCount { get; init; }
+
+    /// <summary>A LOWER BOUND on the FBX's actual clips, not a census — populated only when clips
+    /// were configured in the Inspector (see <see cref="Unity.MetaIntrospection.Decode"/>'s own
+    /// doc comment).</summary>
+    [JsonPropertyName("clips")] public IReadOnlyList<InspectModelClipResult>? Clips { get; init; }
+
+    // -- audio (AudioImporter)
+    [JsonPropertyName("loadType")] public string? LoadType { get; init; }
+    [JsonPropertyName("audioCompressionFormat")] public string? AudioCompressionFormat { get; init; }
+    [JsonPropertyName("quality")] public string? Quality { get; init; }
+    [JsonPropertyName("sampleRateSetting")] public string? SampleRateSetting { get; init; }
+
+    /// <summary>Inert unless <see cref="SampleRateSetting"/> is "OverrideSampleRate" - null
+    /// otherwise, never reported as "the sample rate" when it does not apply.</summary>
+    [JsonPropertyName("sampleRateOverride")] public int? SampleRateOverride { get; init; }
+    [JsonPropertyName("forceToMono")] public bool? ForceToMono { get; init; }
+    [JsonPropertyName("normalize")] public bool? Normalize { get; init; }
+    [JsonPropertyName("preloadAudioData")] public bool? PreloadAudioData { get; init; }
+    [JsonPropertyName("loadInBackground")] public bool? LoadInBackground { get; init; }
+    [JsonPropertyName("ambisonic")] public bool? Ambisonic { get; init; }
+    [JsonPropertyName("is3D")] public bool? Is3D { get; init; }
 }
 
 public sealed record InspectComponentResult
@@ -159,6 +283,13 @@ public sealed record InspectAssetResult
 
     // depth == "structure", path is anything else
     [JsonPropertyName("assetInfo")] public InspectAssetInfoResult? AssetInfo { get; init; }
+
+    /// <summary>depth == "structure" only, populated alongside <see cref="AssetInfo"/> (never
+    /// instead of it) whenever <see cref="Unity.ImportedAssetKind.KindForPath"/> recognises the
+    /// path — a texture, model, or audio clip's decoded importer settings plus (textures only)
+    /// measured source dimensions. See <see cref="InspectIntrospectionResult"/>'s own doc comment
+    /// for the Tier 1/Tier 2 split. DESIGN-07.</summary>
+    [JsonPropertyName("introspection")] public InspectIntrospectionResult? Introspection { get; init; }
 
     // depth == "components"
     [JsonPropertyName("components")] public IReadOnlyList<InspectComponentResult>? Components { get; init; }
@@ -306,6 +437,13 @@ public sealed class InspectTool(ProjectService projects)
                + "else - PLUS the file's own 'guid' (from its .meta, null if not yet imported) at "
                + "the top level regardless of type, so identity is always available even alongside "
                + "a hierarchy/material/controller payload, not only on the 'anything else' branch. "
+               + "For a texture, model, or audio clip specifically, ALSO returns 'introspection': "
+               + "decoded importer settings (rig type, compression, load type, ...) plus, for a "
+               + "texture, its MEASURED source pixel dimensions ('sourceWidth'/'sourceHeight'). "
+               + "'maxTextureSize' is the import CEILING Unity was configured with, NOT the source "
+               + "image's size - a 64x64 icon and an 8192x8192 texture both report 2048 under "
+               + "default settings; 'sourceWidth'/'sourceHeight' are the measured values, and are "
+               + "null for a format Hades cannot read a header from. "
                + "Add 'target' (a GameObject's fileId, exactly as the structure result reports "
                + "it) to instead see that GameObject's own components - a MonoBehaviour whose script "
                + "guid does not resolve still appears, with its raw guid and missing=true, rather "
@@ -499,6 +637,92 @@ public sealed class InspectTool(ProjectService projects)
             Depth = "structure",
             Guid = info.Guid,
             AssetInfo = new InspectAssetInfoResult { Path = info.Path, Guid = info.Guid, Type = info.Type },
+            Introspection = ImportedAssetKind.KindForPath(path) is { } kind
+                ? BuildIntrospection(unityProject, path, kind)
+                : null,
+        };
+    }
+
+    /// <summary>DESIGN-07 §8.1. Tier 1 failures (no .meta, unparseable .meta) do not fail the
+    /// whole inspect_asset call — they degrade to <see
+    /// cref="InspectIntrospectionResult.UnavailableReason"/>, reusing
+    /// <see cref="ReadThrough.GetImportSettings"/>'s own exception messages verbatim (the same
+    /// "no longer on disk" / "not yet imported" register every other read-through failure uses).
+    /// Tier 2 (<see cref="ImageHeaderReader"/>) never throws at all — see its own doc comment.
+    /// </summary>
+    static InspectIntrospectionResult BuildIntrospection(string unityProject, string path, string kind)
+    {
+        ImageHeaderResult? header = null;
+        if (kind == "Texture2D")
+        {
+            header = ImageHeaderReader.Read(ReadThrough.ResolveAssetPath(unityProject, path));
+        }
+
+        MetaIntrospectionResult? decoded = null;
+        string? unavailableReason = null;
+        try
+        {
+            decoded = MetaIntrospection.Decode(ReadThrough.GetImportSettings(unityProject, path));
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or InvalidDataException or IOException)
+        {
+            unavailableReason = ex.Message;
+        }
+
+        return new InspectIntrospectionResult
+        {
+            Importer = decoded?.ImporterType,
+            UnavailableReason = unavailableReason,
+
+            TextureType = decoded?.TextureType,
+            MaxTextureSize = decoded?.MaxTextureSize,
+            SRGB = decoded?.SRGB,
+            GenerateMipMaps = decoded?.GenerateMipMaps,
+            ReadWriteEnabled = decoded?.ReadWriteEnabled,
+            StreamingMipmaps = decoded?.StreamingMipmaps,
+            AlphaIsTransparency = decoded?.AlphaIsTransparency,
+            AlphaSource = decoded?.AlphaSource,
+            Compression = decoded?.Compression?.Select(c => new InspectTexturePlatformResult
+            {
+                BuildTarget = c.BuildTarget,
+                Compressed = c.Compressed,
+                CompressionLevel = c.CompressionLevel,
+                Crunched = c.Crunched,
+                Quality = c.Quality,
+                Overridden = c.Overridden,
+            }).ToList(),
+
+            SourceWidth = header?.Width,
+            SourceHeight = header?.Height,
+            SourceChannels = header?.Channels,
+            SourceFormat = header?.Format,
+            SourceUnavailableReason = header?.UnavailableReason,
+
+            RigType = decoded?.RigType,
+            AvatarSetup = decoded?.AvatarSetup,
+            ModelIsReadable = decoded?.ModelIsReadable,
+            MeshCompression = decoded?.MeshCompression,
+            MaterialImportMode = decoded?.MaterialImportMode,
+            BoneCount = decoded?.BoneCount,
+            Clips = decoded?.Clips?.Select(c => new InspectModelClipResult
+            {
+                Name = c.Name,
+                FirstFrame = c.FirstFrame,
+                LastFrame = c.LastFrame,
+                Loops = c.Loops,
+            }).ToList(),
+
+            LoadType = decoded?.LoadType,
+            AudioCompressionFormat = decoded?.AudioCompressionFormat,
+            Quality = decoded?.Quality,
+            SampleRateSetting = decoded?.SampleRateSetting,
+            SampleRateOverride = decoded?.SampleRateOverride,
+            ForceToMono = decoded?.ForceToMono,
+            Normalize = decoded?.Normalize,
+            PreloadAudioData = decoded?.PreloadAudioData,
+            LoadInBackground = decoded?.LoadInBackground,
+            Ambisonic = decoded?.Ambisonic,
+            Is3D = decoded?.Is3D,
         };
     }
 
@@ -608,6 +832,8 @@ public sealed class InspectTool(ProjectService projects)
             FileId = s.FileId,
             Name = s.Name,
             IsDefaultState = s.IsDefaultState,
+            Layer = s.Layer,
+            Motion = s.Motion is { } m ? new InspectAnimatorMotionResult { Path = m.Path, SubAssetName = m.SubAssetName, IsBlendTree = m.IsBlendTree } : null,
         }).ToList(),
         Transitions = controller.Transitions.Select(t => new InspectAnimatorTransitionResult
         {
@@ -620,6 +846,13 @@ public sealed class InspectTool(ProjectService projects)
                 ConditionMode = c.ConditionMode,
                 Threshold = c.Threshold,
             }).ToList(),
+        }).ToList(),
+        Layers = controller.Layers.Select(l => new InspectAnimatorLayerResult { Name = l.Name }).ToList(),
+        Parameters = controller.Parameters.Select(p => new InspectAnimatorParameterResult
+        {
+            Name = p.Name,
+            Type = p.Type,
+            DefaultValue = p.DefaultValue,
         }).ToList(),
     };
 

@@ -649,6 +649,7 @@ public static class ReadThrough
         var states = objects.Where(o => o.DeclaredTypeName == "AnimatorState").ToList();
         var transitions = objects.Where(o => o.DeclaredTypeName == "AnimatorStateTransition").ToList();
         var stateMachines = objects.Where(o => o.DeclaredTypeName == "AnimatorStateMachine").ToList();
+        var controllerObject = objects.FirstOrDefault(o => o.DeclaredTypeName == "AnimatorController");
 
         var defaultStateIds = stateMachines
             .Select(machine => machine.References.FirstOrDefault(r => r.PropertyPath == "m_DefaultState"))
@@ -678,6 +679,56 @@ public static class ReadThrough
 
         string? NameOf(long fileId) => byFileId.TryGetValue(fileId, out var obj) ? obj.Name : null;
 
+        // Layers and parameters both live as nested lists directly on the AnimatorController's OWN
+        // document - m_AnimatorLayers/m_AnimatorParameters are plain keyed mappings under a
+        // sequence (each item HAS its own m_Name key), not the bare {fileID: ...} shape
+        // UnityYamlReader's reference detection misses (see this method's own doc comment) - so
+        // these come from the same raw ReadNode tree, read generically, never from References.
+        var controllerTree = controllerObject is not null && trees.TryGetValue(controllerObject.FileId, out var ct)
+            ? ct : null;
+        var layerDicts = RawDictList(controllerTree?.GetValueOrDefault("m_AnimatorLayers"));
+
+        // Tier 2 (DESIGN-05 §6.3): which layer (by name) owns each state, via that layer's own
+        // m_StateMachine -> the state machine's own m_ChildStates -> each child's m_State. A
+        // sub-state-machine's children are deliberately NOT walked (DESIGN-05 §3.5 cut sub-state
+        // machines outright) - only a layer's OWN root state machine's direct children are named.
+        var layerOfState = new Dictionary<long, string>();
+        foreach (var layerDict in layerDicts)
+        {
+            var layerName = layerDict.GetValueOrDefault("m_Name") as string ?? "";
+            var stateMachineId = ReferenceFileId(layerDict.GetValueOrDefault("m_StateMachine"));
+            if (stateMachineId is not { } smId || !trees.TryGetValue(smId, out var smTree)) continue;
+
+            foreach (var child in RawDictList(smTree.GetValueOrDefault("m_ChildStates")))
+            {
+                if (ReferenceFileId(child.GetValueOrDefault("m_State")) is { } stateId)
+                    layerOfState[stateId] = layerName;
+            }
+        }
+
+        AnimatorMotionInfo? MotionOf(UnityObject state)
+        {
+            var motionRef = state.References.FirstOrDefault(r => r.PropertyPath == "m_Motion");
+            if (motionRef is null) return null; // {fileID: 0} - no motion assigned, a normal state.
+
+            if (motionRef.Guid is { } guid)
+            {
+                var resolved = ResolveGuidsToPaths(projectRoot, new HashSet<string>(StringComparer.OrdinalIgnoreCase) { guid });
+                return new AnimatorMotionInfo { Path = resolved.GetValueOrDefault(guid), IsBlendTree = false };
+            }
+
+            // No guid: a same-file sub-document - a BlendTree (the common case; see DESIGN-05
+            // §4.7) or, for a hand-edited file, something else. Named but not descended into -
+            // describing a blend tree's own contents needs a live Editor (animation_apply's
+            // 'describe' op), not this offline reader (DESIGN-05 §6.2/§6.3).
+            var motionObj = byFileId.GetValueOrDefault(motionRef.FileId);
+            return new AnimatorMotionInfo
+            {
+                SubAssetName = motionObj?.Name,
+                IsBlendTree = motionObj?.DeclaredTypeName == "BlendTree",
+            };
+        }
+
         return new AnimatorControllerInfo
         {
             Path = relativePath,
@@ -686,6 +737,8 @@ public static class ReadThrough
                 FileId = s.FileId,
                 Name = s.Name ?? "",
                 IsDefaultState = defaultStateIds.Contains(s.FileId),
+                Layer = layerOfState.GetValueOrDefault(s.FileId),
+                Motion = MotionOf(s),
             }).ToList(),
             Transitions = transitions.Select(t =>
             {
@@ -704,8 +757,35 @@ public static class ReadThrough
                         : [],
                 };
             }).ToList(),
+            Layers = layerDicts.Select(d => new AnimatorLayerInfo { Name = d.GetValueOrDefault("m_Name") as string ?? "" }).ToList(),
+            Parameters = RawDictList(controllerTree?.GetValueOrDefault("m_AnimatorParameters")).Select(d => new AnimatorParameterInfo
+            {
+                Name = d.GetValueOrDefault("m_Name") as string ?? "",
+                Type = d.GetValueOrDefault("m_Type") as string ?? "",
+                DefaultValue = (d.GetValueOrDefault("m_DefaultFloat") ?? d.GetValueOrDefault("m_DefaultInt")
+                    ?? d.GetValueOrDefault("m_DefaultBool")) as string ?? "",
+            }).ToList(),
         };
     }
+
+    /// <summary>Every item of a raw <see cref="ReadNode"/> sequence that is itself a keyed mapping
+    /// (m_AnimatorLayers/m_AnimatorParameters/m_ChildStates items - each has its own m_Name or
+    /// m_State key, unlike the bare {fileID: ...} shape <see cref="ReferencedFileIds"/> reads).
+    /// Tolerates a missing or differently-shaped field by degrading to empty, like
+    /// <see cref="FlattenNamedList"/> - a controller's exact shape is not this reader's to
+    /// enforce.</summary>
+    static IReadOnlyList<Dictionary<string, object?>> RawDictList(object? raw) =>
+        raw is List<object?> items ? items.OfType<Dictionary<string, object?>>().ToList() : [];
+
+    /// <summary>The fileID out of a single bare/keyed <c>{fileID: ...}</c> reference dictionary
+    /// (m_StateMachine, m_State - a scalar reference, not a sequence), or null when absent,
+    /// unparsable, or Unity's own null-reference form ({fileID: 0}).</summary>
+    static long? ReferenceFileId(object? raw) =>
+        raw is Dictionary<string, object?> reference
+        && reference.GetValueOrDefault("fileID") is string rawFileId
+        && long.TryParse(rawFileId, out var fileId)
+        && fileId != 0
+            ? fileId : null;
 
     /// <summary>Every fileId in a sequence of bare <c>{fileID: ...}</c> flow mappings - the shape
     /// <see cref="UnityYamlReader"/> cannot capture as a reference (see

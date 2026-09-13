@@ -262,6 +262,10 @@ using UnityEngine.VFX;
 /// Drives a VFX Graph VisualEffect component from C#.
 /// Attach alongside a VisualEffect component.
 ///
+/// Hades has no tool that creates or edits a .vfx asset - authoring the graph itself, its Events
+/// and its exposed properties, is a human step in the VFX Graph editor window. Hades can wire the
+/// VisualEffect component below once the graph already exposes these names.
+///
 /// In your VFX Graph, expose:
 ///   - An Event named "OnImpact" (or whatever ImpactEventName is set to)
 ///   - A float property named "ImpactStrength"

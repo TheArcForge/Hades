@@ -37,13 +37,28 @@ public sealed record SweepResult
 public static class ProjectSweeper
 {
     /// <summary>Extensions the indexers actually handle. A file outside this set changing is not
-    /// a graph event, so sweeping it would produce work with nothing to do. The six YAML/script
-    /// extensions plus <see cref="ImportedAssetKind.Extensions"/> — binary/imported assets are a
-    /// graph event too (a new texture, deleted audio clip, or renamed shader must be picked up by
-    /// the same incremental path as everything else), sourced from that single shared list rather
-    /// than duplicated here so this and <see cref="Indexing.BinaryAssetIndexer"/> cannot drift.</summary>
+    /// a graph event, so sweeping it would produce work with nothing to do. The seven YAML/script
+    /// extensions (mirroring <see cref="Indexing.AssetIndexer"/>'s own private list — ".anim"
+    /// included, DESIGN-07 §11: plain Unity YAML, not binary) plus <see
+    /// cref="ImportedAssetKind.Extensions"/> — binary/imported assets are a graph event too (a new
+    /// texture, deleted audio clip, or renamed shader must be picked up by the same incremental
+    /// path as everything else), sourced from that single shared list rather than duplicated here
+    /// so this and <see cref="Indexing.BinaryAssetIndexer"/> cannot drift.</summary>
     static readonly string[] IndexableExtensions =
-        [".cs", ".unity", ".prefab", ".asset", ".mat", ".controller", .. ImportedAssetKind.Extensions];
+        [".cs", ".unity", ".prefab", ".asset", ".mat", ".controller", ".anim", .. ImportedAssetKind.Extensions];
+
+    /// <summary>DESIGN-07 §7.3 (I4) — the extensions whose SIBLING .meta is also stat'd, so an
+    /// import-setting edit (Inspector) or an out-of-band script write (agent) is visible to
+    /// incremental indexing even though the asset's OWN (mtime, size) never changed. Exactly
+    /// <see cref="ImportedAssetKind.Extensions"/> plus ".cs" — the scope §7.3 measured and
+    /// settled: binary kinds need it for THIS feature's own Tier-1 correctness, ".cs" closes a
+    /// separate, pre-existing null-GUID race (ScriptIndexer reads a script's GUID from its
+    /// sibling .meta; an agent-written .cs can be swept before Unity mints one). YAML asset
+    /// extensions (.unity/.prefab/.asset/.mat/.controller/.anim) are deliberately OUT — VERIFIED
+    /// (probe, Unity 6000.3.2f1): AssetDatabase.CreateAsset mints the sibling .meta synchronously,
+    /// before the call returns, so an Editor-created YAML asset never exists in a meta-less state
+    /// for this to matter, and the extra stat would buy nothing.</summary>
+    static readonly string[] MetaTrackedExtensions = [".cs", .. ImportedAssetKind.Extensions];
 
     public static SweepResult Sweep(string projectRoot, GraphDatabase database)
     {
@@ -69,11 +84,14 @@ public static class ProjectSweeper
                 try
                 {
                     var info = new FileInfo(file);
+                    var (metaMtime, metaSize) = StatSiblingMeta(file);
                     onDisk[relativePath] = new FileState
                     {
                         Path = relativePath,
                         MTimeUtcMs = new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds(),
                         Size = info.Length,
+                        MetaMTimeUtcMs = metaMtime,
+                        MetaSize = metaSize,
                     };
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -102,7 +120,17 @@ public static class ProjectSweeper
         foreach (var (path, current) in onDisk)
         {
             if (!recorded.TryGetValue(path, out var previous)) { added.Add(path); continue; }
-            if (previous.MTimeUtcMs != current.MTimeUtcMs || previous.Size != current.Size) changed.Add(path);
+
+            // DESIGN-07 §7.3 (I4): a .meta-only edit (an Inspector import-setting change, or
+            // Unity minting one for a script an agent wrote out-of-band) changes NEITHER the
+            // asset's own mtime nor its size, so it was previously invisible here entirely. The
+            // extra two comparisons are both null==null (never computed, on either side) for a
+            // path outside MetaTrackedExtensions' scope, so this is a no-op there.
+            if (previous.MTimeUtcMs != current.MTimeUtcMs || previous.Size != current.Size
+                || previous.MetaMTimeUtcMs != current.MetaMTimeUtcMs || previous.MetaSize != current.MetaSize)
+            {
+                changed.Add(path);
+            }
         }
 
         var deleted = recorded.Keys
@@ -141,11 +169,14 @@ public static class ProjectSweeper
                 var info = new FileInfo(absolute);
                 if (!info.Exists) continue;
 
+                var (metaMtime, metaSize) = StatSiblingMeta(absolute);
                 results.Add(new FileState
                 {
                     Path = relativePath,
                     MTimeUtcMs = new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds(),
                     Size = info.Length,
+                    MetaMTimeUtcMs = metaMtime,
+                    MetaSize = metaSize,
                 });
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -155,6 +186,23 @@ public static class ProjectSweeper
         }
 
         return results;
+    }
+
+    /// <summary>DESIGN-07 §7.3 — stats the sibling ".meta" for a path within
+    /// <see cref="MetaTrackedExtensions"/>'s scope, null for everything else (including a path IN
+    /// scope with no .meta yet — a normal state for a file just added outside the Editor, not an
+    /// error). One extra <see cref="FileInfo"/> stat, not a read of the .meta's content — the
+    /// content is read only later, by whichever indexer actually re-indexes a file this flags as
+    /// Changed.</summary>
+    static (long? MTimeUtcMs, long? Size) StatSiblingMeta(string absoluteAssetPath)
+    {
+        if (!MetaTrackedExtensions.Contains(Path.GetExtension(absoluteAssetPath), StringComparer.OrdinalIgnoreCase))
+            return (null, null);
+
+        var metaInfo = new FileInfo(absoluteAssetPath + ".meta");
+        if (!metaInfo.Exists) return (null, null);
+
+        return (new DateTimeOffset(metaInfo.LastWriteTimeUtc).ToUnixTimeMilliseconds(), metaInfo.Length);
     }
 
     /// <summary>Maps a recorded path back to disk. Local "file:" packages are recorded under

@@ -246,6 +246,28 @@ public class AssetIndexerTests : IDisposable
         Directory.Delete(external, recursive: true);
     }
 
+    [Fact]
+    public void IndexesAnAnimationClipAsPlainYaml()
+    {
+        // DESIGN-07 §11: ".anim" is plain Unity YAML (class ID 74, DeclaredTypeName
+        // "AnimationClip"), verified against a real corpus file — moved here from
+        // ImportedAssetKind/BinaryAssetIndexer, where it was misfiled as binary. This shape
+        // mirrors that real file: %YAML header, one document, class id 74.
+        WriteAsset("Assets/Animations/Idle.anim",
+            "--- !u!74 &7400000\nAnimationClip:\n  m_Name: Idle\n  m_Legacy: 0\n",
+            guid: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        using var db = OpenGraph();
+
+        var result = AssetIndexer.IndexProject(_projectRoot, db);
+
+        Assert.Equal(1, result.FilesScanned);
+        var clip = Assert.Single(db.SearchByName("Idle"));
+        Assert.Equal("AnimationClip", clip.Kind);
+        Assert.Equal("Assets/Animations/Idle.anim", clip.Path);
+        Assert.Equal("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", clip.Guid);
+        Assert.Equal(7400000L, clip.FileId);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_projectRoot)) Directory.Delete(_projectRoot, recursive: true);

@@ -113,6 +113,21 @@ public sealed record MaterialApplyResult
 /// setProperty/assign/swapShader, 'destPath' for duplicate's destination) - <see cref="BuildOperation"/>
 /// below is what translates the ONE caller-facing 'path' into whichever wire key each op's
 /// underlying command actually expects.</para>
+///
+/// <para><b>Undo correction (DESIGN-04 §5.2, Lane D).</b> This description used to claim "a single
+/// Ctrl/Cmd+Z reverts every operation in the spec" outright. Probe-verified against a scratch Unity
+/// project: <see cref="UnityEditor.Undo.RegisterCreatedObjectUndo"/> - the primitive 'create'/
+/// 'duplicate' both use (<see cref="Hades.Tools.MaterialCommands.CreateMaterial"/>/
+/// <see cref="Hades.Tools.MaterialCommands.DuplicateMaterial"/>) - destroys the in-memory
+/// <see cref="UnityEngine.Material"/> object on undo but leaves the <c>.mat</c> FILE it wrote on
+/// disk. So that claim was false for any batch containing 'create'/'duplicate': the object vanishes,
+/// but re-running the same batch then fails at 'create' with "already exists" (AssetPathGuard's
+/// overwrite refusal), which a caller told "reverts every operation" has no way to anticipate. Fixed
+/// here to state the actual behaviour; no plugin test previously asserted the file disappears (one
+/// asserting removal would have been asserting the bug). See
+/// <see cref="Hades.Tools.ScriptableObjectApplyCommands"/>'s own doc comment for the same finding
+/// applied to a brand-new tool that never repeated the original claim, and asset_manage's own
+/// description for 'duplicate's identical caveat.</para>
 /// </summary>
 [McpServerToolType]
 public sealed class MaterialApplyTool(EditorProxy editor, ProjectService projects)
@@ -132,7 +147,12 @@ public sealed class MaterialApplyTool(EditorProxy editor, ProjectService project
                + "material_create/material_set_property/"
                + "material_assign/material_duplicate/material_swap_shader. "
                + "UNDO: the whole batch is ONE Unity Undo group - a single Ctrl/Cmd+Z reverts every "
-               + "operation in the spec, not just the last one. "
+               + "setProperty/assign/swapShader change AND destroys the in-memory Material objects "
+               + "create/duplicate made in this batch, BUT THE .mat FILES create/duplicate WROTE STAY "
+               + "ON DISK - remove them with asset_manage's delete op to finish undoing a create or "
+               + "duplicate. Re-running an identical batch after a partial failure will fail at "
+               + "create/duplicate with 'already exists' if that op already ran; drop it and re-run "
+               + "the rest, or delete the asset first and start over. "
                + "PARTIAL FAILURE, NOT ROLLED BACK: each operation's outcome is reported by its "
                + "0-based index in 'applied' (succeeded) or 'failed' (with its own error) - operations "
                + "that already succeeded are never undone because a LATER one failed. Every successful "

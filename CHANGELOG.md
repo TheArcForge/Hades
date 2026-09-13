@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+
+- **`play_mode`.** Enter, exit, pause, resume, and single-step Unity Play Mode from the agent, with
+  live `status`. Console output from the game keeps flowing to `project_get_console_log` across a
+  play-mode entry, and mutating tools are refused while playing rather than left to fail unclearly.
+- **`project_build`.** Kick off a Player build for the Editor's active build target (or a Build
+  Profile), then poll `status` while it runs — including while the Editor is otherwise pinned by the
+  build itself — and list installed `targets`. Reports build errors, warnings, and duration; refuses
+  a cross-target build outright rather than risk a bad reimport.
+- **`scriptable_object_apply`.** Create ScriptableObject assets and set their serialized properties
+  in a batch, alongside the existing asset-authoring tools.
+- **`capture_view`.** Render an image of the current `scene`, `game`, or a `prefab` in isolation
+  straight from the attached Unity Editor, so the agent can see what it just built instead of only
+  reading state about it.
+- **`scene_bake`.** Start, poll, and cancel a lighting, occlusion, or navmesh bake, with status that
+  survives a script-recompile domain reload.
+- **Binary asset introspection.** `inspect_asset` can now read structural details out of common
+  binary asset formats (textures, sprites, and more) without a Unity Editor attached, and
+  `graph_query` gained filters over the richer per-asset data this makes available.
+- **Deeper animation authoring.** `animation_apply`/`inspect_asset` cover more of the Animator
+  surface — describing existing clips and controllers in more detail, building blend trees, and
+  authoring new clips and curves — beyond the property-level access that shipped before.
+
 ## [2.1.0] — Windows Support — 2026-09-06
 
 Hades runs on **Windows** as well as macOS. Both platforms run the same .NET 10 core, expose the

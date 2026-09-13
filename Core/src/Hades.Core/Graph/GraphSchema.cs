@@ -32,7 +32,14 @@ public static class GraphSchema
     // v4: a file_state table, so indexing can be incremental — without a record of what each file
     // looked like when indexed, every edit costs a full reindex. The graph is derived data, so a bump alone is the migration — see
     // NeedsMigration / Apply's drop-and-recreate below.
-    public const int Version = 4;
+    // v5 (DESIGN-07): five nodes columns (asset_subtype/width/height/max_size/flags) for binary
+    // asset introspection, populated only for Unity.ImportedAssetKind rows; two file_state
+    // columns (meta_mtime_utc, meta_size) so a .meta-only edit is finally visible to incremental
+    // indexing (I4) without disturbing mtime_utc's other job as get_recently_changed's sort key;
+    // and the ".anim" extension moves from ImportedAssetKind (binary, meta-only) to
+    // AssetIndexer (it is plain Unity YAML, already readable by UnityYamlReader — see
+    // ImportedAssetKind's own updated doc comment). One bump carries all three, per DESIGN-07 §13.3.
+    public const int Version = 5;
 
     public static void Apply(SqliteConnection connection)
     {
@@ -57,15 +64,20 @@ public static class GraphSchema
         Execute(connection, transaction, "DROP TABLE IF EXISTS file_state;");
         Execute(connection, transaction, """
             CREATE TABLE nodes (
-                id         INTEGER PRIMARY KEY,
-                kind       TEXT NOT NULL,
-                name       TEXT NOT NULL,
-                name_lower TEXT NOT NULL,
-                path       TEXT NOT NULL,
-                namespace  TEXT,
-                line       INTEGER NOT NULL DEFAULT 0,
-                guid       TEXT,
-                file_id    INTEGER NOT NULL DEFAULT 0
+                id            INTEGER PRIMARY KEY,
+                kind          TEXT NOT NULL,
+                name          TEXT NOT NULL,
+                name_lower    TEXT NOT NULL,
+                path          TEXT NOT NULL,
+                namespace     TEXT,
+                line          INTEGER NOT NULL DEFAULT 0,
+                guid          TEXT,
+                file_id       INTEGER NOT NULL DEFAULT 0,
+                asset_subtype TEXT,
+                asset_width   INTEGER,
+                asset_height  INTEGER,
+                asset_max_size INTEGER,
+                asset_flags   INTEGER
             );
             """);
         // An expression index, not a table-level UNIQUE(...,namespace): SQLite treats every NULL
@@ -79,6 +91,10 @@ public static class GraphSchema
         Execute(connection, transaction, "CREATE INDEX idx_nodes_kind ON nodes (kind);");
         Execute(connection, transaction, "CREATE INDEX idx_nodes_path ON nodes (path);");
         Execute(connection, transaction, "CREATE INDEX idx_nodes_guid ON nodes (guid);");
+        // DESIGN-07 §7.2 — backs graph_query's minWidth/minHeight texture-dimension filter. `kind`
+        // leads so a texture-scoped scan never touches every other kind's rows.
+        Execute(connection, transaction,
+            "CREATE INDEX idx_nodes_asset_dims ON nodes (kind, asset_width, asset_height);");
 
         Execute(connection, transaction, """
             CREATE TABLE edges (
@@ -105,11 +121,20 @@ public static class GraphSchema
         // filesystems, so two edits within the same second can be indistinguishable. A size
         // change catches most of those. It is a cheap hedge, not a guarantee — content hashing
         // is the guarantee, and it is not worth 8,000 file reads per sweep.
+        // meta_mtime_utc/meta_size (DESIGN-07 §7.3, the I4 fix): the sibling .meta's own stat,
+        // tracked SEPARATELY from mtime_utc/size above — mtime_utc is ALSO get_recently_changed's
+        // sort key, and folding a .meta timestamp into it would move an asset's reported "last
+        // changed" time independent of its own content ever changing (the exact defect the first,
+        // reverted attempt at this fix produced — see IncrementalIndexTests' historical note).
+        // NULL for a path outside the scope ProjectSweeper stats a sibling .meta for, and for one
+        // with no .meta yet.
         Execute(connection, transaction, """
             CREATE TABLE file_state (
-                path      TEXT PRIMARY KEY,
-                mtime_utc INTEGER NOT NULL,
-                size      INTEGER NOT NULL
+                path           TEXT PRIMARY KEY,
+                mtime_utc      INTEGER NOT NULL,
+                size           INTEGER NOT NULL,
+                meta_mtime_utc INTEGER,
+                meta_size      INTEGER
             );
             """);
         Execute(connection, transaction, $"PRAGMA user_version = {Version};");

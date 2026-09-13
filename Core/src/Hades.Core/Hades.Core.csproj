@@ -89,6 +89,9 @@
     <EmbeddedResource Include="..\..\..\UnityPlugin\Assets\Hades\Tools\MaterialApplyCommands.cs">
       <LogicalName>Hades.Plugin.Tools.MaterialApplyCommands.cs</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\UnityPlugin\Assets\Hades\Tools\ScriptableObjectApplyCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.ScriptableObjectApplyCommands.cs</LogicalName>
+    </EmbeddedResource>
     <EmbeddedResource Include="..\..\..\UnityPlugin\Assets\Hades\Tools\AnimationCommands.cs">
       <LogicalName>Hades.Plugin.Tools.AnimationCommands.cs</LogicalName>
     </EmbeddedResource>
@@ -115,6 +118,21 @@
     </EmbeddedResource>
     <EmbeddedResource Include="..\..\..\UnityPlugin\Assets\Hades\Tools\InspectorCommands.cs">
       <LogicalName>Hades.Plugin.Tools.InspectorCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\UnityPlugin\Assets\Hades\Tools\PlayModeCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.PlayModeCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\UnityPlugin\Assets\Hades\Tools\BuildCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.BuildCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\UnityPlugin\Assets\Hades\Tools\SceneBakeCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.SceneBakeCommands.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\UnityPlugin\Assets\Hades\Tools\CaptureFraming.cs">
+      <LogicalName>Hades.Plugin.Tools.CaptureFraming.cs</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\UnityPlugin\Assets\Hades\Tools\CaptureCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.CaptureCommands.cs</LogicalName>
     </EmbeddedResource>
     <EmbeddedResource Include="..\..\..\UnityPlugin\Assets\Hades\Tools\PrefabCommands.cs">
       <LogicalName>Hades.Plugin.Tools.PrefabCommands.cs</LogicalName>

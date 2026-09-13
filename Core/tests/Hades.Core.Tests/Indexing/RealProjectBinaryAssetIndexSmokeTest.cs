@@ -57,6 +57,12 @@ public class RealProjectBinaryAssetIndexSmokeTest
         var texture = Assert.Single(underAssets);
         Assert.NotNull(texture.Guid);
 
+        // DESIGN-07 Tier 2: the corpus's one Assets/ texture must yield measured dimensions —
+        // counts only (§10's own discipline), never a specific width/height value.
+        Assert.NotNull(texture.AssetWidth);
+        Assert.NotNull(texture.AssetHeight);
+        Assert.True(texture.AssetWidth > 0 && texture.AssetHeight > 0);
+
         // The payoff: something in the project already references this texture by GUID (a
         // `references` edge AssetIndexer wrote from the referencing file's own YAML, long before
         // this feature existed) — before binary nodes existed, that edge's target owned no node,

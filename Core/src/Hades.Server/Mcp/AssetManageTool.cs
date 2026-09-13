@@ -19,12 +19,17 @@ public sealed record AssetManageOperation : IBatchOperation
 {
     [JsonPropertyName("op")] public required string Op { get; init; }
 
-    // move
-    [JsonPropertyName("sourcePath")] [OpField("move")] public string? SourcePath { get; init; }
-    [JsonPropertyName("destPath")] [OpField("move")] public string? DestPath { get; init; }
+    // move, duplicate - 'move' renames/relocates an existing asset; 'duplicate' copies it to a new
+    // path. Same field names as asset_manage's OWN pre-existing 'move' op (DESIGN-04 §3.2) - NOT
+    // material_apply.duplicate's 'sourcePath'/'path' shape. Internal consistency within the tool a
+    // caller is currently reading beats cross-tool consistency with a tool it is not (documented wart,
+    // not extended - see AssetManageTool's own class doc comment).
+    [JsonPropertyName("sourcePath")] [OpField("move", "duplicate")] public string? SourcePath { get; init; }
+    [JsonPropertyName("destPath")] [OpField("move", "duplicate")] public string? DestPath { get; init; }
 
-    // import
-    [JsonPropertyName("path")] [OpField("import")] public string? Path { get; init; }
+    // import, delete - 'the asset this op is about', reusing the SAME 'path' field name for both
+    // (DESIGN-04 §3.2: delete uses 'path', matching import{path}).
+    [JsonPropertyName("path")] [OpField("import", "delete")] public string? Path { get; init; }
     [JsonPropertyName("forceUpdate")] [OpField("import")] public bool? ForceUpdate { get; init; }
     [JsonPropertyName("recursive")] [OpField("import")] public bool? Recursive { get; init; }
 
@@ -81,26 +86,46 @@ public sealed record AssetManageResult
 /// for why calling each operation's normal, self-leasing entry point per-op would be both wasteful
 /// and unsafe.</para>
 ///
-/// <para><b>No Undo, for all three ops - unlike prefab_apply/project_settings_apply.</b> Unlike every
-/// earlier batch tool, NONE of asset_manage's three operations have ever had Undo coverage: moving/
-/// renaming an asset has no Unity Undo primitive that covers a path the way
+/// <para><b>Undo is UNEVEN, like scene_manage - no longer a blanket "no undo".</b> DESIGN-04 Lane D
+/// added 'delete'/'duplicate' to what used to be three ops with genuinely no Undo coverage at all:
+/// moving/renaming an asset has no Unity Undo primitive that covers a path the way
 /// <see cref="UnityEditor.Undo.RecordObject"/> covers a serialized field (see the standalone
 /// asset_move tool's own description), and import/refresh are project-file-level operations, not
-/// in-memory object state. A caller must not expect a single Ctrl/Cmd+Z to undo an asset_manage call
-/// at all - reversing a move is a second asset_manage call.</para>
+/// in-memory object state - 'delete' is the same story (moving to the OS trash is the recoverability
+/// story, not Ctrl/Cmd+Z). But 'duplicate' DOES register its new copy with
+/// <see cref="UnityEditor.Undo.RegisterCreatedObjectUndo"/> - the same primitive material_apply's own
+/// create/duplicate use, probe-verified (DESIGN-04 §5.2) to destroy the in-memory object on undo
+/// WITHOUT removing the copied file from disk. So a caller must not expect a single Ctrl/Cmd+Z to
+/// undo an asset_manage call uniformly: 'move'/'import'/'refresh'/'delete' never register anything;
+/// 'duplicate' registers a create that only partially undoes (reverse a move with a second
+/// asset_manage call; finish undoing a duplicate with a 'delete' op on the copy).</para>
 /// </summary>
 [McpServerToolType]
 public sealed class AssetManageTool(EditorProxy editor, ProjectService projects)
 {
-    static readonly string[] ValidOps = ["move", "import", "refresh"];
+    static readonly string[] ValidOps = ["move", "import", "refresh", "delete", "duplicate"];
 
     [McpServerTool(Name = "asset_manage", Title = "Manage Assets (Batch)", ReadOnly = false, UseStructuredContent = true)]
     [Description("Applies a batch of asset file-lifecycle operations - move(sourcePath, destPath), "
-               + "import(path, forceUpdate?, recursive?), refresh() - in ONE call, in the order "
-               + "given. This is the batch form of asset_move/asset_import/project_refresh_assets. "
-               + "NO UNDO for any of the three ops: an asset's path/import state is not a serialized "
-               + "field Unity's Undo can snapshot - reversing a move, or re-importing, is a second "
-               + "asset_manage call, not Ctrl/Cmd+Z. "
+               + "import(path, forceUpdate?, recursive?), refresh(), delete(path), "
+               + "duplicate(sourcePath, destPath) - in ONE call, in the order given. This is the "
+               + "batch form of asset_move/asset_import/project_refresh_assets, plus two ops with no "
+               + "prior standalone tool. "
+               + "UNDO IS UNEVEN: 'move'/'import'/'refresh'/'delete' have none - an asset's path/"
+               + "import state is not a serialized field Unity's Undo can snapshot, and 'delete' is "
+               + "not undoable via Ctrl/Cmd+Z at all (see below). 'duplicate' DOES register Undo for "
+               + "the new copy (same primitive as material_apply's create/duplicate) - but Ctrl/Cmd+Z "
+               + "only destroys the in-memory object; the copied .asset FILE remains on disk, so "
+               + "finishing that undo needs a 'delete' op on the copy. Do not assume one Ctrl/Cmd+Z "
+               + "reverts this whole batch. "
+               + "DELETE moves the asset to the OS trash/recycle bin, never a permanent delete, so it "
+               + "can be restored outside Hades on macOS/Windows; Linux/headless recoverability is "
+               + "unverified - treat 'delete' as reversible only on a platform you have checked. It "
+               + "refuses folders outright (delete their contents instead) and refuses loudly - landing in 'failed', "
+               + "never reporting success - if the underlying move-to-trash call itself fails (a "
+               + "locked file, a VCS hold, or similar); nothing is deleted in that case. Call "
+               + "find_references_to before deleting an asset other content may reference, and "
+               + "find_unset_references afterward to find the holes a delete left behind. "
                + "PARTIAL FAILURE, NOT ROLLED BACK: each operation's outcome is reported by its "
                + "0-based index in 'applied' (succeeded) or 'failed' (with its own error) - "
                + "operations that already succeeded are never undone because a LATER one failed. "
@@ -110,7 +135,8 @@ public sealed class AssetManageTool(EditorProxy editor, ProjectService projects)
                + "hades_charon_status first if unsure.")]
     public async Task<AssetManageResult> AssetManage(
         [Description("Operations to apply, in order. Each needs 'op' plus that op's own fields: "
-                   + "move{sourcePath,destPath}, import{path,forceUpdate?,recursive?}, refresh{}.")]
+                   + "move{sourcePath,destPath}, import{path,forceUpdate?,recursive?}, refresh{}, "
+                   + "delete{path}, duplicate{sourcePath,destPath}.")]
         IReadOnlyList<AssetManageOperation> operations,
         [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)

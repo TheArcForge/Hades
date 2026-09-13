@@ -47,6 +47,8 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
     const string NestedInstanceSourceGuid = "cccccccccccccccccccccccccccccccc";
     const string ShaderGuid = "ccccccccccccccccccccccccccccccc1";
     const string TextureGuid = "ccccccccccccccccccccccccccccccc2";
+    const string IntrospectionTextureGuid = "ccccccccccccccccccccccccccccccc3";
+    const string UnreadableHeaderTextureGuid = "ccccccccccccccccccccccccccccccc4";
 
     // Plan 10 Task 6: one guid per depth="structure" branch (Prefab/Scene/Material/AnimatorController),
     // so Structure_*'s own tests can prove InspectAssetResult.Guid is populated on every branch, not
@@ -69,6 +71,23 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         File.WriteAllText(full, body);
         if (guid is not null) File.WriteAllText(full + ".meta", $"fileFormatVersion: 2\nguid: {guid}\n");
+    }
+
+    // DESIGN-07: a real (minimal) PNG, written binary-safe — File.WriteAllText above would corrupt
+    // the magic bytes through text encoding. 4x3, 8-bit, RGB (colour type 2).
+    static readonly byte[] MinimalPng =
+    [
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+        0, 0, 0, 13, (byte)'I', (byte)'H', (byte)'D', (byte)'R',
+        0, 0, 0, 4, 0, 0, 0, 3, 8, 2,
+    ];
+
+    void WriteBinaryAsset(string relative, byte[] bytes, string metaContents)
+    {
+        var full = Path.Combine(_projectRoot, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllBytes(full, bytes);
+        File.WriteAllText(full + ".meta", metaContents);
     }
 
     // E1 (Assemble): a straight m_Father parent chain `depth` Transforms long - fileId 1 is the
@@ -234,6 +253,30 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
         // ---- depth "structure": material, animator controller, plain asset ----
 
         Write("Assets/Textures/Rock.png", "fake texture bytes", TextureGuid);
+
+        // DESIGN-07: a texture WITH a real TextureImporter block and real PNG bytes, for
+        // inspect_asset's new "introspection" payload (Tier 1 + Tier 2 together).
+        WriteBinaryAsset("Assets/Textures/Icon.png", MinimalPng, $"""
+            fileFormatVersion: 2
+            guid: {IntrospectionTextureGuid}
+            TextureImporter:
+              mipmaps:
+                enableMipMap: 0
+                sRGBTexture: 1
+              isReadable: 0
+              streamingMipmaps: 0
+              maxTextureSize: 2048
+              textureType: 8
+            """);
+
+        // Same real .meta shape, but content that is NOT a readable image header at all - Tier 1
+        // must still succeed while Tier 2 degrades to a named reason, never nulls-with-no-explanation.
+        WriteBinaryAsset("Assets/Textures/Corrupt.png", "not actually a png"u8.ToArray(), $"""
+            fileFormatVersion: 2
+            guid: {UnreadableHeaderTextureGuid}
+            TextureImporter:
+              textureType: 0
+            """);
         Write("Assets/M_Enemy.mat", Header + $$"""
             --- !u!21 &2100000
             Material:
@@ -602,6 +645,70 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
         var condition = Assert.Single(transition.GetProperty("conditions").EnumerateArray());
         Assert.Equal("Speed", condition.GetProperty("parameter").GetString());
         Assert.Equal("0.1", condition.GetProperty("threshold").GetString());
+
+        // DESIGN-05 Wave 1 Tier 2: this fixture's single "Base Layer" owns both states, has no
+        // declared parameters, and neither state carries a motion (m_Motion: {fileID: 0}).
+        Assert.Equal("Idle", idle.GetProperty("name").GetString());
+        Assert.Equal("Base Layer", idle.GetProperty("layer").GetString());
+        Assert.False(idle.TryGetProperty("motion", out _), "a state with no motion assigned must omit it, not report null");
+        var singleLayer = Assert.Single(controller.GetProperty("layers").EnumerateArray());
+        Assert.Equal("Base Layer", singleLayer.GetProperty("name").GetString());
+        Assert.Empty(controller.GetProperty("parameters").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task Structure_AnimatorController_Tier2ReportsParametersAndBlendTreeMotion()
+    {
+        Write("Assets/BlendTest.controller", Header + """
+            --- !u!91 &9100000
+            AnimatorController:
+              m_Name: BlendTest
+              serializedVersion: 5
+              m_AnimatorParameters:
+              - m_Name: Speed
+                m_Type: 1
+                m_DefaultFloat: 0
+              m_AnimatorLayers:
+              - serializedVersion: 5
+                m_Name: Base Layer
+                m_StateMachine: {fileID: 100}
+                m_Controller: {fileID: 9100000}
+            --- !u!1107 &100
+            AnimatorStateMachine:
+              serializedVersion: 6
+              m_Name: Base Layer
+              m_ChildStates:
+              - serializedVersion: 1
+                m_State: {fileID: 200}
+                m_Position: {x: 0, y: 0, z: 0}
+              m_ChildStateMachines: []
+              m_AnyStateTransitions: []
+              m_DefaultState: {fileID: 200}
+            --- !u!1102 &200
+            AnimatorState:
+              serializedVersion: 6
+              m_Name: Locomotion
+              m_Transitions: []
+              m_Motion: {fileID: 300}
+            --- !u!206 &300
+            BlendTree:
+              m_Name: Locomotion Tree
+            """);
+
+        var structured = Structured(await McpTestClient.CallTool(_factory, "inspect_asset",
+            new { path = "Assets/BlendTest.controller" }));
+
+        var controller = structured.GetProperty("animatorController");
+        var parameter = Assert.Single(controller.GetProperty("parameters").EnumerateArray());
+        Assert.Equal("Speed", parameter.GetProperty("name").GetString());
+        Assert.Equal("1", parameter.GetProperty("type").GetString());
+        Assert.Equal("0", parameter.GetProperty("defaultValue").GetString());
+
+        var state = Assert.Single(controller.GetProperty("states").EnumerateArray());
+        var motion = state.GetProperty("motion");
+        Assert.True(motion.GetProperty("isBlendTree").GetBoolean());
+        Assert.Equal("Locomotion Tree", motion.GetProperty("subAssetName").GetString());
+        Assert.False(motion.TryGetProperty("path", out _), "a same-file sub-document motion has no resolvable asset path, so it must be omitted, not null");
     }
 
     [Fact]
@@ -614,6 +721,58 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
         var info = structured.GetProperty("assetInfo");
         Assert.Equal("Script", info.GetProperty("type").GetString());
         Assert.Equal(HealthScriptGuid, info.GetProperty("guid").GetString());
+    }
+
+    [Fact]
+    public async Task Structure_TextureAsset_ReturnsDecodedIntrospectionAndMeasuredDimensions()
+    {
+        var structured = Structured(await McpTestClient.CallTool(_factory, "inspect_asset",
+            new { path = "Assets/Textures/Icon.png" }));
+
+        Assert.Equal("Asset", structured.GetProperty("assetInfo").GetProperty("type").GetString());
+
+        var introspection = structured.GetProperty("introspection");
+        Assert.Equal("TextureImporter", introspection.GetProperty("importer").GetString());
+        Assert.Equal("Sprite", introspection.GetProperty("textureType").GetString()); // textureType: 8
+        Assert.Equal(2048, introspection.GetProperty("maxTextureSize").GetInt32());
+        Assert.True(introspection.GetProperty("sRGB").GetBoolean());
+        Assert.False(introspection.GetProperty("generateMipMaps").GetBoolean());
+
+        // Tier 2 - measured from the real (minimal, hand-built) PNG bytes, not from the .meta.
+        Assert.Equal("PNG", introspection.GetProperty("sourceFormat").GetString());
+        Assert.Equal(4, introspection.GetProperty("sourceWidth").GetInt32());
+        Assert.Equal(3, introspection.GetProperty("sourceHeight").GetInt32());
+        Assert.False(introspection.TryGetProperty("sourceUnavailableReason", out var reason) && reason.ValueKind != JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task Structure_TextureWithAnUnreadableHeader_ReportsANamedReasonNeverNulls()
+    {
+        var structured = Structured(await McpTestClient.CallTool(_factory, "inspect_asset",
+            new { path = "Assets/Textures/Corrupt.png" }));
+
+        var introspection = structured.GetProperty("introspection");
+
+        // Tier 1 (from the real, readable .meta) still succeeds...
+        Assert.Equal("TextureImporter", introspection.GetProperty("importer").GetString());
+        Assert.Equal("Default", introspection.GetProperty("textureType").GetString());
+
+        // ...while Tier 2 degrades to a named reason, not a silent null.
+        Assert.False(introspection.TryGetProperty("sourceWidth", out var width) && width.ValueKind != JsonValueKind.Null);
+        var sourceReason = introspection.GetProperty("sourceUnavailableReason").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(sourceReason));
+    }
+
+    [Fact]
+    public async Task Structure_ScriptAsset_HasNoIntrospectionPayload()
+    {
+        // ImportedAssetKind.KindForPath(".cs") is null - a script is not a binary/imported asset,
+        // so "introspection" must be entirely absent, not present-and-null.
+        var structured = Structured(await McpTestClient.CallTool(_factory, "inspect_asset",
+            new { path = "Assets/Scripts/Health.cs" }));
+
+        Assert.False(structured.TryGetProperty("introspection", out var introspection)
+            && introspection.ValueKind != JsonValueKind.Null);
     }
 
     [Fact]

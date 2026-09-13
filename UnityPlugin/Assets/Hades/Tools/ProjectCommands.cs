@@ -890,15 +890,41 @@ namespace Hades.Tools
     /// thread. A plain, lock-protected static ring buffer is the only safe choice for a callback
     /// that can run anywhere. The trade-off: a domain reload (e.g. from project_recompile_scripts,
     /// or a project_run_tests run completing) clears this buffer's history along with every other
-    /// managed static in this assembly. Recovering that history would need an explicit
-    /// main-thread-only flush - mirroring the old package's own SessionState-backed
-    /// ConsoleLogBuffer, which deferred every SessionState write to EditorApplication.update for
-    /// exactly this reason - not implemented here, since it was not asked for and the added
-    /// complexity (JSON round-tripping with zero third-party dependencies) is real.
+    /// managed static in this assembly.
+    ///
+    /// <para><b>DESIGN-01 §8.2's fix: flush/restore across the reload, via a FILE, not
+    /// SessionState.</b> The objection above is now void - the plugin has shipped a zero-dependency
+    /// JSON reader/writer since it was written (<see cref="MiniJson.TryParse(string,out JsonValue,out string)"/>/
+    /// <see cref="MiniJson.Write"/>), so the round-tripping this doc comment used to decline is three
+    /// lines each way. Still a file rather than SessionState: SessionState's behaviour with a
+    /// 200-entry payload including stack traces is unverified (unlike <see cref="TestRunResultStore"/>'s
+    /// own two short strings), and <c>Application.persistentDataPath</c> is the precedent that class
+    /// already sets. <see cref="FlushBeforeReload"/> hooks
+    /// <c>AssemblyReloadEvents.beforeAssemblyReload</c> - VERIFIED by probe to fire on the ENTER
+    /// reload (DESIGN-01 §14 item 4) - and <see cref="Install"/> restores it, oldest-first, before
+    /// resubscribing to fresh log messages, THEN DELETES THE FILE.
+    ///
+    /// <b>The delete is a correctness requirement, not tidiness (consume-on-read).</b>
+    /// <c>persistentDataPath</c> survives an Editor restart; this buffer's own contract - "every
+    /// message since the plugin loaded" - does not, and SessionState (this plugin's other
+    /// cross-reload store) is explicitly cleared on restart. Without the delete, a flush written the
+    /// night before would resurface as if logged moments ago the next time Unity opens - the same
+    /// species of silent, confidently-wrong failure as the mutation guard's discarded-scene story,
+    /// made unrepresentable the same way: by never letting the file outlive more than one reload.
+    /// Unconditional, not gated to a play session - this also closes a second, unrelated pre-existing
+    /// gap for free (edit-mode logs otherwise lost across <c>project_recompile_scripts</c>' own
+    /// reload).
+    /// </para>
     /// </summary>
     public static class ConsoleLogBuffer
     {
         public const int Capacity = 200;
+
+        /// <summary>Where <see cref="FlushBeforeReload"/> writes and <see cref="Install"/> restores
+        /// (then deletes) - a public swappable field, same convention as
+        /// <see cref="TestRunResultStore.ResultsPath"/>, so tests point it at a scratch file rather
+        /// than a real Editor's own persistentDataPath.</summary>
+        public static string FlushPath = Path.Combine(Application.persistentDataPath, "HadesConsoleLog.json");
 
         static readonly object Gate = new object();
         static readonly (LogType Type, string Message, string StackTrace)[] Entries = new (LogType, string, string)[Capacity];
@@ -906,15 +932,96 @@ namespace Hades.Tools
         static int _count;
         static bool _installed;
 
-        /// <summary>Subscribes to the real log pipeline. Idempotent - see this class's own doc
-        /// comment for why a guard is needed at all despite every call originating from a fresh
-        /// boot.</summary>
+        /// <summary>Subscribes to the real log pipeline (and, DESIGN-01 §8.2, the reload-flush
+        /// event), after first restoring - and deleting - any flush file left by the reload that just
+        /// happened. Idempotent - see this class's own doc comment for why a guard is needed at all
+        /// despite every call originating from a fresh boot.</summary>
         public static void Install()
         {
             if (_installed) return;
             _installed = true;
+
+            RestoreFromReloadFlushIfPresent(); // BEFORE subscribing, so restored entries land oldest-first
             Application.logMessageReceivedThreaded += OnLogReceived;
+            AssemblyReloadEvents.beforeAssemblyReload += FlushBeforeReload;
         }
+
+        /// <summary>Test-only: undoes <see cref="Install"/>'s idempotency guard (and its
+        /// subscriptions), so a test can exercise the restore-then-subscribe sequence more than once
+        /// within one batchmode run. Production never needs this - a real domain reload wipes
+        /// <c>_installed</c> for free, the same way it wipes every other plain static in this
+        /// assembly.</summary>
+        public static void ResetForTests()
+        {
+            if (_installed)
+            {
+                Application.logMessageReceivedThreaded -= OnLogReceived;
+                AssemblyReloadEvents.beforeAssemblyReload -= FlushBeforeReload;
+            }
+            _installed = false;
+        }
+
+        /// <summary>Main-thread only (AssemblyReloadEvents.beforeAssemblyReload always fires there) -
+        /// snapshots the ring under the same lock <see cref="GetRecent"/> uses and writes it to
+        /// <see cref="FlushPath"/>. Swallows any failure (a locked file, a permissions error): a lost
+        /// flush costs exactly the pre-existing gap this fix closes, never a crash mid-reload - this
+        /// class never throws into its callers today and must not start.</summary>
+        public static void FlushBeforeReload()
+        {
+            var snapshot = SnapshotAll();
+            if (snapshot.Length == 0) return; // nothing worth flushing
+
+            try
+            {
+                var array = JsonValue.NewArray();
+                foreach (var entry in snapshot)
+                {
+                    array.Add(JsonValue.NewObject()
+                        .SetProperty("type", JsonValue.String(entry.Type.ToString()))
+                        .SetProperty("message", JsonValue.String(entry.Message))
+                        .SetProperty("stackTrace", JsonValue.String(entry.StackTrace)));
+                }
+
+                File.WriteAllText(FlushPath, MiniJson.Write(array));
+            }
+            catch
+            {
+                // Swallow - see this method's own doc comment.
+            }
+        }
+
+        static void RestoreFromReloadFlushIfPresent()
+        {
+            try
+            {
+                if (!File.Exists(FlushPath)) return;
+
+                if (MiniJson.TryParse(File.ReadAllText(FlushPath), out var array, out _)
+                    && array != null && array.Kind == JsonValueKind.Array)
+                {
+                    foreach (var entry in array.Items) // written oldest-first; Capture replays that order
+                        Capture(ParseLogType(entry), StringProp(entry, "message"), StringProp(entry, "stackTrace"));
+                }
+            }
+            catch
+            {
+                // Swallow - a corrupt/unreadable flush file must not stop boot.
+            }
+            finally
+            {
+                // CONSUME ON READ - unconditional, even on a parse failure. See this class's own
+                // doc comment for why leaving the file behind risks resurrecting a PRIOR Editor
+                // session's logs.
+                try { if (File.Exists(FlushPath)) File.Delete(FlushPath); }
+                catch { /* swallow - see this method's own doc comment */ }
+            }
+        }
+
+        static LogType ParseLogType(JsonValue entry) =>
+            Enum.TryParse<LogType>(StringProp(entry, "type"), out var type) ? type : LogType.Log;
+
+        static string StringProp(JsonValue obj, string key) =>
+            obj != null && obj.TryGetProperty(key, out var v) && v != null && v.Kind == JsonValueKind.String ? v.AsString() : "";
 
         static void OnLogReceived(string message, string stackTrace, LogType type) => Capture(type, message, stackTrace);
 
@@ -947,25 +1054,30 @@ namespace Hades.Tools
         /// however many happen to survive a raw positional slice taken first.</summary>
         public static ((LogType Type, string Message, string StackTrace)[] Selected, int TotalBuffered, int TotalMatching) GetRecent(int count, LogType? filter)
         {
-            (LogType Type, string Message, string StackTrace)[] snapshot;
-            int totalBuffered;
-
-            lock (Gate)
-            {
-                totalBuffered = _count;
-                snapshot = new (LogType, string, string)[_count];
-                for (var i = 0; i < _count; i++)
-                {
-                    var idx = (_head - _count + i + Capacity) % Capacity;
-                    snapshot[i] = Entries[idx];
-                }
-            }
+            var snapshot = SnapshotAll();
+            var totalBuffered = snapshot.Length;
 
             var matching = filter.HasValue ? Array.FindAll(snapshot, e => e.Type == filter.Value) : snapshot;
             var take = Math.Min(count, matching.Length);
             var result = new (LogType, string, string)[take];
             Array.Copy(matching, matching.Length - take, result, 0, take);
             return (result, totalBuffered, matching.Length);
+        }
+
+        /// <summary>Every currently-buffered entry, oldest-first - the shared snapshot-under-lock
+        /// logic <see cref="GetRecent"/> and <see cref="FlushBeforeReload"/> both need.</summary>
+        static (LogType Type, string Message, string StackTrace)[] SnapshotAll()
+        {
+            lock (Gate)
+            {
+                var snapshot = new (LogType, string, string)[_count];
+                for (var i = 0; i < _count; i++)
+                {
+                    var idx = (_head - _count + i + Capacity) % Capacity;
+                    snapshot[i] = Entries[idx];
+                }
+                return snapshot;
+            }
         }
 
         /// <summary>Test-only reset. Public for the same InternalsVisibleTo reason every other

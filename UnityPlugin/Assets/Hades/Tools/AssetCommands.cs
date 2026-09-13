@@ -78,6 +78,99 @@ namespace Hades.Tools
                 .SetProperty("destination", JsonValue.String(destPath));
         }
 
+        // --------------------------------------------------------------------------- asset.delete
+
+        /// <summary>Seam over <see cref="AssetDatabase.MoveAssetToTrash"/> - same swappable-static-field
+        /// convention as ProjectCommands.RefreshAssets/TriggerRecompile (see that class's own doc
+        /// comment): a real Editor essentially never returns false from MoveAssetToTrash on demand (it
+        /// takes a locked file, a VCS hold, or an exotic platform), so DESIGN-04 §5.3.1's "refuse
+        /// loudly on false" branch needs this indirection to be provoked deterministically in a test,
+        /// rather than being accepted as untestable. Restore to <see cref="RealMoveAssetToTrash"/> in
+        /// TearDown.</summary>
+        public static Func<string, bool> MoveAssetToTrash = RealMoveAssetToTrash;
+
+        static bool RealMoveAssetToTrash(string path) => AssetDatabase.MoveAssetToTrash(path);
+
+        /// <summary>DESIGN-04 §5.3: <see cref="AssetDatabase.MoveAssetToTrash"/>, never
+        /// <see cref="AssetDatabase.DeleteAsset"/> - the whole safety design. On macOS/Windows the file
+        /// lands in the OS trash/recycle bin, restorable without Hades, Unity, or version control;
+        /// Linux/headless recoverability is unverified (DESIGN-04 §9 item 5 / roadmap H4 - probe P18
+        /// confirmed only that batchmode-macOS MoveAssetToTrash returns true and removes the asset from
+        /// the project, not that the file is Finder-restorable, which a sandboxed probe could not check).
+        /// <c>DeleteAsset</c> is unrecoverable and there is no scenario here where that is the better
+        /// call. Folders are refused outright (unbounded blast radius; delete the folder's contents
+        /// and let Unity/git not care about the empty folder that remains). No Undo: an asset delete
+        /// has never had Unity Undo coverage in this plugin (see MoveAsset's own doc comment for why
+        /// a path/file-existence fact is not something <see cref="Undo.RecordObject"/> can snapshot),
+        /// and moving to trash is the recoverability story instead.
+        ///
+        /// <para><b>The <c>false</c> path, handled loudly.</b> <c>MoveAssetToTrash</c> returns
+        /// <c>bool</c>; a locked file, a VCS integration holding the asset, or an exotic platform can
+        /// all make it return <c>false</c> having moved nothing. Treating that as success would report
+        /// a deletion that never happened - the worst available outcome for a destructive op - so a
+        /// <c>false</c> return throws here, landing in the batch's own 'failed' entry (see
+        /// AssetManageCommands' own per-op try/catch), never in 'applied'.</para></summary>
+        internal static JsonValue DeleteAsset(JsonValue @params)
+        {
+            var path = JsonParams.RequireString(@params, "path", "asset.delete");
+            path = AssetPathGuard.RequireWellFormedProjectPath(path, "asset.delete");
+
+            if (AssetDatabase.IsValidFolder(path))
+            {
+                throw new ArgumentException(
+                    "Cannot delete '" + path + "' - it is a folder. asset_manage's delete op only removes individual "
+                    + "assets; delete its contents instead (an empty folder left behind is not tracked by git and "
+                    + "is not meaningfully preserved by Unity).");
+            }
+
+            if (AssetDatabase.GetMainAssetTypeAtPath(path) == null)
+                throw new ArgumentException("Asset not found at path: '" + path + "'.");
+
+            if (!MoveAssetToTrash(path))
+            {
+                throw new ArgumentException(
+                    "Failed to move '" + path + "' to the trash - AssetDatabase.MoveAssetToTrash returned false. "
+                    + "The file may be locked, held by a version-control integration, or otherwise unwritable. "
+                    + "Nothing was deleted.");
+            }
+
+            return JsonValue.NewObject()
+                .SetProperty("path", JsonValue.String(path))
+                .SetProperty("movedToTrash", JsonValue.Bool(true));
+        }
+
+        // ------------------------------------------------------------------------ asset.duplicate
+
+        /// <summary>Content-agnostic copy, unlike material.duplicate/scene.duplicate (which each
+        /// type-check their own source first) - see DESIGN-04 §2.1/§2.2's create-lives-with-the-model,
+        /// lifecycle-lives-with-the-path rule: a copy neither knows nor cares what the file is.
+        /// <see cref="Undo.RegisterCreatedObjectUndo"/> on the copy - same primitive, same
+        /// "object destroyed on undo, file remains on disk" caveat as scriptableObject.apply's
+        /// create (DESIGN-04 §5.2/§6.2's residual [VERIFY]: CopyAsset's own .meta timing was not the
+        /// probe's subject, so this is not assumed to share create's clean graph-coherence story).</summary>
+        internal static JsonValue DuplicateAsset(JsonValue @params)
+        {
+            var sourcePath = JsonParams.RequireString(@params, "sourcePath", "asset.duplicate");
+            var destPath = JsonParams.RequireString(@params, "destPath", "asset.duplicate");
+            destPath = AssetPathGuard.RequireNewAssetPath(destPath, "asset.duplicate", "Asset", "asset_manage's move/delete operations");
+
+            if (AssetDatabase.GetMainAssetTypeAtPath(sourcePath) == null)
+                throw new ArgumentException("Source asset not found at path: '" + sourcePath + "'.");
+
+            AssetFolders.EnsureExists(AssetFolders.DirectoryName(destPath));
+
+            if (!AssetDatabase.CopyAsset(sourcePath, destPath))
+                throw new ArgumentException("Failed to copy asset from '" + sourcePath + "' to '" + destPath + "'.");
+
+            var duplicated = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(destPath);
+            if (duplicated != null) Undo.RegisterCreatedObjectUndo(duplicated, "Hades Duplicate Asset");
+
+            return JsonValue.NewObject()
+                .SetProperty("source", JsonValue.String(sourcePath))
+                .SetProperty("destination", JsonValue.String(destPath))
+                .SetProperty("guid", JsonValue.String(AssetDatabase.AssetPathToGUID(destPath)));
+        }
+
         // -------------------------------------------------------------------------- asset.import
 
         /// <summary>(Re)imports a file/folder that already exists on disk under Assets/ - this is
