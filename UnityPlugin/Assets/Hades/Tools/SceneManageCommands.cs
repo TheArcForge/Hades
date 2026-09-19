@@ -29,16 +29,19 @@ namespace Hades.Tools
     /// DoSetClipImportSettings already established). One Lock, one Unlock, regardless of how many
     /// operations the batch contains or which of the four ops each one is.</para>
     ///
-    /// <para><b>"create" keeps NOT switching the active scene - unchanged, reused verbatim.</b> This
-    /// op calls <see cref="SceneManagementCommands.CreateScene"/> directly, completely unmodified:
-    /// that method already builds the new scene additively and closes it again
-    /// (<c>NewSceneMode.Additive</c>, never <c>NewSceneMode.Single</c>) precisely so creating a new
-    /// scene ASSET never discards whatever the caller currently has open (and possibly unsaved) in
-    /// the Editor - Plan 9's own E2E found the Single-mode version of this bug the hard way, silently
-    /// discarding a caller's unsaved scene with no prompt in a scripted context. Routing scene_manage's
-    /// "create" op through the SAME method (rather than a parallel reimplementation) is what makes
-    /// this property hold by construction rather than by discipline - see Hades.Server.Mcp.
-    /// SceneManageTool's own doc comment, which says this plainly in its tool description too.</para>
+    /// <para><b>"create" now OPENS the new scene as the active scene (F5/F6) - reused verbatim from
+    /// <see cref="SceneManagementCommands.CreateScene"/>.</b> An earlier revision built the new scene
+    /// additively and closed it again precisely so creating a scene ASSET never discarded whatever
+    /// the caller currently had open (Plan 9's own E2E found the Single-mode version of this bug the
+    /// hard way). That traded one defect for another, also live-observed: a caller's very next
+    /// scene_apply/scene_save call landed on whatever scene happened to be active BEFORE 'create'
+    /// ran, not the one just created - test objects went straight into a real, unrelated scene on
+    /// disk. <see cref="SceneManagementCommands.RequireNoUnsavedChanges"/> is what protects a
+    /// caller's unsaved work now: an explicit refusal naming the dirty scene(s), overridable with
+    /// 'discardUnsaved: true'. Routing scene_manage's "create" op through the SAME method (rather
+    /// than a parallel reimplementation) is what makes this property hold by construction rather
+    /// than by discipline - see Hades.Server.Mcp.SceneManageTool's own doc comment, which says this
+    /// plainly in its tool description too.</para>
     ///
     /// <para><b>Undo: self-managed, not a CommandTable.MutatingMethods entry - same reasoning as
     /// PrefabApplyCommands/ProjectSettingsApplyCommands/AssetManageCommands.</b> Because this batch
@@ -133,9 +136,9 @@ namespace Hades.Tools
                 case "save":
                     return SceneManagementCommands.SaveScene(gate, CopyFields(op, "path"));
                 case "create":
-                    return SceneManagementCommands.CreateScene(gate, CopyFields(op, "path", "template"));
+                    return SceneManagementCommands.CreateScene(gate, CopyFields(op, "path", "template", "discardUnsaved"));
                 case "open":
-                    return ProjectCommands.DoOpenScene(CopyFields(op, "path", "additive"));
+                    return ProjectCommands.DoOpenScene(CopyFields(op, "path", "additive", "discardUnsaved"));
                 case "duplicate":
                     return SceneManagementCommands.DuplicateScene(gate, CopyFields(op, "sourcePath", "destPath"));
                 default:

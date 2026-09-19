@@ -14,15 +14,16 @@ namespace Hades.Tests.Editor
     /// DESIGN-08 (docs/design/DESIGN-08-long-running-operations.md) §14's plugin-side Tier-1/Tier-2
     /// conformance tests, written ONCE over every shipped long-running operation rather than
     /// duplicated per design - Phase 3 integration (ROADMAP.md Phase 3 item 2). Per-lane test files
-    /// (PlayModeCommandsTests.cs/SceneBakeCommandsTests.cs/BuildCommandsTests.cs) already prove each
+    /// (PlayModeCommandsTests.cs/SceneBakeCommandsTests.cs) already prove each
     /// operation's OWN state machine in detail; this file does not re-derive any of that. It covers:
     ///
     /// - Tier 1 O4 (fail closed: never synthesize a terminal state from absence of evidence) -
-    ///   table-driven over build and bake, the two operations whose reconciliation logic lives on
-    ///   this side of the process boundary. play_mode is not part of this table - its 'state'
-    ///   vocabulary (editMode/playing/paused/detached) has no 'complete' concept to synthesize in
-    ///   the first place. project_run_tests (the test run) is deliberately excluded too - see this
-    ///   file's own <see cref="O4_TestRun_CannotBeWrittenHonestly_OpenItem"/>.
+    ///   over bake, the operation whose reconciliation logic lives on this side of the process
+    ///   boundary (project_build's own equivalent row was removed along with the tool - devs don't
+    ///   use in-Editor builds). play_mode is not part of this table - its 'state' vocabulary
+    ///   (editMode/playing/paused/detached) has no 'complete' concept to synthesize in the first
+    ///   place. project_run_tests (the test run) is deliberately excluded too - see this file's own
+    ///   <see cref="O4_TestRun_CannotBeWrittenHonestly_OpenItem"/>.
     /// - Tier 1 O5 (stop/cancel/exit/status must not refuse under any precondition start refuses
     ///   under) - the two current instances DESIGN-08 §14 names: play.exit and scene.bake's
     ///   cancel/status.
@@ -31,12 +32,6 @@ namespace Hades.Tests.Editor
     ///   ACTION-KEYED command's every (method, action) pair must have an explicit decision, derived
     ///   from the command's own declared action list (via reflection) so a future action added
     ///   without a decision fails immediately, rather than from a hand-copied list that could drift.
-    /// - The <c>Hades.Bake.*</c> writer/reader agreement check ROADMAP.md's Phase 3 item 2 adds:
-    ///   write a job through Lane G's own writer (<see cref="BakeJobStore.MarkStarted"/>, driven by
-    ///   the shared <see cref="BakeKeys"/> constants) and assert Lane C's reader
-    ///   (<c>BuildCommands.HadesOwnedBakeInProgressRefusal</c>, reached via 'project.build_start')
-    ///   sees the SAME job - unlike the existing per-lane build tests, which hand-stamp
-    ///   SessionState with string literals and so would not catch a rename on either side.
     /// </summary>
     [TestFixture]
     public sealed class LongRunningOperationConformanceTests
@@ -55,8 +50,6 @@ namespace Hades.Tests.Editor
         static readonly Func<string[], (RunningState, string)> RealNavMeshResolve = BakeTargetSeams.NavMeshResolve;
         static readonly Action<string[]> RealNavMeshCancelAction = BakeTargetSeams.NavMeshCancelAction;
         static readonly Func<bool> RealNavMeshTypesAreResolvable = BakeTargetSeams.NavMeshTypesAreResolvable;
-
-        static readonly Func<BuildRequest, BuildOutcome> RealRunBuild = BuildCommands.RunBuild;
 
         bool _lightingRunning;
         bool _occlusionRunning;
@@ -85,14 +78,6 @@ namespace Hades.Tests.Editor
             BakeTargetSeams.NavMeshResolve = _ => (RunningState.NotRunning, null);
             BakeTargetSeams.NavMeshCancelAction = _ => { };
 
-            DeleteBuildStatusFileIfPresent();
-            BuildCommands.RunBuild = _ => throw new InvalidOperationException(
-                "A test forgot to substitute BuildCommands.RunBuild before dispatching 'project.build_start'.");
-            BuildCommands.IsCompiling = () => false;
-            BuildCommands.ScriptCompilationFailed = () => false;
-            BuildCommands.IsPlayingOrWillChangePlaymode = () => false;
-            BuildSession.BuildInFlight = false;
-
             PlayModeSession.Clear();
             ResetPlayModeApiSeams();
         }
@@ -115,20 +100,8 @@ namespace Hades.Tests.Editor
             BakeJobStore.Reset();
             BakeWatchdog.ResetForTests();
 
-            BuildCommands.RunBuild = RealRunBuild;
-            BuildCommands.IsCompiling = () => EditorApplication.isCompiling;
-            BuildCommands.ScriptCompilationFailed = () => EditorUtility.scriptCompilationFailed;
-            BuildCommands.IsPlayingOrWillChangePlaymode = () => EditorApplication.isPlayingOrWillChangePlaymode;
-            BuildSession.BuildInFlight = false;
-            DeleteBuildStatusFileIfPresent();
-
             PlayModeSession.Clear();
             ResetPlayModeApiSeams();
-        }
-
-        static void DeleteBuildStatusFileIfPresent()
-        {
-            if (System.IO.File.Exists(BuildStatusStore.StatusPath)) System.IO.File.Delete(BuildStatusStore.StatusPath);
         }
 
         /// <summary>Same reset shape PlayModeCommandsTests.ResetPlayModeApiSeams uses - every
@@ -180,39 +153,7 @@ namespace Hades.Tests.Editor
         static string BakeStatusOf(JsonValue result) =>
             result.TryGetProperty("status", out var v) && v.Kind == JsonValueKind.String ? v.AsString() : null;
 
-        static JsonValue DispatchBuildStart(BuildTarget target) =>
-            Dispatch("project.build_start", JsonValue.NewObject().SetProperty("target", JsonValue.String(target.ToString())));
-
         // ================================================================== Tier 1: O4
-
-        [Test]
-        public void O4_Build_RecordExistsOracleNotInFlightNoTerminalWritten_ReconcilesToAbandoned_NeverComplete()
-        {
-            // DESIGN-08 O4/§14: "record exists, the oracle says not-running, and no terminal state
-            // was written" - for build, the record is the status file (state:'running'), the oracle
-            // is BuildSession.BuildInFlight (DESIGN-08 §12's intra-session liveness check), and
-            // 'no terminal state was written' is exactly what makes this the abandonment case rather
-            // than a genuine completion. BuildWatchdog.Tick is the reconciliation seam - see
-            // BuildCommandsTests.Watchdog_RunningState_MatchingNonce_ButNotBuildInFlight_ReconcilesToAbandoned
-            // for the equivalent per-lane proof; this is the SAME scenario, asserted here as one row
-            // of the cross-operation table DESIGN-08 §14 calls for.
-            var doc = new BuildStatusStore.Document
-            {
-                Schema = BuildStatusStore.CurrentSchema,
-                BuildId = "o4-build-1",
-                BootNonce = BuildSession.CurrentBootNonce, // matching - isolates the intra-session case from the boot-nonce one
-                State = BuildStatusStore.StateRunning,
-                Target = "StandaloneOSX",
-            };
-            BuildStatusStore.Write(doc);
-            BuildSession.BuildInFlight = false; // the oracle: "not in flight"
-
-            BuildWatchdog.Tick();
-
-            var result = BuildStatusStore.TryRead();
-            Assert.AreNotEqual(BuildStatusStore.StateComplete, result.State, "O4: must never synthesize 'complete' from the absence of evidence");
-            Assert.AreEqual(BuildStatusStore.StateAbandoned, result.State);
-        }
 
         [Test]
         public void O4_Bake_RecordExistsOracleNotRunningNoTerminalWritten_ReconcilesToIndeterminate_NeverComplete()
@@ -373,42 +314,6 @@ namespace Hades.Tests.Editor
                 default:
                     throw new InvalidOperationException($"No DeclaredActionsFor mapping for '{method}' - add one (see this method's own doc comment).");
             }
-        }
-
-        // ================================================================== Hades.Bake.* writer/reader agreement
-
-        [Test]
-        public void BakeKeysAgreement_LaneGsWriter_IsSeenByLaneCsReader()
-        {
-            // Writes a job through Lane G's REAL writer (BakeJobStore.MarkStarted, itself built
-            // entirely on the shared BakeKeys constants) rather than hand-stamping SessionState with
-            // string literals the way the existing per-lane BuildCommandsTests rows do (see
-            // BuildCommandsTests.Start_WithAHadesOwnedNonTerminalBakeAtTheCurrentEpoch_Refuses) - a
-            // rename on either side that a literal-stamped test cannot see is exactly the failure
-            // mode ROADMAP.md's §4 shared-surface row warns about, and exactly what BakeKeys exists
-            // to turn into a compile error instead. This test proves writer and reader still agree
-            // through the REAL data path, not a simulation of it.
-            BakeJobStore.MarkStarted("agree-1", "lighting", Array.Empty<string>(), DateTime.UtcNow, BakeReloadEpoch.Current);
-
-            var active = EditorUserBuildSettings.activeBuildTarget;
-            var ex = Assert.Throws<InvalidOperationException>(() => DispatchBuildStart(active));
-            StringAssert.Contains("agree-1", ex.Message);
-        }
-
-        [Test]
-        public void BakeKeysAgreement_AnAbsentKey_SurfacesAsCannotTell_NeverAsNoBake()
-        {
-            // Same real writer, then degrade it: erase exactly one required key by the SAME
-            // BakeKeys constant the writer used (never a literal), simulating "Lane G's shape
-            // changed under Lane C" without actually renaming anything. ROADMAP.md's own words:
-            // "an absent key must surface as 'cannot tell', never silently as 'no bake'."
-            BakeJobStore.MarkStarted("agree-2", "lighting", Array.Empty<string>(), DateTime.UtcNow, BakeReloadEpoch.Current);
-            SessionState.EraseString(BakeKeys.Terminal);
-
-            var active = EditorUserBuildSettings.activeBuildTarget;
-            var ex = Assert.Throws<InvalidOperationException>(() => DispatchBuildStart(active));
-            StringAssert.Contains("cannot tell", ex.Message);
-            StringAssert.DoesNotContain("agree-2", ex.Message); // "cannot tell" is its own message, distinct from the "in progress, job '...'" one
         }
     }
 }

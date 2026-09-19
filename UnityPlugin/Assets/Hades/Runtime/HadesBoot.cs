@@ -72,12 +72,6 @@ namespace Hades.Runtime
             // class doc comment for why this must re-run every domain reload, same as Gate below.
             Tools.PlayModeWatchdog.Install();
 
-            // DESIGN-03: subscribes to EditorApplication.update and runs one immediate
-            // reconciliation pass over Library/Hades/build-status.json (boot nonce + intra-session
-            // liveness) - see BuildWatchdog's own class doc comment for why this must re-run every
-            // domain reload, same reasoning as PlayModeWatchdog just above.
-            Tools.BuildWatchdog.Install();
-
             // DESIGN-06 (Lane G): the reload-epoch increment (§4.4's ownership token) - folded into
             // BakeWatchdog.Install's own idempotent-once-per-reload guard, alongside subscribing its
             // EditorApplication.update tick observer, so this is the ONE line ROADMAP.md §4's

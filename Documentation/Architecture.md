@@ -52,7 +52,7 @@ idea that survives is memory (`.arcforge/memory/`), which v2 imports on sight �
               │  Core/src/Hades.Server                │
               │  (.NET 10, headless)                  │
               │                                       │
-              │  MCP endpoint (37 tools)              │
+              │  MCP endpoint (36 tools)              │
               │  control API (bearer token)           │
               │  knowledge graph (SQLite)             │
               │  Roslyn + Unity-YAML indexers         │
@@ -454,9 +454,9 @@ that same habit. Stated plainly:
 
 ## 5. The tool surface
 
-Exactly **37** MCP tools — confirmed two independent ways: a `grep` over every
+Exactly **36** MCP tools — confirmed two independent ways: a `grep` over every
 `[McpServerTool(Name = "…")]` attribute in `Core/src/Hades.Server/Mcp/*.cs`, and a live
-`tools/list` call against the core actually running on this machine (port 7823), which returned 37
+`tools/list` call against the core actually running on this machine (port 7823), which returned 36
 tool names identical to the source-tree list.
 
 | Group | Tools |
@@ -466,12 +466,12 @@ tool names identical to the source-tree list.
 | Memory (Asphodel) | `get_memory_summary`, `recall_memory`, `propose_memory_update`, `validate_memory` |
 | Settings | `project_settings` |
 | Editor — batch authoring (mutating) | `scene_apply`, `prefab_apply`, `material_apply`, `animation_apply`, `asset_manage`, `scene_manage`, `project_settings_apply`, `scriptable_object_apply` |
-| Editor — live state & project-level | `inspector_inspect`, `project_recompile_scripts`, `project_run_tests`, `project_get_console_log`, `project_get_test_results`, `script_editing_session`, `hades_regression`, `play_mode`, `project_build`, `capture_view`, `scene_bake` |
+| Editor — live state & project-level | `inspector_inspect`, `project_recompile_scripts`, `project_run_tests`, `project_get_console_log`, `project_get_test_results`, `script_editing_session`, `hades_regression`, `play_mode`, `capture_view`, `scene_bake` |
 
-Twenty-one `[McpServerToolType]` classes register these 37 tools (`Program.cs`'s `.WithTools<T>()`
+Twenty `[McpServerToolType]` classes register these 36 tools (`Program.cs`'s `.WithTools<T>()`
 chain).
 
-**The consolidation.** These tools (32 after the consolidation, 37 today) replace what was, briefly, ~90 one-call-per-API-operation tools. A
+**The consolidation.** These tools (32 after the consolidation, 36 today) replace what was, briefly, ~90 one-call-per-API-operation tools. A
 live `tools/list` measured on 2026-08-03 recorded 90 tools at 123,511 bytes of serialized
 definitions — roughly 33,381 tokens, paid on every session before the first user message, and
 already larger than Claude Code's own ~25,000-token cap on a single tool *response*
@@ -504,7 +504,7 @@ consolidation… not done here," and its decision D8 says to "port the existing 
 `docs/backlog/tool-surface-consolidation.md` goes further and calls the 90-tool surface "a known
 divergence from Anthropic's published guidance, carried on purpose." Two days later, a plan
 (`docs/superpowers/plans/2026-08-03-tool-consolidation.md`) reversed that call and executed the
-consolidation in full. The code today — 37 tools, batch `apply` operations, camelCase op vocabularies
+consolidation in full. The code today — 36 tools, batch `apply` operations, camelCase op vocabularies
 — reflects the *plan*, not the specs' original sequencing decision. If you read the specs before
 the code, expect this mismatch.
 

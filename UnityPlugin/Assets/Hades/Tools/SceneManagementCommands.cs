@@ -59,11 +59,24 @@ namespace Hades.Tools
 
         // ------------------------------------------------------------------------------ scene.create
 
+        /// <summary>F5/F6 fix: 'create' now OPENS the new scene as the single active scene - the
+        /// SAME behaviour as scene_manage's own non-additive 'open' - rather than the old
+        /// additive-create-then-close, which left whatever was active before this call untouched.
+        /// That old choice was itself a fix for a real bug (Plan 9's own E2E: NewSceneMode.Single
+        /// used to silently discard a caller's unsaved scene with no prompt), but it traded one
+        /// defect for another: a caller's very next scene_apply/scene_save call landed on whatever
+        /// scene happened to be active BEFORE 'create' ran, not the one just created - live-observed
+        /// writing test objects straight into a real, unrelated scene on disk. <see
+        /// cref="RequireNoUnsavedChanges"/> is what now protects the caller's unsaved work instead:
+        /// an explicit refusal naming the dirty scene(s), not a silent "never switch" workaround.</summary>
         internal static JsonValue CreateScene(ReloadGate gate, JsonValue @params)
         {
             var path = JsonParams.RequireString(@params, "path", "scene.create");
             path = AssetPathGuard.RequireNewAssetPath(path, "scene.create", "Scene", "scene_manage's 'open' operation");
             var template = JsonParams.OptionalString(@params, "template");
+            var discardUnsaved = JsonParams.OptionalBool(@params, "discardUnsaved", false);
+
+            RequireNoUnsavedChanges(discardUnsaved, "scene.create");
 
             AssetFolders.EnsureExists(AssetFolders.DirectoryName(path));
 
@@ -74,23 +87,55 @@ namespace Hades.Tools
 
                 if (!AssetDatabase.CopyAsset(template, path))
                     throw new ArgumentException("Failed to copy template scene to '" + path + "'.");
+
+                EditorSceneManager.OpenScene(path, OpenSceneMode.Single);
             }
             else
             {
-                // Additive + close, deliberately NOT NewSceneMode.Single: creating a new scene
-                // asset must never discard whatever the caller currently has open (and possibly
-                // unsaved) in the Editor - NewSceneMode.Single would silently replace it with no
-                // save-changes prompt in a scripted context. This tool's only observable effect is
-                // "a new .unity file now exists"; it does not change what is currently open.
-                var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Additive);
+                var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
                 EditorSceneManager.SaveScene(scene, path);
-                EditorSceneManager.CloseScene(scene, true);
             }
 
             var sceneAsset = AssetDatabase.LoadAssetAtPath<SceneAsset>(path);
             if (sceneAsset != null) Undo.RegisterCreatedObjectUndo(sceneAsset, "Hades Create Scene");
 
-            return JsonValue.NewObject().SetProperty("created", JsonValue.String(path));
+            return JsonValue.NewObject()
+                .SetProperty("created", JsonValue.String(path))
+                .SetProperty("activeScene", JsonValue.String(SceneManager.GetActiveScene().path));
+        }
+
+        // -------------------------------------------------------------------- F5/F6 shared dirty-scene guard
+
+        /// <summary>Refuses 'create' and non-additive 'open' when any currently LOADED scene has
+        /// unsaved changes, naming every dirty one - the same "refused, not ignored" convention this
+        /// codebase already uses for other silent-discard risks (OperationFieldValidator's own doc
+        /// comment). Both EditorSceneManager.NewScene(..., Single)/OpenScene(..., Single) discard
+        /// unsaved changes in the scene(s) they replace with NO PROMPT - the interactive File > Open
+        /// Scene/New Scene menu commands would ask; the scripting API never does (F6, live-observed:
+        /// a scratch scene's unsaved edits were silently gone after an unrelated 'open'). Every
+        /// LOADED scene is checked, not just the active one, since an additive multi-scene setup can
+        /// have several open at once and a non-additive open/create replaces ALL of them.
+        /// <paramref name="discardUnsaved"/> is the caller's explicit, one-off override - omitted or
+        /// false is the safe default. Additive 'open' never calls this: it unloads nothing, so there
+        /// is nothing here for it to discard.</summary>
+        internal static void RequireNoUnsavedChanges(bool discardUnsaved, string context)
+        {
+            if (discardUnsaved) return;
+
+            var dirty = new List<string>();
+            for (var i = 0; i < SceneManager.sceneCount; i++)
+            {
+                var loaded = SceneManager.GetSceneAt(i);
+                if (!loaded.isDirty) continue;
+                dirty.Add(string.IsNullOrEmpty(loaded.path) ? "'" + loaded.name + "' (never saved)" : loaded.path);
+            }
+
+            if (dirty.Count == 0) return;
+
+            throw new InvalidOperationException(
+                context + ": " + dirty.Count + " loaded scene(s) have unsaved changes (" + string.Join(", ", dirty)
+                + ") that this call would discard with no prompt. Call scene_manage's 'save' op first, or pass "
+                + "'discardUnsaved: true' on this operation to proceed and discard them.");
         }
 
         // --------------------------------------------------------------------------- scene.duplicate

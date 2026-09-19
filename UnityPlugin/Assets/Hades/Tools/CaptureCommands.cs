@@ -51,7 +51,7 @@ namespace Hades.Tools
         // ---- DESIGN-02 §11.2 seam ----
         //
         // Same swappable-public-static-field convention as ProjectCommands.TriggerRecompile/
-        // RefreshAssets and BuildCommands.IsCompiling (see either's own doc comment): a test that
+        // RefreshAssets (see either's own doc comment): a test that
         // reassigns this MUST restore RealHasGraphicsDevice in its own TearDown. Left at its real
         // value, the very first thing 'capture.view' does under THIS REPO'S OWN '-nographics'
         // EditMode runner (scripts/regression/run-plugin-editmode.sh) is refuse - DESIGN-02 §7.2's
@@ -193,7 +193,13 @@ namespace Hades.Tools
                     camera.backgroundColor = CaptureClearColor;
                 }
 
-                notes.AddRange(DetectOverlayCanvasNotes(camera.gameObject.scene));
+                // F1 fix: for 'scene' the render camera is the HideAndDontSave temp camera created
+                // just above - its own .scene is never valid (it belongs to no loaded scene at all),
+                // so GetRootGameObjects() on it throws "The scene is invalid". Overlay canvases are a
+                // property of the ACTIVE scene being framed, not of whatever camera happens to be
+                // doing the rendering - use it directly for every non-'game' view, matching
+                // ResolveSceneBounds' own fallback ("in the active scene" when no target is given).
+                notes.AddRange(DetectOverlayCanvasNotes(view == "game" ? camera.gameObject.scene : SceneManager.GetActiveScene()));
 
                 var cameraLabel = view == "game" ? GameObjectPaths.GetPath(camera.gameObject) : "(temporary capture camera)";
 
@@ -377,9 +383,17 @@ namespace Hades.Tools
         /// <summary>DESIGN-02 §7.3: a Screen Space - Overlay canvas composites into the backbuffer
         /// AFTER camera rendering, so it never appears in an off-screen camera render. Disclosed,
         /// never mutated (switching the canvas's render mode would dirty the scene from a
-        /// <c>ReadOnly = true</c> tool - rejected outright by the design).</summary>
+        /// <c>ReadOnly = true</c> tool - rejected outright by the design).
+        ///
+        /// <para>F1 fix: an invalid <paramref name="scene"/> (e.g. a caller somehow reaching this with
+        /// a HideAndDontSave temp object's own non-scene) reports no notes rather than throwing -
+        /// <see cref="Scene.GetRootGameObjects()"/> throws "The scene is invalid" for one, and a
+        /// missing disclosure note is a far smaller failure than the capture itself never
+        /// happening.</para></summary>
         public static List<string> DetectOverlayCanvasNotes(Scene scene)
         {
+            if (!scene.IsValid()) return new List<string>();
+
             var overlays = scene.GetRootGameObjects()
                 .SelectMany(r => r.GetComponentsInChildren<Canvas>(true))
                 .Where(c => c.enabled && c.renderMode == RenderMode.ScreenSpaceOverlay)

@@ -447,7 +447,6 @@ namespace Hades.Tests.Editor
                 CommandTable.GenericPlayModeRefusal("scene.apply"),
                 PlayModeCommands.RunTestsRefusedWhilePlayingMessage,
                 PlayModeCommands.BakeStartRefusedWhilePlayingMessage,
-                PlayModeCommands.BuildStartRefusedWhilePlayingMessage,
             };
 
             var toolShapedToken = new Regex(@"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b");
@@ -471,8 +470,9 @@ namespace Hades.Tests.Editor
         public void AllowedWhilePlaying_IsExactlyTheExpectedSet()
         {
             // DESIGN-01 §6.2's original 13, PLUS the roadmap's Lane B scope (DESIGN-08 §7.1/§7.3):
-            // three explicit refuse entries and three allow entries for commands other lanes have not
-            // built yet - 19 total. See CommandTable.AllowedWhilePlaying's own doc comment.
+            // two explicit refuse entries and two allow entries for commands other lanes have not
+            // built yet - 17 total (project_build removed its own two entries when the tool was
+            // retired). See CommandTable.AllowedWhilePlaying's own doc comment.
             var expectedAllowed = new[]
             {
                 "play.enter", "play.exit", "play.set_paused", "play.step", "play.status",
@@ -481,9 +481,9 @@ namespace Hades.Tests.Editor
                 "inspector.inspect", "inspector.select",
                 "project.get_console_log", "project.get_test_results",
                 "capture.view",
-                "scene.bake:status", "scene.bake:cancel", "project.build_targets",
+                "scene.bake:status", "scene.bake:cancel",
             };
-            var expectedExplicitlyRefused = new[] { "project.run_tests", "scene.bake:start", "project.build_start" };
+            var expectedExplicitlyRefused = new[] { "project.run_tests", "scene.bake:start" };
 
             var actual = CommandTable.AllowedWhilePlaying;
             Assert.AreEqual(expectedAllowed.Length + expectedExplicitlyRefused.Length, actual.Count);
@@ -701,6 +701,162 @@ namespace Hades.Tests.Editor
                 StringAssert.Contains("play_mode", ex.Message);
                 LiveMcpToolNames.AssertMessageNamesOnlyLiveTools(ex.Message);
             }
+        }
+
+        // ============================================================== F2: exit during 'entering' cancels cleanly
+
+        [Test]
+        public void Exit_DuringEntering_ClearsTheRecord_SoALaterPlayModeIsNeverMisattributed()
+        {
+            // Reproduces the live defect: 'exit' arrives while the scheduled enter has not landed
+            // yet (still phase 'requested', Unity still truthfully in edit mode). Reporting
+            // 'editMode' while leaving the record in place let a Play Mode session that started
+            // moments later be reported ownedByHades:true, even though the caller had already asked
+            // to cancel.
+            var now = DateTime.UtcNow;
+            EditorPlayModeApi.PlayClock = () => now;
+            EditorPlayModeApi.IsPlaying = () => false;
+            PlayModeSession.Stamp("s", PlayModeSession.PhaseRequested, now, 120);
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var result = CommandTable.Dispatch(gate, Request("play.exit", JsonValue.NewObject()));
+                Assert.AreEqual("editMode", StringProp(result, "state"));
+            }
+
+            Assert.IsFalse(PlayModeSession.HasSession, "exit during 'entering' must clear the pending record, not merely report editMode while leaving it in place");
+        }
+
+        [Test]
+        public void ScheduledEnter_SkipsEnteringPlayMode_WhenTheSessionWasClearedBeforeTheTickRan()
+        {
+            // The other half of the same fix: EditorPlayModeApi.ScheduleAfterThisTick has no way to
+            // un-schedule an already-pending EditorApplication.update subscription, so the scheduled
+            // action itself must re-check, when it finally runs, that the exact session it was
+            // scheduled for is still waiting to enter.
+            Action scheduled = null;
+            EditorPlayModeApi.ScheduleAfterThisTick = action => scheduled = action;
+            var enterCalls = 0;
+            EditorPlayModeApi.EnterPlayMode = () => enterCalls++;
+            EditorPlayModeApi.IsPlaying = () => false;
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                CommandTable.Dispatch(gate, Request("play.enter", JsonValue.NewObject()));
+            }
+            Assert.IsNotNull(scheduled, "play.enter must schedule the transition");
+
+            // Simulate 'exit' cancelling the pending enter before the scheduled tick runs.
+            PlayModeSession.Clear();
+            scheduled();
+
+            Assert.AreEqual(0, enterCalls, "a cancelled enter must never actually call EnterPlayMode()");
+        }
+
+        [Test]
+        public void ScheduledEnter_SkipsEnteringPlayMode_WhenADifferentSessionSupersededIt()
+        {
+            Action scheduled = null;
+            EditorPlayModeApi.ScheduleAfterThisTick = action => scheduled = action;
+            var enterCalls = 0;
+            EditorPlayModeApi.EnterPlayMode = () => enterCalls++;
+            EditorPlayModeApi.IsPlaying = () => false;
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                CommandTable.Dispatch(gate, Request("play.enter", JsonValue.NewObject()));
+            }
+            Assert.IsNotNull(scheduled);
+
+            // A second, unrelated session now occupies the record (e.g. a fresh enter after this
+            // one was already cleared and re-requested) - the FIRST tick's scheduled action must
+            // never enter Play Mode on the second session's behalf.
+            PlayModeSession.Clear();
+            PlayModeSession.Stamp("a-different-session", PlayModeSession.PhaseRequested, DateTime.UtcNow, 120);
+            scheduled();
+
+            Assert.AreEqual(0, enterCalls);
+        }
+
+        // ============================================================== F2: no renewal during a transitional phase
+
+        [Test]
+        public void Status_WhileEntering_DoesNotRenewTheDeadline()
+        {
+            var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            EditorPlayModeApi.PlayClock = () => now;
+            EditorPlayModeApi.IsPlaying = () => false;
+            PlayModeSession.Stamp("s", PlayModeSession.PhaseRequested, now, 100);
+            var deadlineBefore = PlayModeSession.DeadlineUtc.Value;
+
+            now = now.AddSeconds(50);
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                CommandTable.Dispatch(gate, Request("play.status", JsonValue.NewObject()));
+            }
+
+            Assert.AreEqual(deadlineBefore, PlayModeSession.DeadlineUtc.Value,
+                "polling status during 'entering' must not renew the deadline - otherwise a stuck transition never times out");
+        }
+
+        [Test]
+        public void Status_WhileExiting_DoesNotRenewTheDeadline()
+        {
+            var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            EditorPlayModeApi.PlayClock = () => now;
+            EditorPlayModeApi.IsPlaying = () => true;
+            PlayModeSession.Stamp("s", PlayModeSession.PhaseExitRequested, now, 100);
+            var deadlineBefore = PlayModeSession.DeadlineUtc.Value;
+
+            now = now.AddSeconds(50);
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                CommandTable.Dispatch(gate, Request("play.status", JsonValue.NewObject()));
+            }
+
+            Assert.AreEqual(deadlineBefore, PlayModeSession.DeadlineUtc.Value,
+                "polling status during 'exiting' must not renew the deadline - otherwise a stuck transition never times out");
+        }
+
+        // ============================================================== F2: watchdog fails closed on a stuck exit
+
+        [Test]
+        public void Watchdog_ExitRequestedPastDeadline_ClearsRecordAndRetriesTheExit()
+        {
+            var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            EditorPlayModeApi.PlayClock = () => now;
+            EditorPlayModeApi.IsPlaying = () => true; // stuck: Unity never actually left Play Mode
+            var exitCalls = 0;
+            EditorPlayModeApi.ExitPlayMode = () => exitCalls++;
+            PlayModeSession.Stamp("s", PlayModeSession.PhaseExitRequested, now, 10);
+
+            now = now.AddSeconds(11); // past the 10s ttl, never renewed while exitRequested
+            PlayModeWatchdog.Tick();
+
+            Assert.IsFalse(PlayModeSession.HasSession, "a stuck exit must fail closed by clearing the record");
+            Assert.AreEqual(1, exitCalls, "Hades owns this session, so it retries the exit rather than leaving Play Mode running forever");
+        }
+
+        [Test]
+        public void Watchdog_ExitRequestedBeforeDeadline_StillPlaying_LeavesRecordAlone()
+        {
+            var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            EditorPlayModeApi.PlayClock = () => now;
+            EditorPlayModeApi.IsPlaying = () => true;
+            var exitCalls = 0;
+            EditorPlayModeApi.ExitPlayMode = () => exitCalls++;
+            PlayModeSession.Stamp("s", PlayModeSession.PhaseExitRequested, now, 10);
+
+            PlayModeWatchdog.Tick(); // still within the ttl - the ordinary "exit is in flight" tick
+
+            Assert.IsTrue(PlayModeSession.HasSession);
+            Assert.AreEqual(PlayModeSession.PhaseExitRequested, PlayModeSession.Phase);
+            Assert.AreEqual(0, exitCalls, "not past the deadline yet - no retry needed");
         }
 
         [Test]

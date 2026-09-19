@@ -122,9 +122,6 @@
     <EmbeddedResource Include="..\..\..\UnityPlugin\Assets\Hades\Tools\PlayModeCommands.cs">
       <LogicalName>Hades.Plugin.Tools.PlayModeCommands.cs</LogicalName>
     </EmbeddedResource>
-    <EmbeddedResource Include="..\..\..\UnityPlugin\Assets\Hades\Tools\BuildCommands.cs">
-      <LogicalName>Hades.Plugin.Tools.BuildCommands.cs</LogicalName>
-    </EmbeddedResource>
     <EmbeddedResource Include="..\..\..\UnityPlugin\Assets\Hades\Tools\SceneBakeCommands.cs">
       <LogicalName>Hades.Plugin.Tools.SceneBakeCommands.cs</LogicalName>
     </EmbeddedResource>

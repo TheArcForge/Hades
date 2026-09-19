@@ -59,6 +59,40 @@ public sealed class AnimationApplyTests(WebApplicationFactory<Program> factory) 
             Assert.Contains(op, text);
     }
 
+    // ---------------------------------------------------------------- F7: a missing required nested field gives an actionable error
+
+    /// <summary>Live defect: 'setEvents' with an event shaped {time, functionName} instead of
+    /// {time, function} returned only "An error occurred invoking 'animation_apply'." - the MCP
+    /// SDK's own argument binding fails deep inside AnimationEventSpec's required 'Function' member,
+    /// and the SDK swallows that JsonException into its own opaque generic message before this
+    /// tool's body - which has excellent per-op validation - ever runs. Program.cs's own
+    /// CallToolFilters now catches this generically (MissingRequiredFieldRejection), driven by the
+    /// tool's own JSON Schema rather than any animation_apply-specific code - see that method's own
+    /// doc comment for why this fixes every typed operation array, not just this one.</summary>
+    [Fact]
+    public async Task AnimationApply_SetEvents_MissingRequiredEventField_GivesAnActionableError_NotAnOpaqueOne()
+    {
+        var envelope = await McpTestClient.CallTool(Factory, "animation_apply", new
+        {
+            operations = new[]
+            {
+                new Dictionary<string, object>
+                {
+                    ["op"] = "setEvents",
+                    ["clipPath"] = "Assets/Walk.anim",
+                    ["events"] = new[] { new Dictionary<string, object> { ["time"] = 0.5, ["functionName"] = "Footstep" } },
+                },
+            },
+        });
+
+        var text = McpTestClient.ErrorText(envelope);
+        Assert.DoesNotContain("An error occurred invoking", text);
+        Assert.Contains("animation_apply", text);
+        Assert.Contains("operations[0]", text);
+        Assert.Contains("events[0]", text);
+        Assert.Contains("function", text);
+    }
+
     // ---------------------------------------------------------------- unknown FIELD refused before any wire call (per-op, not per-tool)
 
     /// <summary>Enumerates EVERY op animation_apply accepts (not a spot check) and proves each one,

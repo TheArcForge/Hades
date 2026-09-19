@@ -9,8 +9,8 @@ namespace Hades.Server.Tests;
 /// conformance... written once" across every shipped long-running operation, rather than
 /// duplicated per design. Phase 3 integration (ROADMAP.md Phase 3 item 2) is what assembles this:
 /// every per-lane test file already proves ITS OWN operation's state machine in detail
-/// (ProjectBuildTests.cs/SceneBakeTests.cs/PlayModeToolTests.cs on this side; SceneBakeCommandsTests.cs/
-/// BuildCommandsTests.cs/PlayModeCommandsTests.cs on the plugin side) - this file does not
+/// (SceneBakeTests.cs/PlayModeToolTests.cs on this side; SceneBakeCommandsTests.cs/
+/// PlayModeCommandsTests.cs on the plugin side) - this file does not
 /// re-derive any of that. It covers the two cross-operation Tier-1 conventions that belong on the
 /// Core side: the status vocabulary (§5) and O6 (status never reads <see cref="OperationRegistry"/>).
 /// The other two Tier-1 conventions (O4, O5) belong to the plugin side, where each operation's
@@ -38,19 +38,6 @@ public sealed class LongRunningOperationConformanceTests
     static readonly string[] BakeVocabulary =
         { "running", "complete", "cancelled", "failed", "indeterminate", "unavailable", "none", "unknown" };
 
-    /// <summary>Every status string <see cref="ProjectBuildResult.State"/> is documented to
-    /// return (ProjectBuildTool.cs's own doc comment on that property), PLUS 'queued' - a
-    /// deliberate, DESIGN-08-sanctioned addition specific to the build pipeline. DESIGN-08 §12's
-    /// own DESIGN-03 table cites the "queued-grace row" positively rather than asking for it to be
-    /// folded into 'running'; DESIGN-03 defines 'queued' as the bounded window before
-    /// BuildPipeline.BuildPlayer actually runs, with its OWN abandonment rule (a delayCall eaten
-    /// by a reload) that only applies in that window - a real state, not a spelling of 'running'.
-    /// Recorded here explicitly as a sanctioned extension rather than silently folded into the
-    /// core set or silently ignored - this test's job is to report a real divergence, not paper
-    /// over it.</summary>
-    static readonly string[] BuildVocabulary =
-        { "queued", "running", "complete", "failed", "cancelled", "abandoned", "none", "unknown" };
-
     /// <summary>Every status string project_get_test_results' <c>TestResultsResult.Status</c> is
     /// documented to return (EditorProjectTools.cs's own doc comment on that record). Deliberately
     /// does NOT include 'started' - project_run_tests' own immediate response documents
@@ -64,7 +51,6 @@ public sealed class LongRunningOperationConformanceTests
     public static IEnumerable<object[]> OperationVocabularies()
     {
         yield return new object[] { "scene_bake", BakeVocabulary, Array.Empty<string>() };
-        yield return new object[] { "project_build", BuildVocabulary, new[] { "queued" } };
         yield return new object[] { "project_get_test_results", TestResultsVocabulary, Array.Empty<string>() };
     }
 
@@ -106,31 +92,34 @@ public sealed class LongRunningOperationConformanceTests
     /// answer status." §14's practical form: "assert status code paths never call
     /// OperationRegistry.Get. Cheap reflection over Core/src/Hades.Server/Mcp/." Reflection finds
     /// every <c>[McpServerToolType]</c> class that holds an <see cref="OperationRegistry"/>
-    /// dependency (today, only <see cref="ProjectBuildTool"/>, via 'start's registration), reads
-    /// THAT constructor parameter's real name, and source-scans the class's own file for
-    /// '&lt;thatName&gt;.Get(' - the one call shape O6 forbids ('.Start(', registration, is
-    /// expected and fine). Using the reflected parameter name rather than a hardcoded "operations"
-    /// means a rename cannot silently stop this test from checking anything.</summary>
+    /// dependency, reads THAT constructor parameter's real name, and source-scans the class's own
+    /// file for '&lt;thatName&gt;.Get(' - the one call shape O6 forbids ('.Start(', registration,
+    /// is expected and fine). Using the reflected parameter name rather than a hardcoded
+    /// "operations" means a rename cannot silently stop this test from checking anything.
+    /// <c>ProjectBuildTool</c> was the one MCP tool class that took this dependency (via
+    /// 'start's registration) until project_build was removed - no tool class holds it today, so
+    /// this test currently scans a real but empty set (see the sanity assertion below).</summary>
     [Fact]
     public void O6_NoMcpToolClass_EverCallsOperationRegistryGet()
     {
-        var mcpAssembly = typeof(ProjectBuildTool).Assembly;
+        var mcpAssembly = typeof(SceneBakeTool).Assembly;
         var toolTypes = mcpAssembly.GetTypes()
             .Where(t => t.GetCustomAttributes(typeof(McpServerToolTypeAttribute), false).Length > 0)
             .ToList();
 
         // Sanity: the attribute scan itself must find real types, or every assertion below would
         // trivially (and uselessly) pass over an empty set.
-        Assert.True(toolTypes.Count >= 20, $"Expected at least 20 [McpServerToolType] classes (Program.cs registers 21 today); found {toolTypes.Count}. The reflection scan itself may be broken.");
+        Assert.True(toolTypes.Count >= 19, $"Expected at least 19 [McpServerToolType] classes (Program.cs registers 20 today); found {toolTypes.Count}. The reflection scan itself may be broken.");
 
         var typesHoldingTheRegistry = toolTypes
             .Where(t => t.GetConstructors()
                 .Any(c => c.GetParameters().Any(p => p.ParameterType == typeof(OperationRegistry))))
             .ToList();
 
-        // Today only ProjectBuildTool takes OperationRegistry - asserted explicitly so this test
-        // proves it examined something real rather than vacuously passing over an empty set.
-        Assert.Single(typesHoldingTheRegistry);
+        // No MCP tool class takes OperationRegistry today (ProjectBuildTool, the one that did, was
+        // removed with project_build) - asserted explicitly so a future tool that starts taking it
+        // is caught here rather than silently widening what this test scans.
+        Assert.Empty(typesHoldingTheRegistry);
 
         var mcpDir = FindMcpSourceDirectory();
         foreach (var type in typesHoldingTheRegistry)

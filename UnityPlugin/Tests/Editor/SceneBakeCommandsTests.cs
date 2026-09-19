@@ -10,7 +10,7 @@ namespace Hades.Tests.Editor
     /// <summary>
     /// DESIGN-06 (docs/design/DESIGN-06-baking-and-subsystems.md) §9's plugin EditMode suite.
     /// Reaches every handler through <see cref="CommandTable.Dispatch"/>, same convention as
-    /// <see cref="BuildCommandsTests"/>/<see cref="PlayModeCommandsTests"/>. Every
+    /// <see cref="PlayModeCommandsTests"/>. Every
     /// <see cref="BakeTargetSeams"/> field is substituted in <see cref="SetUp"/> and restored in
     /// <see cref="TearDown"/> - see that class's own doc comment: a test must NEVER trigger a real
     /// bake (DESIGN-06 §9's own stated requirement).
@@ -392,6 +392,26 @@ namespace Hades.Tests.Editor
                 "bake.lighting");
             Assert.IsTrue(capabilities[0].Available); // bake.lighting - built-in
             Assert.IsTrue(capabilities[1].Available); // bake.occlusion - built-in
+        }
+
+        // ============================================================== F3: no Lighting Settings asset must never throw
+
+        [Test]
+        public void RealLightingConfiguredBackend_FreshSceneWithNoLightingSettingsAsset_ReturnsNull_NeverThrows()
+        {
+            // F3, live-verified against a real Editor: Lightmapping.lightingSettings THROWS - it
+            // does not return null - when the active scene has no Lighting Settings asset, true of
+            // every freshly created scene. The bake had already started by the time this is read for
+            // 'start's own result, so before this fix 'status' went on throwing the identical way on
+            // every later poll, leaving the agent blind to a bake that was actually running. This
+            // calls the REAL delegate (captured above, before SetUp's fakes take over), proving the
+            // fix directly rather than through the swapped-out seam every other test in this file
+            // uses.
+            SceneTestFixtures.ResetScene();
+
+            string backend = "not set";
+            Assert.DoesNotThrow(() => backend = RealLightingConfiguredBackend());
+            Assert.IsNull(backend, "a fresh scene has no Lighting Settings asset - 'backend' must be null, not a thrown exception");
         }
     }
 }

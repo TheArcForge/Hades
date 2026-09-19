@@ -11,9 +11,9 @@ using WireKind = Hades.Contract.Wire.JsonValueKind;
 namespace Hades.Server.Mcp;
 
 /// <summary>scene_bake's result, shaped by 'status' - same action-shaped convention as
-/// <see cref="ProjectBuildResult"/>/<see cref="PlayModeResult"/> (never a parallel record per
-/// action). 'jobId'/'target'/'status'/'detail' are populated whenever the plugin's own wire response
-/// carries them (every case except 'none'/'unknown', which have no job to report on);
+/// <see cref="PlayModeResult"/> (never a parallel record per action). 'jobId'/'target'/'status'/
+/// 'detail' are populated whenever the plugin's own wire response carries them (every case except
+/// 'none'/'unknown', which have no job to report on);
 /// 'progress'/'backend' only while 'status' is 'running'; 'durationSeconds'/'backend' once a
 /// terminal state has actually been observed; 'error' only for 'status':'failed'.</summary>
 public sealed record SceneBakeResult
@@ -43,7 +43,10 @@ public sealed record SceneBakeResult
 
     /// <summary>Lighting only. The CONFIGURED lightmapper (Lightmapping.lightingSettings.lightmapper),
     /// never the effective one - whether the GPU lightmapper's CPU fallback is detectable at all is
-    /// H5, unresolved (DESIGN-06 §10.2/P12).</summary>
+    /// H5, unresolved (DESIGN-06 §10.2/P12). Null means the active scene has no Lighting Settings
+    /// asset at all (every newly created scene, until one is assigned) - Unity throws reading
+    /// Lightmapping.lightingSettings in that case, caught on the plugin side and reported as this
+    /// same "configured lightmapper unknown" null rather than failing the whole call (F3).</summary>
     [JsonPropertyName("backend")] public string? Backend { get; init; }
 
     /// <summary>Always populated: one actionable sentence, in every state - the same "successful
@@ -61,7 +64,7 @@ public sealed record SceneBakeResult
 /// ownership token, the sticky Terminal, the three-valued Resolve predicate) lives entirely in
 /// Hades.Tools.SceneBakeCommands on the plugin side (UnityPlugin/Assets/Hades/Tools/SceneBakeCommands.cs);
 /// this class only builds the request and maps the response, the same shape as
-/// <see cref="ProjectBuildTool"/>/<see cref="PlayModeTool"/>.
+/// <see cref="PlayModeTool"/>.
 ///
 /// <b>No lease belief of its own</b> (DESIGN-06 §4.3: a bake holds no <see cref="Editors.LeaseRegistry"/>
 /// lease for its duration) - unlike <c>script_editing_session</c>, there is nothing here for the

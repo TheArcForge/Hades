@@ -49,6 +49,16 @@ namespace Hades.Tests.Editor
         }
 
         [Test]
+        public void Compute_PlacesTheCameraAboveTheTarget_LookingDown()
+        {
+            var bounds = new Bounds(new Vector3(3f, 1f, -2f), Vector3.one);
+            var (position, rotation, _, _) = CaptureFraming.Compute(bounds, Aspect16x9);
+
+            Assert.Greater(position.y, bounds.center.y, "camera must sit above the target, not below it");
+            Assert.Less((rotation * Vector3.forward).y, 0f, "camera must look down at the target");
+        }
+
+        [Test]
         public void Compute_OffOriginBounds_FramesItInsideTheFrustum()
         {
             var bounds = new Bounds(new Vector3(37f, -12f, 5f), new Vector3(2f, 3f, 4f));

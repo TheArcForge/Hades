@@ -45,7 +45,7 @@ namespace Hades.Tests.Editor
             "get_memory_summary", "get_project_summary", "get_recently_changed", "get_scene_summary",
             "graph_query", "hades_charon_status", "hades_ping", "hades_rebuild_graph", "hades_regression",
             "hades_status", "inspect_asset", "inspector_inspect", "material_apply", "play_mode", "prefab_apply",
-            "project_build", "project_get_console_log", "project_get_test_results", "project_recompile_scripts",
+            "project_get_console_log", "project_get_test_results", "project_recompile_scripts",
             "project_run_tests", "project_settings", "project_settings_apply", "propose_memory_update",
             "recall_memory", "scene_apply", "scene_bake", "scene_manage", "script_editing_session",
             "scriptable_object_apply", "search_by_name", "trace_dependencies", "validate_memory",
@@ -89,15 +89,14 @@ namespace Hades.Tests.Editor
     public sealed class LiveMcpToolNamesTests
     {
         [Test]
-        public void Names_HasExactly37Entries_MatchingDesign06sAdditionOfSceneBake()
+        public void Names_HasExactly36Entries_AfterProjectBuildRemoval()
         {
             // 32 -> 33 -> 34 -> 35 -> 36 -> 37: DESIGN-01 (Lane B) added 'play_mode'; DESIGN-03
             // (Lane C) added 'project_build'; DESIGN-04 (Lane D) added 'scriptable_object_apply';
-            // DESIGN-02 (Lane F) added 'capture_view'; DESIGN-06 (Lane G) adds 'scene_bake'. This is
-            // the programme-wide final count (see docs/design/ROADMAP.md §4/§20) - Lane G is the
-            // last of the seven tool-adding lanes, so this bump lands the final number directly
-            // rather than a further local delta.
-            Assert.AreEqual(37, LiveMcpToolNames.Names.Length);
+            // DESIGN-02 (Lane F) added 'capture_view'; DESIGN-06 (Lane G) added 'scene_bake' - the
+            // programme-wide final count (see docs/design/ROADMAP.md §4/§20).
+            // 37 -> 36: project_build removed - devs don't use in-Editor builds.
+            Assert.AreEqual(36, LiveMcpToolNames.Names.Length);
         }
 
         [Test]

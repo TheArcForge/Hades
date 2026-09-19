@@ -63,9 +63,10 @@ public sealed class PlayModeTool(EditorProxy editor, ProjectService projects)
     [McpServerTool(Name = "play_mode", Title = "Play Mode Control", ReadOnly = false, UseStructuredContent = true)]
     [Description("Controls this Unity Editor's Play Mode for exploratory running - author a scene, "
                + "then run/observe/isolate/stop/fix. Not for test assertions - use project_run_tests "
-               + "for those. RETURNS IMMEDIATELY: 'enter'/'exit' trigger a domain reload and briefly "
-               + "drop and reconnect the Editor's connection - poll action:'status' rather than "
-               + "assuming the transition already finished. NEVER WRITES TO DISK, in any action - no "
+               + "for those. RETURNS IMMEDIATELY: only 'enter' can trigger a domain reload (and only "
+               + "when the project's Enter Play Mode Options have domain reload enabled) - 'exit' "
+               + "never reloads. Either way, poll action:'status' rather than assuming the transition "
+               + "already finished. NEVER WRITES TO DISK, in any action - no "
                + "scene, no asset; dirty scenes stay exactly as dirty as they were (call "
                + "scene_manage's save op first if you want the current scene persisted). EVERY "
                + "MUTATING HADES TOOL IS REFUSED while this Editor is in Play Mode - a scene change "

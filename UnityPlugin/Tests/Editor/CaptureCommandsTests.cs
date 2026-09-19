@@ -410,5 +410,41 @@ namespace Hades.Tests.Editor
             var notes = CaptureCommands.DetectOverlayCanvasNotes(SceneManager.GetActiveScene());
             CollectionAssert.IsEmpty(notes);
         }
+
+        // ---------------------------------------------------------------- F1: view:"scene" no longer throws "The scene is invalid"
+
+        [Test]
+        public void DetectOverlayCanvasNotes_InvalidScene_ReturnsEmpty_NeverThrows()
+        {
+            // The exact shape 'view: "scene"' used to pass in here: a HideAndDontSave temp camera's
+            // own .scene, which is never valid - Scene.GetRootGameObjects() throws "The scene is
+            // invalid" for one. default(Scene) reproduces the same invalid scene without needing a
+            // real temp camera.
+            System.Collections.Generic.List<string> notes = null;
+            Assert.DoesNotThrow(() => notes = CaptureCommands.DetectOverlayCanvasNotes(default));
+            CollectionAssert.IsEmpty(notes);
+        }
+
+        [Test]
+        public void CaptureView_SceneView_NoLongerThrowsSceneIsInvalid_UnderANullGraphicsDevice()
+        {
+            // End-to-end reproduction of the live defect (F1): 'view: "scene"' always failed with
+            // "The scene is invalid" because CaptureView passed the temp camera's own (invalid)
+            // scene into DetectOverlayCanvasNotes instead of the active scene. HasGraphicsDevice is
+            // flipped to true here - see this class's own doc comment - so the call reaches the real
+            // (meaningless, but non-crashing) render on Unity's GraphicsDeviceType.Null stub instead
+            // of refusing at the -nographics check first.
+            CaptureCommands.HasGraphicsDevice = () => true;
+            AddCube("Cube", Vector3.zero);
+
+            var (gate, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject().SetProperty("view", JsonValue.String("scene"));
+                JsonValue result = null;
+                Assert.DoesNotThrow(() => result = CommandTable.Dispatch(gate, Request(@params)));
+                Assert.IsTrue(result.TryGetProperty("image", out _), "a successful capture must return an image");
+            }
+        }
     }
 }

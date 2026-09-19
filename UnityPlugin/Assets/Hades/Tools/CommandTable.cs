@@ -125,12 +125,6 @@ namespace Hades.Tools
             ["project.run_tests"] = ProjectCommands.RunTests,
             ["hades.regression_replay"] = ProjectCommands.RegressionReplay,
 
-            // DESIGN-03 (project_build). 'project.build_start' is class 2 (bounded LeaseScope.Run
-            // prep, then the real BuildPipeline.BuildPlayer call on a LATER tick - see
-            // BuildCommands.Start's own doc comment); 'project.build_targets' is class 4 (live-state
-            // read, just below). See BuildCommands.cs's own class doc comment for the full picture.
-            ["project.build_start"] = BuildCommands.Start,
-
             // Class 3 - multi-call session, the agent must come back (see the "52 Editor tools"
             // plan's Task 4). BeginScriptEditing/EndScriptEditing deliberately do NOT go through
             // LeaseScope.Run - see ProjectCommands' own doc comment for why an exception between
@@ -148,7 +142,6 @@ namespace Hades.Tools
             // is nothing a domain reload could interrupt mid-flight.
             ["project.get_console_log"] = ProjectCommands.GetConsoleLog,
             ["project.get_test_results"] = ProjectCommands.GetTestResults,
-            ["project.build_targets"] = BuildCommands.Targets,
             ["inspector.inspect"] = InspectorCommands.InspectGameObject,
 
             // DESIGN-02 (capture_view). Slice 1 only (view: "game"/"scene" - "prefab" refuses with
@@ -201,9 +194,7 @@ namespace Hades.Tools
         /// consulted after a successful <see cref="Handlers"/> lookup, so an allow-listed name with no
         /// registered handler is unreachable and costs nothing but a string (DESIGN-01 §6.2's
         /// "cross-document dependency" note). scene.bake's two "not yet built" entries below are the
-        /// same story, for DESIGN-06 (Lane G). 'project.build_start'/'project.build_targets' were
-        /// this story too until DESIGN-03 (Lane C) shipped real handlers for both - see
-        /// <see cref="BuildCommands.Start"/>/<see cref="BuildCommands.Targets"/> in Handlers above.
+        /// same story, for DESIGN-06 (Lane G).
         /// </summary>
         public static readonly Dictionary<string, string> AllowedWhilePlaying = new Dictionary<string, string>
         {
@@ -228,13 +219,11 @@ namespace Hades.Tools
             // generic one CommandTable.Dispatch falls back to.
             ["project.run_tests"] = PlayModeCommands.RunTestsRefusedWhilePlayingMessage,
             ["scene.bake:start"] = PlayModeCommands.BakeStartRefusedWhilePlayingMessage,
-            ["project.build_start"] = PlayModeCommands.BuildStartRefusedWhilePlayingMessage,
 
             // Allow entry for a command DESIGN-06 (Lane G) has not built yet - see this
             // dictionary's own doc comment for why this is safe.
             ["scene.bake:status"] = null,
             ["scene.bake:cancel"] = null,
-            ["project.build_targets"] = null,
 
             // DESIGN-04 (Lane D): 'scriptableObject.apply' and 'asset.manage' are DELIBERATELY ABSENT
             // from this dictionary - both are refused while playing, registered by absence, per

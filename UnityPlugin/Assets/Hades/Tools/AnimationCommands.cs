@@ -729,6 +729,16 @@ namespace Hades.Tools
             {
                 case BlendTreeType.Simple1D:
                     tree.blendParameter = JsonParams.OptionalString(node, "parameter");
+
+                    // F4 fix: Unity's default useAutomaticThresholds=true silently RECOMPUTES every
+                    // child's threshold (evenly spaced over [0,1]) the moment a child is added,
+                    // discarding whatever explicit 'threshold' AddBlendTreeChild just set - sent
+                    // 0/1/3, stored 0/0.5/1, live-verified. 'threshold' is required for Simple1D
+                    // (validated above this call ever runs), so an explicit value must win; set
+                    // BEFORE any child is added, on every Simple1D tree this populates including a
+                    // nested one (this method runs once per tree, root or nested - see this method's
+                    // own doc comment).
+                    tree.useAutomaticThresholds = false;
                     break;
                 case BlendTreeType.SimpleDirectional2D:
                 case BlendTreeType.FreeformDirectional2D:

@@ -72,7 +72,6 @@ public static class PluginInstaller
         ("Hades.Plugin.Tools.ProjectSettingsApplyCommands.cs", "Tools/ProjectSettingsApplyCommands.cs"),
         ("Hades.Plugin.Tools.InspectorCommands.cs", "Tools/InspectorCommands.cs"),
         ("Hades.Plugin.Tools.PlayModeCommands.cs", "Tools/PlayModeCommands.cs"),
-        ("Hades.Plugin.Tools.BuildCommands.cs", "Tools/BuildCommands.cs"),
         ("Hades.Plugin.Tools.SceneBakeCommands.cs", "Tools/SceneBakeCommands.cs"),
         ("Hades.Plugin.Tools.CaptureFraming.cs", "Tools/CaptureFraming.cs"),
         ("Hades.Plugin.Tools.CaptureCommands.cs", "Tools/CaptureCommands.cs"),

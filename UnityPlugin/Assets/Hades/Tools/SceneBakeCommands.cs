@@ -14,11 +14,9 @@ namespace Hades.Tools
     /// the roadmap's own "highest-risk lane". One wire command, <c>scene.bake</c> (action
     /// start|status|cancel), backing the app's <c>scene_bake</c> MCP tool
     /// (Hades.Server.Mcp.SceneBakeTool). One file, carrying everything this design needs, matching
-    /// BuildCommands.cs/PlayModeCommands.cs' own "one file, several classes, one concern" convention:
+    /// PlayModeCommands.cs' own "one file, several classes, one concern" convention:
     ///
-    /// <see cref="BakeKeys"/>        - every DESIGN-06 SessionState key name, in one place (owned
-    ///                                 here; BuildCommands.cs's bake x build preflight reads the same
-    ///                                 constants - see that file's own doc comment and ROADMAP.md §4).
+    /// <see cref="BakeKeys"/>        - every DESIGN-06 SessionState key name, in one place.
     /// <see cref="SceneBakeCommands"/> - the wire handler.
     /// <see cref="RunningState"/>    - the three-valued oracle result (Running/NotRunning/Indeterminate).
     /// <see cref="BakeTargetSeams"/> - the <c>IsRunning(scope)</c> seam: swappable per-target Func
@@ -48,7 +46,7 @@ namespace Hades.Tools
     ///
     /// <para><b>The lease decision (§4.3).</b> A bake holds no <see cref="ReloadGate"/> lease for its
     /// duration - only 'start'/'cancel's own BOUNDED prep is lease-protected (mirroring
-    /// project.run_tests/project.build_start's own shape: acquire, bounded work, release, and - for
+    /// project.run_tests' own shape: acquire, bounded work, release, and - for
     /// 'start' only - the actual kick-off happens strictly AFTER that release, never inside it, so a
     /// held lease can never fight itself). A domain reload therefore cancels an in-progress bake, and
     /// the epoch mechanism below is what lets Hades say so honestly rather than reporting a phantom
@@ -398,18 +396,16 @@ namespace Hades.Tools
 
     /// <summary>
     /// Every DESIGN-06 SessionState key name, in one place. DESIGN-06 (this file) owns these names -
-    /// it is the writer; DESIGN-03's bake x build preflight (BuildCommands.cs,
-    /// <c>HadesOwnedBakeInProgressRefusal</c>) is the one other reader. ROADMAP.md §4: "a rename Lane
-    /// C misses fails silently - the reader finds absent keys, concludes 'no bake', and never fires
-    /// ... Preferred mechanism now that both lanes exist: a single shared BakeKeys constants class in
-    /// the plugin, referenced by both." A rename here now fails BuildCommands.cs to COMPILE instead.
+    /// it is the writer. DESIGN-03's bake x build preflight (<c>HadesOwnedBakeInProgressRefusal</c>)
+    /// used to be the one other reader, sharing this same class rather than a hand-copied set of
+    /// string literals - that reader was removed along with project_build (devs don't use in-Editor
+    /// builds), so this file is once again the only consumer.
     ///
     /// Public - not internal - for the same "no InternalsVisibleTo between this assembly and
-    /// Hades.Tests.Editor" convention every other plugin-side test seam in this codebase follows
-    /// (see e.g. CommandTable.Handlers' own doc comment). Phase 3 integration correction: this was
-    /// internal, which meant BuildCommandsTests.cs (a separate assembly) could not reference it at
-    /// all and had to hardcode the key names as string literals instead - exactly the staleness risk
-    /// the class exists to close. Widening to public changes no behaviour.
+    /// Hades.Tests.Editor" convention every other plugin-side test seam in this codebase follows (see
+    /// e.g. CommandTable.Handlers' own doc comment). Left public rather than narrowed back to
+    /// internal now that the cross-lane reader is gone - narrowing it would be pure churn with no
+    /// behavioural effect either way.
     /// </summary>
     public static class BakeKeys
     {
@@ -523,9 +519,10 @@ namespace Hades.Tools
     /// cancellation marker: a job is attributable to a currently-running bake only while its own
     /// recorded <see cref="BakeJobStore.JobEpoch"/> equals <see cref="Current"/>. Stored via
     /// <see cref="SessionState.GetInt"/>/<see cref="SessionState.SetInt"/> (unlike every other
-    /// DESIGN-06 key, which stores as a string) because BuildCommands.cs's own
-    /// <c>HadesOwnedBakeInProgressRefusal</c> already reads this exact key that way - matching its
-    /// existing storage format is what keeps that reader correct, not a stylistic choice.
+    /// DESIGN-06 key, which stores as a string) because <c>HadesOwnedBakeInProgressRefusal</c>
+    /// (removed along with project_build) used to read this exact key that way - kept as an int
+    /// rather than reformatted now that reader is gone, since changing storage format here would be
+    /// pure churn with no behavioural benefit.
     /// </summary>
     public static class BakeReloadEpoch
     {
@@ -563,11 +560,30 @@ namespace Hades.Tools
         /// <summary>DESIGN-06 §10.2/P12 (half-resolved): the CONFIGURED lightmapper
         /// (Lightmapping.lightingSettings.lightmapper), not the effective one - whether the GPU
         /// lightmapper's CPU fallback is detectable at all is H5, unresolved. Labelled "configured"
-        /// in Hades.Server.Mcp.SceneBakeTool's own description, not merely in this comment.</summary>
+        /// in Hades.Server.Mcp.SceneBakeTool's own description, not merely in this comment.
+        ///
+        /// <para>F3 fix: <c>Lightmapping.lightingSettings</c> THROWS - it does not return null - when
+        /// the active scene has no Lighting Settings asset at all (every newly created scene, live
+        /// VERIFIED). The null check below never ran because of it: the bake had already started by
+        /// the time this is read for 'start's own result, so 'status' went on throwing the identical
+        /// way on every later poll, leaving the agent blind to a bake that was actually running.
+        /// Caught here and reported as <c>backend: null</c> - the SAME "configured lightmapper
+        /// unknown" meaning the pre-existing null check already gave for the (never actually
+        /// reachable) null-settings case, now reachable via the real one.</para></summary>
         public static Func<string> LightingConfiguredBackend = () =>
         {
-            var settings = Lightmapping.lightingSettings;
-            return settings != null ? settings.lightmapper.ToString() : null;
+            try
+            {
+                var settings = Lightmapping.lightingSettings;
+                return settings != null ? settings.lightmapper.ToString() : null;
+            }
+            catch (Exception)
+            {
+                // No Lighting Settings asset for the active scene - null means "configured lightmapper
+                // unknown", not "the bake itself failed" (DoStart/DoStatus have already recorded and
+                // resolved the job before this is ever called; see this field's own doc comment).
+                return null;
+            }
         };
 
         public static Func<bool> OcclusionGenerateInBackground = () => StaticOcclusionCulling.GenerateInBackground();
@@ -823,7 +839,7 @@ namespace Hades.Tools
     /// <summary>
     /// The <see cref="EditorApplication.update"/> tick observer (DESIGN-06 §4.4: "who writes
     /// Terminal='complete'. Not the poll - the poll is exactly the thing that cannot tell") -
-    /// PER TICK, mirroring <c>PlayModeWatchdog</c>/<c>BuildWatchdog</c>'s own "boot is simply the
+    /// PER TICK, mirroring <c>PlayModeWatchdog</c>'s own "boot is simply the
     /// first tick" shape. <see cref="Install"/> ALSO bumps <see cref="BakeReloadEpoch"/> - folded in
     /// here (rather than a second HadesBoot line) because both need the exact same "exactly once per
     /// domain reload" guard <c>_installed</c> already provides (a plain static, wiped by every
@@ -847,7 +863,7 @@ namespace Hades.Tools
 
             // DESIGN-06 §4.4: "The epoch costs one line, because the hook already exists" - this IS
             // that line, and it runs exactly once per domain reload for the same reason
-            // PlayModeWatchdog.Install/BuildWatchdog.Install's own bodies do: _installed is a plain
+            // PlayModeWatchdog.Install's own body does: _installed is a plain
             // static, wiped by every reload, so this guard's body is fresh again on every boot.
             BakeReloadEpoch.Bump();
 

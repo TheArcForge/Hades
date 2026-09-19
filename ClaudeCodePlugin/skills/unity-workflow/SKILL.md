@@ -117,7 +117,6 @@ find_references_to("<modified_script>")   — confirm no unexpected dependents a
 **Runtime/visual verification, when static checks aren't enough:**
 - `play_mode` to actually run the change and observe it, rather than reasoning about it from source alone.
 - `capture_view` to see the current scene/game view directly.
-- `project_build` when the task specifically requires proving a Player build still succeeds — it pins the Editor's main thread for minutes, so treat it as a deliberate, expensive step, not a routine one.
 
 **Memory update:**
 - If the feature established a new convention or pattern, record it:
@@ -145,4 +144,4 @@ propose_memory_update("<domain>", "<what was decided and why>")
 
 **Skills:** `hades:unity-architect` — architecture decision frameworks. `hades:scene-authoring` — scene construction workflows. `hades:prefab-workflow` — prefab creation and editing. `hades:animation-workflow` — animation controller setup. `hades:unity-reviewer` — code review for Unity anti-patterns.
 
-**Hades MCP Tools:** `get_project_summary`, `get_scene_summary`, `search_by_name` (namePattern substring + optional declaration `kind` filter — no path or exact-match option), `find_references_to` (asset + C# code references), `trace_dependencies`, `recall_memory`, `propose_memory_update`, `graph_query`, `project_get_console_log`, `project_run_tests`, `script_editing_session` (action: `begin`/`end`), `play_mode` (exploratory Play Mode running: enter/exit/pause/resume/step/status), `capture_view` (render the scene/game view), `project_build` (build a Player; blunt, minutes-long, pins the Editor), `scriptable_object_apply` (create/configure ScriptableObject asset instances), `scene_bake` (lighting/occlusion/NavMesh baking).
+**Hades MCP Tools:** `get_project_summary`, `get_scene_summary`, `search_by_name` (namePattern substring + optional declaration `kind` filter — no path or exact-match option), `find_references_to` (asset + C# code references), `trace_dependencies`, `recall_memory`, `propose_memory_update`, `graph_query`, `project_get_console_log`, `project_run_tests`, `script_editing_session` (action: `begin`/`end`), `play_mode` (exploratory Play Mode running: enter/exit/pause/resume/step/status), `capture_view` (render the scene/game view), `scriptable_object_apply` (create/configure ScriptableObject asset instances), `scene_bake` (lighting/occlusion/NavMesh baking).

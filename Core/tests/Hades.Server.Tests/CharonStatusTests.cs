@@ -302,7 +302,7 @@ public sealed class CharonStatusTests : IClassFixture<WebApplicationFactory<Prog
     // ---------------------------------------------------------------- tool count
 
     [Fact]
-    public async Task ToolCount_Stays37()
+    public async Task ToolCount_Stays36()
     {
         // The tool-surface-consolidation plan's own target, reached: 90 pre-Plan-10 tools (38
         // pre-Plan-9, +31 Plan 9 Task 2 class-1, +15 Task 3 class-2, +3 Task 4 class-3, +3 Task 5
@@ -323,9 +323,10 @@ public sealed class CharonStatusTests : IClassFixture<WebApplicationFactory<Prog
         // DESIGN-03 (Lane C) adds 'project_build'. 34 -> 35: DESIGN-04 (Lane D) adds
         // 'scriptable_object_apply'. 35 -> 36: DESIGN-02 (Lane F) adds 'capture_view'. 36 -> 37:
         // DESIGN-06 (Lane G) adds 'scene_bake' - the programme-wide final count.
+        // 37 -> 36: project_build removed - devs don't use in-Editor builds.
         var tools = (await McpTestClient.ListTools(_factory)).GetProperty("result").GetProperty("tools");
 
-        Assert.Equal(37, tools.GetArrayLength());
+        Assert.Equal(36, tools.GetArrayLength());
     }
 
     public void Dispose()

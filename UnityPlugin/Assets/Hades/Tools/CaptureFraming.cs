@@ -19,8 +19,10 @@ namespace Hades.Tools
     public static class CaptureFraming
     {
         /// <summary>DESIGN-02 §3.5's fixed direction, normalized once. The camera sits at
-        /// <c>center + Direction * distance</c> and looks back toward <c>center</c>.</summary>
-        public static readonly Vector3 Direction = new Vector3(-1f, -0.7f, -1f).normalized;
+        /// <c>center + Direction * distance</c> and looks back toward <c>center</c> - a three-quarter
+        /// view from ABOVE. (The design originally gave y as -0.7, which put the camera below the
+        /// target looking up at its underside; caught in the 2026-09-19 manual pass.)</summary>
+        public static readonly Vector3 Direction = new Vector3(-1f, 0.7f, -1f).normalized;
 
         public const float DefaultFieldOfView = 60f;
         public const float DefaultMargin = 1.4f;

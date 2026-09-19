@@ -325,6 +325,56 @@ namespace Hades.Tests.Editor
             Assert.AreEqual(1.0, children.Items[1].TryGetProperty("threshold", out var th1) ? th1.AsDouble() : -1, 0.0001);
         }
 
+        // ---------------------------------------------------------------- setBlendTree: F4 - explicit thresholds are never recomputed
+
+        [Test]
+        public void SetBlendTree_Simple1D_ExplicitThresholds_AreStoredVerbatim_NotEvenlyRespaced()
+        {
+            // F4, live-verified: Unity's default useAutomaticThresholds=true silently recomputes
+            // every child's threshold, evenly spaced over [0,1], the moment a child is added -
+            // 0/1/3 sent, 0/0.5/1 stored. A TWO-child 0/1 tree (the round-trip test above) cannot
+            // catch this: automatic respacing of two children happens to land on 0/1 too. A third,
+            // unevenly-spaced value is what actually distinguishes "stored as sent" from "recomputed".
+            var controllerPath = ScratchDir + "/LocoThresholds.controller";
+            var idlePath = ScratchDir + "/IdleT.anim";
+            var walkPath = ScratchDir + "/WalkT.anim";
+            var runPath = ScratchDir + "/RunT.anim";
+            AnimatorController.CreateAnimatorControllerAtPath(controllerPath);
+            AssetDatabase.CreateAsset(new AnimationClip(), idlePath);
+            AssetDatabase.CreateAsset(new AnimationClip(), walkPath);
+            AssetDatabase.CreateAsset(new AnimationClip(), runPath);
+
+            var tree = JsonValue.NewObject()
+                .SetProperty("type", JsonValue.String("Simple1D"))
+                .SetProperty("parameter", JsonValue.String("Speed"))
+                .SetProperty("children", JsonValue.NewArray()
+                    .Add(JsonValue.NewObject().SetProperty("clip", JsonValue.String(idlePath)).SetProperty("threshold", JsonValue.Float(0)))
+                    .Add(JsonValue.NewObject().SetProperty("clip", JsonValue.String(walkPath)).SetProperty("threshold", JsonValue.Float(1)))
+                    .Add(JsonValue.NewObject().SetProperty("clip", JsonValue.String(runPath)).SetProperty("threshold", JsonValue.Float(3))));
+
+            var setResult = Apply(Op("setBlendTree",
+                ("controllerPath", JsonValue.String(controllerPath)),
+                ("stateName", JsonValue.String("Locomotion")),
+                ("tree", tree)));
+            Assert.AreEqual(1, AppliedIndices(setResult).Length, "setBlendTree must have applied cleanly");
+
+            var blendTree = AssetDatabase.LoadAllAssetsAtPath(controllerPath).OfType<BlendTree>().Single();
+            Assert.IsFalse(blendTree.useAutomaticThresholds, "explicit thresholds require useAutomaticThresholds=false");
+            Assert.AreEqual(3, blendTree.children.Length);
+            Assert.AreEqual(0.0, blendTree.children[0].threshold, 0.0001);
+            Assert.AreEqual(1.0, blendTree.children[1].threshold, 0.0001);
+            Assert.AreEqual(3.0, blendTree.children[2].threshold, 0.0001, "an explicit threshold must be stored verbatim, never evenly re-spaced");
+
+            var describeResult = Apply(Op("describe", ("controllerPath", JsonValue.String(controllerPath))));
+            var states = ResultsItems(describeResult).Items[0]
+                .TryGetProperty("result", out var describePayload) && describePayload != null
+                && describePayload.TryGetProperty("layers", out var layers) ? layers.Items[0].TryGetProperty("states", out var s) ? s : null : null;
+            var describedTree = states.Items.Single(st => Str(st, "name") == "Locomotion").TryGetProperty("tree", out var t) ? t : null;
+            var describedChildren = describedTree.TryGetProperty("children", out var c) ? c : null;
+            Assert.AreEqual(3.0, describedChildren.Items[2].TryGetProperty("threshold", out var th2) ? th2.AsDouble() : -1, 0.0001,
+                "describe must report the same stored threshold, not a recomputed one");
+        }
+
         // ---------------------------------------------------------------- setBlendTree: pre-flight atomicity (DESIGN-05 §4.4)
 
         [Test]

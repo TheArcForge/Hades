@@ -8,9 +8,10 @@ namespace Hades.Server.Tests;
 /// scene_manage: the declarative batch that replaces EditorSceneManagementTools' scene_save/
 /// scene_create/scene_duplicate and EditorProjectTools' scene_open (4 tools). Same scope discipline
 /// as ProjectSettingsApplyTests/AssetManageTests: this proves the tool-to-wire contract, not the
-/// one-lease-window/self-managed-undo-group/real-per-op-behaviour properties (including the
-/// headline "create does not switch the active scene" property), which are plugin-side properties
-/// proven against a real Editor in UnityPlugin/Tests/Editor/SceneManageCommandsTests.cs.
+/// one-lease-window/self-managed-undo-group/real-per-op-behaviour properties (including F5/F6's
+/// "create opens the new scene as the active scene, and both it and non-additive open refuse a
+/// dirty currently-loaded scene" behaviour), which are plugin-side properties proven against a real
+/// Editor in UnityPlugin/Tests/Editor/SceneManageCommandsTests.cs.
 /// </summary>
 public sealed class SceneManageTests(WebApplicationFactory<Program> factory) : EditorToolTestBase(factory)
 {
@@ -56,18 +57,19 @@ public sealed class SceneManageTests(WebApplicationFactory<Program> factory) : E
             Assert.Contains(op, text);
     }
 
-    // ---------------------------------------------------------------- description says 'create' does not switch scenes
+    // ---------------------------------------------------------------- F5/F6: description explains create/open/discardUnsaved
 
     [Fact]
-    public async Task SceneManage_DescriptionExplainsCreateDoesNotSwitchActiveScene()
+    public async Task SceneManage_DescriptionExplainsCreateOpensTheNewSceneAndBothRefuseWhenDirty()
     {
         var tool = Assert.Single((await McpTestClient.ListTools(Factory))
             .GetProperty("result").GetProperty("tools").EnumerateArray(),
             t => t.GetProperty("name").GetString() == "scene_manage");
 
         var description = tool.GetProperty("description").GetString()!;
-        Assert.Contains("does not", description, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("active scene", description, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("unsaved changes", description, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("discardUnsaved", description);
     }
 
     // ---------------------------------------------------------------- unknown FIELD refused before any wire call (per-op, not per-tool)
@@ -150,6 +152,46 @@ public sealed class SceneManageTests(WebApplicationFactory<Program> factory) : E
         Assert.Equal(4, resultsEl.GetArrayLength());
         Assert.Equal("open", resultsEl[2].GetProperty("op").GetString());
         Assert.True(resultsEl[2].GetProperty("result").GetProperty("isLoaded").GetBoolean());
+    }
+
+    // ---------------------------------------------------------------- F5/F6: discardUnsaved translated verbatim
+
+    [Fact]
+    public async Task SceneManage_DiscardUnsaved_TranslatedVerbatimForCreateAndOpen()
+    {
+        var (reads, writes) = await ConnectAsFakeUnityAsync();
+
+        var results = JsonValue.NewArray()
+            .Add(Obj(("index", JsonValue.Integer(0)), ("op", JsonValue.String("create")),
+                ("result", Obj(("created", JsonValue.String("Assets/Scenes/Level2.unity")), ("activeScene", JsonValue.String("Assets/Scenes/Level2.unity"))))))
+            .Add(Obj(("index", JsonValue.Integer(1)), ("op", JsonValue.String("open")),
+                ("result", Obj(("opened", JsonValue.String("Assets/Scenes/Level1.unity")), ("mode", JsonValue.String("Single")),
+                    ("isLoaded", JsonValue.Bool(true)), ("activeScene", JsonValue.String("Assets/Scenes/Level1.unity"))))));
+
+        var responder = AnswerBusyProbeThenRespondAsync(reads, writes, Obj(
+            ("applied", JsonValue.NewArray().Add(JsonValue.Integer(0)).Add(JsonValue.Integer(1))),
+            ("results", results),
+            ("failed", JsonValue.NewArray()),
+            ("summary", JsonValue.String("2 applied, 0 failed of 2 operation(s)."))));
+
+        var structured = Structured(await McpTestClient.CallTool(Factory, "scene_manage", new
+        {
+            operations = new object[]
+            {
+                new Dictionary<string, object> { ["op"] = "create", ["path"] = "Assets/Scenes/Level2.unity", ["discardUnsaved"] = true },
+                new Dictionary<string, object> { ["op"] = "open", ["path"] = "Assets/Scenes/Level1.unity", ["discardUnsaved"] = true },
+            },
+        }));
+
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
+
+        var ops = Prop(request.Params!, "operations");
+        Assert.True(Prop(ops.Items[0], "discardUnsaved").AsBoolean());
+        Assert.True(Prop(ops.Items[1], "discardUnsaved").AsBoolean());
+
+        var resultsEl = structured.GetProperty("results");
+        Assert.Equal("Assets/Scenes/Level2.unity", resultsEl[0].GetProperty("result").GetProperty("activeScene").GetString());
+        Assert.Equal("Assets/Scenes/Level1.unity", resultsEl[1].GetProperty("result").GetProperty("activeScene").GetString());
     }
 
     // ---------------------------------------------------------------- partial failure: mapped from the wire, no rollback

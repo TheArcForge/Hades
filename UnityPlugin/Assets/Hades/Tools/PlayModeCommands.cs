@@ -94,7 +94,19 @@ namespace Hades.Tools
 
             // Scheduled rather than called inline, so the pump tick that produced THIS response
             // finishes and the response is written before the reload begins (DESIGN-01 §7.2 step 4).
-            EditorPlayModeApi.ScheduleAfterThisTick(() => EditorPlayModeApi.EnterPlayMode());
+            // Re-checks THIS EXACT session is still the one waiting to enter before actually calling
+            // EnterPlayMode(): an 'exit' call landing between this schedule and the tick it runs on
+            // clears the record while still in phase 'requested' (see Exit's own doc comment) - only
+            // that clearing is what stops the scheduled action, since ScheduleAfterThisTick itself
+            // has no way to cancel a pending EditorApplication.update subscription once made (F2).
+            EditorPlayModeApi.ScheduleAfterThisTick(() =>
+            {
+                if (PlayModeSession.HasSession && PlayModeSession.SessionId == sessionId
+                    && PlayModeSession.Phase == PlayModeSession.PhaseRequested)
+                {
+                    EditorPlayModeApi.EnterPlayMode();
+                }
+            });
 
             return BuildEnterResult(sessionId, "entering");
         }
@@ -128,8 +140,17 @@ namespace Hades.Tools
             {
                 // Idempotent no-op - same "closing something never opened is safe" contract as
                 // EndScriptEditing/ReloadGate.Release (DESIGN-01 §9.1's "EditMode | play.exit" row).
-                // A leftover phase=requested record (the enter never actually landed) is left alone
-                // here - PlayModeWatchdog's own deadline rule is what clears that, not this handler.
+                //
+                // F2 fix: a leftover phase='requested' record - the scheduled EnterPlayMode() call
+                // has not landed yet, so Unity is still, truthfully, in edit mode - is CLEARED here,
+                // not left for PlayModeWatchdog's deadline to eventually catch. Leaving it alone let
+                // this exact bug through: 'exit' reported 'editMode' (correct, in the moment) but the
+                // pending enter was still scheduled - see EditorPlayModeApi.ScheduleAfterThisTick's
+                // own re-check - so when Play Mode actually started moments later, Hades reported it
+                // ownedByHades:true for a session the caller had already asked to cancel.
+                if (PlayModeSession.HasSession && PlayModeSession.Phase == PlayModeSession.PhaseRequested)
+                    PlayModeSession.Clear();
+
                 return JsonValue.NewObject()
                     .SetProperty("state", JsonValue.String("editMode"))
                     .SetProperty("wasPlaying", JsonValue.Bool(false))
@@ -230,10 +251,28 @@ namespace Hades.Tools
         /// <summary>"Activity renews, intent does not" (ReloadLease's own rule, DESIGN-01 §9.3): every
         /// play.* call renews a currently-held Hades session's deadline from now, using its OWN
         /// original ttl. A no-op when no Hades session exists (nothing to renew) - in particular,
-        /// never adopts or extends a user-owned session.</summary>
+        /// never adopts or extends a user-owned session.
+        ///
+        /// <para><b>F2 fix: also a no-op while the session is TRANSITIONAL (phase 'requested' or
+        /// 'exitRequested').</b> A caller's own 'status' poll used to renew unconditionally, which
+        /// meant simply polling a stuck 'entering'/'exiting' transition (the backgrounded-Editor bug
+        /// this same finding fixes in <see cref="EditorPlayModeApi.ScheduleAfterThisTick"/>) pushed
+        /// the deadline out forever - the one thing meant to fail the transition closed
+        /// (<see cref="PlayModeWatchdog.Tick"/>'s deadline-passed branches for both phases) could
+        /// never fire. Renewal during a transitional phase would need to mean "the agent is still
+        /// interested", but every call that reaches here (status/step/pause/exit) already renews
+        /// nothing more than its own act of asking - a stuck transition must still expire on the
+        /// ORIGINAL deadline <see cref="PlayModeSession.Stamp"/> set, not a caller-extended one.
+        /// Renewal resumes normally once the watchdog observes the transition land and flips the
+        /// phase to 'playing'.</para></summary>
         static void RenewIfSessionExists()
         {
-            if (PlayModeSession.HasSession) PlayModeSession.RenewFromNow(EditorPlayModeApi.PlayClock);
+            if (!PlayModeSession.HasSession) return;
+
+            var phase = PlayModeSession.Phase;
+            if (phase == PlayModeSession.PhaseRequested || phase == PlayModeSession.PhaseExitRequested) return;
+
+            PlayModeSession.RenewFromNow(EditorPlayModeApi.PlayClock);
         }
 
         /// <summary>The 'state' vocabulary (DESIGN-01 §4.1): editMode | entering | playing | paused |
@@ -310,14 +349,6 @@ namespace Hades.Tools
             + "Editor is in Play Mode. Entering Play Mode already cancels any bake in progress, and "
             + "Hades refuses starting a new one while playing. Call play_mode with action 'exit' "
             + "first, then retry.";
-
-        /// <summary>DESIGN-08 §7.1/§7.3, for the not-yet-built 'project.build_start' - declarative
-        /// until DESIGN-03 ships (see BakeStartRefusedWhilePlayingMessage's own doc comment).</summary>
-        // See RunTestsRefusedWhilePlayingMessage's own note - deliberately no "build_start"-shaped
-        // token here either.
-        public const string BuildStartRefusedWhilePlayingMessage =
-            "Hades refuses starting a Player build while this Unity Editor is in Play Mode. Call "
-            + "play_mode with action 'exit' first, then retry.";
     }
 
     /// <summary>
@@ -529,13 +560,40 @@ namespace Hades.Tools
                         // Phase flips BEFORE calling ExitPlayMode() so a later tick before the
                         // transition completes does not call it again (DESIGN-01 §9.3 - the same
                         // de-duplication intent as ReloadGate._releasePending).
+                        //
+                        // F2: also renews the deadline HERE, once, at the moment of the transition -
+                        // giving the exit its own fresh observation window, the same one the explicit
+                        // 'exit' handler's own top-of-method RenewIfSessionExists() call already gives
+                        // it (called while phase is still 'playing', before Exit() flips it). Without
+                        // this, the deadline that JUST passed (that is what triggered this branch)
+                        // would carry over unchanged into phase 'exitRequested' - already expired
+                        // there too, so the VERY NEXT tick would immediately treat a completely normal,
+                        // just-started exit as stuck and retry it a second time for no reason.
                         PlayModeSession.SetPhase(PlayModeSession.PhaseExitRequested);
+                        PlayModeSession.RenewFromNow(EditorPlayModeApi.PlayClock);
                         EditorPlayModeApi.ExitPlayMode();
                     }
                     break;
 
                 case PlayModeSession.PhaseExitRequested:
-                    if (!playing) PlayModeSession.Clear();
+                    if (!playing)
+                    {
+                        PlayModeSession.Clear();
+                    }
+                    else if (PlayModeSession.DeadlinePassed(EditorPlayModeApi.PlayClock))
+                    {
+                        // F2 fail-closed: the exit Hades requested never actually landed (the
+                        // scheduled ExitPlayMode() call was lost, or Unity is wedged) and
+                        // RenewIfSessionExists no longer extends the deadline through this phase (see
+                        // its own doc comment) - so a stuck exit now expires instead of holding
+                        // 'exiting' forever. Cleared FIRST (same de-duplication intent as the
+                        // PhasePlaying branch above), then retried once: Hades, not the user, owns
+                        // this session (DESIGN-01 principle 3), so failing closed means finishing the
+                        // exit it already started, not merely giving up and reporting editMode while
+                        // Play Mode keeps running.
+                        PlayModeSession.Clear();
+                        EditorPlayModeApi.ExitPlayMode();
+                    }
                     break;
             }
         }
@@ -559,11 +617,29 @@ namespace Hades.Tools
         public static Func<bool> IsPaused = () => EditorApplication.isPaused;
         public static Func<DateTime> PlayClock = () => DateTime.UtcNow;
 
-        /// <summary>Defers <paramref name="action"/> past the pump tick currently executing - real
-        /// implementation is EditorApplication.delayCall (DESIGN-01 §7.2 step 4). Not one of
-        /// DESIGN-01 §6.1's six named seams, but required by the same testability argument: without
-        /// it, 'enter'/'exit' could not be proven to stamp SessionState/return a response BEFORE
-        /// actually calling EnterPlayMode()/ExitPlayMode() (DESIGN-01 §15.1 test 1).</summary>
-        public static Action<Action> ScheduleAfterThisTick = action => EditorApplication.delayCall += () => action();
+        /// <summary>Defers <paramref name="action"/> past the pump tick currently executing - DESIGN-01
+        /// §7.2 step 4. NOT EditorApplication.delayCall: VERIFIED live by probe that delayCall does
+        /// NOT fire while this Editor is not the frontmost app on macOS, even though
+        /// EditorApplication.update keeps ticking regardless (~7/s observed backgrounded) - a
+        /// backgrounded Editor left 'enter'/'exit' stuck in 'entering'/'exiting' forever, since the
+        /// scheduled EnterPlayMode()/ExitPlayMode() call itself never ran (F2). Reimplemented as a
+        /// one-shot EditorApplication.update subscriber that unsubscribes itself before running
+        /// <paramref name="action"/>, so it still fires strictly after the tick that produced the
+        /// response (the property DESIGN-01 §7.2 step 4 actually needs), just on the next 'update'
+        /// tick rather than the next 'delayCall' pump, which is the only difference that matters here
+        /// - and the one that makes it survive an unfocused Editor. Not one of DESIGN-01 §6.1's six
+        /// named seams, but required by the same testability argument: without it, 'enter'/'exit'
+        /// could not be proven to stamp SessionState/return a response BEFORE actually calling
+        /// EnterPlayMode()/ExitPlayMode() (DESIGN-01 §15.1 test 1).</summary>
+        public static Action<Action> ScheduleAfterThisTick = action =>
+        {
+            void Once()
+            {
+                EditorApplication.update -= Once;
+                action();
+            }
+
+            EditorApplication.update += Once;
+        };
     }
 }

@@ -29,6 +29,10 @@ public sealed record SceneManageOperation : IBatchOperation
     // open
     [JsonPropertyName("additive")] [OpField("open")] public bool? Additive { get; init; }
 
+    // open (non-additive), create: F5/F6 - both replace every currently loaded scene and refuse if
+    // any is dirty; this opts into discarding those unsaved changes instead.
+    [JsonPropertyName("discardUnsaved")] [OpField("open", "create")] public bool? DiscardUnsaved { get; init; }
+
     // duplicate
     [JsonPropertyName("sourcePath")] [OpField("duplicate")] public string? SourcePath { get; init; }
     [JsonPropertyName("destPath")] [OpField("duplicate")] public string? DestPath { get; init; }
@@ -74,16 +78,19 @@ public sealed record SceneManageResult
 /// scene_apply/prefab_apply/project_settings_apply/asset_manage - see SceneApplyTool's own class doc
 /// comment for the shared rationale, not repeated here.
 ///
-/// <para><b>'create' keeps NOT switching the active scene.</b> Plan 9's own E2E found this footgun
-/// the hard way: <c>OpenSceneMode.Single</c> would silently discard a caller's unsaved open scene
-/// with no prompt in a scripted context. This op routes to the EXACT SAME
-/// <see cref="Hades.Tools.SceneManagementCommands.CreateScene"/> the standalone scene_create tool
-/// already uses (additive create, save, close) - see <see cref="Hades.Tools.SceneManageCommands"/>'s
+/// <para><b>'create' now OPENS the new scene as the active scene (F5/F6), same as non-additive
+/// 'open'.</b> An earlier revision kept 'create' additive-and-closed precisely to avoid Plan 9's own
+/// E2E footgun (<c>OpenSceneMode.Single</c> silently discarding a caller's unsaved open scene with
+/// no prompt) - but that traded one defect for another: a caller's very next scene_apply/scene_save
+/// call landed on whatever scene happened to be active BEFORE 'create' ran, not the one just
+/// created, live-observed writing test objects into a real, unrelated scene on disk. Both 'create'
+/// and non-additive 'open' now REFUSE instead of silently discarding: if any currently loaded scene
+/// has unsaved changes, the call is refused naming the dirty scene(s), unless this operation passes
+/// <c>discardUnsaved: true</c>. Additive 'open' unloads nothing, so it is never refused this way.
+/// This op routes to the EXACT SAME <see cref="Hades.Tools.SceneManagementCommands.CreateScene"/>
+/// the standalone scene_create tool already uses - see <see cref="Hades.Tools.SceneManageCommands"/>'s
 /// own doc comment - so the property holds by construction, not by a second, parallel
-/// implementation that could drift. 'open' is different and NOT scoped the same way: it explicitly
-/// replaces the currently open scene(s) (or adds to them with <c>additive: true</c>) and discards
-/// unsaved changes without prompting, exactly like the standalone scene_open tool - use a 'save' op
-/// first if those changes matter.</para>
+/// implementation that could drift.</para>
 ///
 /// <para><b>Mixed lease classes, like prefab_apply/project_settings_apply/asset_manage.</b> 'save'/
 /// 'create'/'duplicate' are class-1 (no reload lease); 'open' is class-2. The plugin-side handler
@@ -103,15 +110,15 @@ public sealed class SceneManageTool(EditorProxy editor, ProjectService projects)
 
     [McpServerTool(Name = "scene_manage", Title = "Manage Scenes (Batch)", ReadOnly = false, UseStructuredContent = true)]
     [Description("Applies a batch of scene file-lifecycle operations - save(path?), "
-               + "create(path, template?), open(path, additive?), duplicate(sourcePath, destPath) - "
-               + "in ONE call, in the order given. This is the batch form of scene_save/scene_create/"
-               + "scene_open/scene_duplicate. "
-               + "IMPORTANT: 'create' does NOT switch the active scene - it does not change which "
-               + "scene is currently open in the Editor at all. It builds the new scene additively, "
-               + "saves it, and closes it again, exactly like the standalone scene_create tool; it "
-               + "only ever writes a new file. 'open' is different: it DOES replace the currently "
-               + "open scene(s) (or adds to them with additive=true) and discards unsaved changes "
-               + "without prompting - use a 'save' op first if those changes matter. "
+               + "create(path, template?, discardUnsaved?), open(path, additive?, discardUnsaved?), "
+               + "duplicate(sourcePath, destPath) - in ONE call, in the order given. This is the "
+               + "batch form of scene_save/scene_create/scene_open/scene_duplicate. "
+               + "IMPORTANT: 'create' OPENS the new scene as the active scene, exactly like a "
+               + "non-additive 'open' would - both REPLACE every currently loaded scene. Both REFUSE "
+               + "if any currently loaded scene has unsaved changes, naming the dirty scene(s) - "
+               + "call a 'save' op first, or pass discardUnsaved:true on that operation to proceed "
+               + "and discard them anyway. Additive 'open' (additive=true) unloads nothing, so it is "
+               + "never refused this way. Both report the active scene's path in their result. "
                + "UNDO IS UNEVEN: 'create'/'duplicate' register Undo for the new scene asset; 'save' "
                + "(a pure filesystem write) and 'open' (a live-Editor state change) have none - do "
                + "not assume one Ctrl/Cmd+Z reverts this whole batch. "
@@ -122,8 +129,8 @@ public sealed class SceneManageTool(EditorProxy editor, ProjectService projects)
                + "if unsure.")]
     public async Task<SceneManageResult> SceneManage(
         [Description("Operations to apply, in order. Each needs 'op' plus that op's own fields: "
-                   + "save{path?}, create{path,template?}, open{path,additive?}, "
-                   + "duplicate{sourcePath,destPath}.")]
+                   + "save{path?}, create{path,template?,discardUnsaved?}, "
+                   + "open{path,additive?,discardUnsaved?}, duplicate{sourcePath,destPath}.")]
         IReadOnlyList<SceneManageOperation> operations,
         [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
@@ -166,6 +173,7 @@ public sealed class SceneManageTool(EditorProxy editor, ProjectService projects)
         if (!string.IsNullOrEmpty(op.Path)) o.SetProperty("path", WireJson.String(op.Path));
         if (!string.IsNullOrEmpty(op.Template)) o.SetProperty("template", WireJson.String(op.Template));
         if (op.Additive is { } additive) o.SetProperty("additive", WireJson.Bool(additive));
+        if (op.DiscardUnsaved is { } discardUnsaved) o.SetProperty("discardUnsaved", WireJson.Bool(discardUnsaved));
         if (!string.IsNullOrEmpty(op.SourcePath)) o.SetProperty("sourcePath", WireJson.String(op.SourcePath));
         if (!string.IsNullOrEmpty(op.DestPath)) o.SetProperty("destPath", WireJson.String(op.DestPath));
 

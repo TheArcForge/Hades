@@ -82,6 +82,7 @@ namespace Hades.Tools
         {
             var path = JsonParams.RequireString(@params, "path", "scene.open");
             var additive = JsonParams.OptionalBool(@params, "additive", false);
+            var discardUnsaved = JsonParams.OptionalBool(@params, "discardUnsaved", false);
 
             if (AssetDatabase.LoadAssetAtPath<SceneAsset>(path) == null)
             {
@@ -89,11 +90,15 @@ namespace Hades.Tools
                     "Scene not found at '" + path + "'. Use search_by_name to find the correct project-relative path.");
             }
 
-            // Single (not the interactive "prompt to save" the Editor's own File > Open Scene
-            // menu command shows): the scripting API never prompts - it simply discards
-            // unsaved changes in the scene(s) being replaced - so a caller that cares about
-            // those changes must scene_save first. Additive when requested, matching
-            // EditorSceneManager's own two supported open modes.
+            // F6 fix: non-additive open REPLACES every currently loaded scene, and
+            // EditorSceneManager.OpenScene(..., Single) - unlike the interactive File > Open Scene
+            // menu command - never prompts to save first; it simply discards unsaved changes in the
+            // scene(s) being replaced. Refused here instead, naming the dirty scene(s), unless the
+            // caller explicitly passes 'discardUnsaved: true'. Additive open unloads nothing, so
+            // nothing here needs checking - see SceneManagementCommands.RequireNoUnsavedChanges' own
+            // doc comment.
+            if (!additive) SceneManagementCommands.RequireNoUnsavedChanges(discardUnsaved, "scene.open");
+
             var mode = additive ? OpenSceneMode.Additive : OpenSceneMode.Single;
             var scene = EditorSceneManager.OpenScene(path, mode);
 
@@ -103,7 +108,8 @@ namespace Hades.Tools
             return JsonValue.NewObject()
                 .SetProperty("opened", JsonValue.String(path))
                 .SetProperty("mode", JsonValue.String(mode.ToString()))
-                .SetProperty("isLoaded", JsonValue.Bool(scene.isLoaded));
+                .SetProperty("isLoaded", JsonValue.Bool(scene.isLoaded))
+                .SetProperty("activeScene", JsonValue.String(UnityEngine.SceneManagement.SceneManager.GetActiveScene().path));
         }
 
         // ---------------------------------------------------------------- project.recompile_scripts

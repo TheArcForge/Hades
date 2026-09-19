@@ -11,10 +11,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **`play_mode`.** Enter, exit, pause, resume, and single-step Unity Play Mode from the agent, with
   live `status`. Console output from the game keeps flowing to `project_get_console_log` across a
   play-mode entry, and mutating tools are refused while playing rather than left to fail unclearly.
-- **`project_build`.** Kick off a Player build for the Editor's active build target (or a Build
-  Profile), then poll `status` while it runs — including while the Editor is otherwise pinned by the
-  build itself — and list installed `targets`. Reports build errors, warnings, and duration; refuses
-  a cross-target build outright rather than risk a bad reimport.
 - **`scriptable_object_apply`.** Create ScriptableObject assets and set their serialized properties
   in a batch, alongside the existing asset-authoring tools.
 - **`capture_view`.** Render an image of the current `scene`, `game`, or a `prefab` in isolation
@@ -28,6 +24,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Deeper animation authoring.** `animation_apply`/`inspect_asset` cover more of the Animator
   surface — describing existing clips and controllers in more detail, building blend trees, and
   authoring new clips and curves — beyond the property-level access that shipped before.
+
+### Changed
+
+- **`scene_manage` no longer discards unsaved work silently.** A non-additive `open`, and `create`,
+  now refuse while any loaded scene has unsaved changes, naming the scene; save first or pass
+  `discardUnsaved: true`. `create` now opens the scene it creates (previously later edits went to
+  whichever scene was already open), and both report the resulting `activeScene`.
+
+### Fixed
+
+- **A missing required field in a tool call now says which one.** Previously a nested object missing
+  a required field (for example an animation event without `function`) failed with a bare "An error
+  occurred"; the error now names the tool, the path, the missing field, and the valid fields there.
 
 ## [2.1.0] — Windows Support — 2026-09-06
 
