@@ -1,6 +1,6 @@
 # Hades — Agent Guidelines
 
-This is a Unity project with Hades installed. You have 32 MCP tools that give you deep structural understanding of the project — a knowledge graph of every scene, prefab, script, asset, and their dependencies. Use them.
+This is a Unity project with Hades installed. You have 33 MCP tools that give you deep structural understanding of the project — a knowledge graph of every scene, prefab, script, asset, and their dependencies. Use them.
 
 ## Core principle: structural context first
 

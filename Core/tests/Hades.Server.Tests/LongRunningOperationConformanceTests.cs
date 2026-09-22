@@ -7,15 +7,14 @@ namespace Hades.Server.Tests;
 /// <summary>
 /// DESIGN-08 (docs/design/DESIGN-08-long-running-operations.md) §14 Tier 1 - "convention
 /// conformance... written once" across every shipped long-running operation, rather than
-/// duplicated per design. Phase 3 integration (ROADMAP.md Phase 3 item 2) is what assembles this:
-/// every per-lane test file already proves ITS OWN operation's state machine in detail
-/// (SceneBakeTests.cs/PlayModeToolTests.cs on this side; SceneBakeCommandsTests.cs/
-/// PlayModeCommandsTests.cs on the plugin side) - this file does not
-/// re-derive any of that. It covers the two cross-operation Tier-1 conventions that belong on the
+/// duplicated per design. Phase 3 integration (ROADMAP.md Phase 3 item 2) is what assembles this.
+/// It covers the two cross-operation Tier-1 conventions that belong on the
 /// Core side: the status vocabulary (§5) and O6 (status never reads <see cref="OperationRegistry"/>).
-/// The other two Tier-1 conventions (O4, O5) belong to the plugin side, where each operation's
-/// actual reconciliation/precondition logic lives - see
-/// UnityPlugin/Tests/Editor/LongRunningOperationConformanceTests.cs.
+/// The other two Tier-1 conventions (O4, O5) belonged to the plugin side, where each operation's
+/// actual reconciliation/precondition logic lived - the play-mode-control and scene-baking tools,
+/// the two operations that exercised them there, were both removed (Unity's own CLI/pipeline covers
+/// these Editor actions now), so UnityPlugin/Tests/Editor/LongRunningOperationConformanceTests.cs
+/// went with them.
 /// </summary>
 public sealed class LongRunningOperationConformanceTests
 {
@@ -31,13 +30,6 @@ public sealed class LongRunningOperationConformanceTests
         "unavailable", "abandoned",
     };
 
-    /// <summary>Every status string <see cref="SceneBakeResult.Status"/> is documented to return
-    /// (SceneBakeTool.cs's own doc comment on that property) - 'started' excluded per DESIGN-06
-    /// §4.2's "drop started" (adopted set-wide, ROADMAP.md's ground rules): the plugin never
-    /// actually sends it, only the doc comment still lists it as the pre-revision vocabulary.</summary>
-    static readonly string[] BakeVocabulary =
-        { "running", "complete", "cancelled", "failed", "indeterminate", "unavailable", "none", "unknown" };
-
     /// <summary>Every status string project_get_test_results' <c>TestResultsResult.Status</c> is
     /// documented to return (EditorProjectTools.cs's own doc comment on that record). Deliberately
     /// does NOT include 'started' - project_run_tests' own immediate response documents
@@ -50,7 +42,6 @@ public sealed class LongRunningOperationConformanceTests
 
     public static IEnumerable<object[]> OperationVocabularies()
     {
-        yield return new object[] { "scene_bake", BakeVocabulary, Array.Empty<string>() };
         yield return new object[] { "project_get_test_results", TestResultsVocabulary, Array.Empty<string>() };
     }
 
@@ -102,14 +93,14 @@ public sealed class LongRunningOperationConformanceTests
     [Fact]
     public void O6_NoMcpToolClass_EverCallsOperationRegistryGet()
     {
-        var mcpAssembly = typeof(SceneBakeTool).Assembly;
+        var mcpAssembly = typeof(MemoryTools).Assembly;
         var toolTypes = mcpAssembly.GetTypes()
             .Where(t => t.GetCustomAttributes(typeof(McpServerToolTypeAttribute), false).Length > 0)
             .ToList();
 
         // Sanity: the attribute scan itself must find real types, or every assertion below would
         // trivially (and uselessly) pass over an empty set.
-        Assert.True(toolTypes.Count >= 19, $"Expected at least 19 [McpServerToolType] classes (Program.cs registers 20 today); found {toolTypes.Count}. The reflection scan itself may be broken.");
+        Assert.True(toolTypes.Count >= 16, $"Expected at least 16 [McpServerToolType] classes (Program.cs registers 17 today); found {toolTypes.Count}. The reflection scan itself may be broken.");
 
         var typesHoldingTheRegistry = toolTypes
             .Where(t => t.GetConstructors()

@@ -62,20 +62,23 @@ public sealed record ProjectSummary
 
     /// <summary>
     /// DESIGN-06 §6.1 (Layer 1 - static, offline, no Editor required): which Editor-only
-    /// capabilities (bake targets today) this project's installed packages make reachable, resolved
-    /// from <c>Packages/manifest.json</c>/<c>packages-lock.json</c> alone - the SAME resolver
+    /// capabilities this project's installed packages make reachable, resolved from
+    /// <c>Packages/manifest.json</c>/<c>packages-lock.json</c> alone - the SAME resolver
     /// <see cref="AppliedDefines"/> already reuses for versionDefines (<see cref="Projects.ProjectDefines.ReadInstalledPackageVersions"/>).
     /// A declaration, not proof the assembly loaded - <see cref="CharonStatus.Capabilities"/>
     /// (Layer 2, live and authoritative) is the one to trust once an Editor is attached; this layer
-    /// answers the same question with no Editor at all.
+    /// answers the same question with no Editor at all. Always empty today - the one capability set
+    /// this ever reported (the bake targets DESIGN-06 introduced) was retired along with scene_bake;
+    /// kept as a declared, always-empty field rather than removed outright, since a future
+    /// capability-gated tool would reuse this exact mechanism rather than reinvent it.
     /// </summary>
     public required IReadOnlyList<CapabilityInfo> Capabilities { get; init; }
 }
 
 /// <summary>One Editor-only capability's availability - shared shape for
 /// <see cref="ProjectSummary.Capabilities"/> (Layer 1, package-manifest-derived) and
-/// <see cref="CharonStatus.Capabilities"/> (Layer 2, live-Editor-derived, hello-sourced). DESIGN-06
-/// §6: ids are "bake.lighting" / "bake.occlusion" / "bake.navmesh" today.</summary>
+/// <see cref="CharonStatus.Capabilities"/> (Layer 2, live-Editor-derived, hello-sourced). No IDs are
+/// currently defined - see <see cref="ProjectSummary.Capabilities"/>'s own doc comment.</summary>
 public sealed record CapabilityInfo
 {
     public required string Id { get; init; }
@@ -1012,32 +1015,9 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
             // need caching alongside the indexed graph.
             AppliedDefines = ProjectDefines.Resolve(project.Path).Symbols,
 
-            Capabilities = ResolveCapabilities(project.Path),
-        };
-    }
-
-    /// <summary>DESIGN-06 §6.1 (Layer 1). "bake.lighting"/"bake.occlusion" are built into
-    /// UnityEditor - always available, no package to check. "bake.navmesh" needs
-    /// com.unity.ai.navigation, declared in either manifest.json or packages-lock.json (see
-    /// <see cref="Projects.ProjectDefines.ReadInstalledPackageVersions"/>'s own doc comment for why
-    /// both are read).</summary>
-    static IReadOnlyList<CapabilityInfo> ResolveCapabilities(string projectRoot)
-    {
-        var installed = ProjectDefines.ReadInstalledPackageVersions(projectRoot);
-        var hasNavigation = installed.ContainsKey("com.unity.ai.navigation");
-
-        return new[]
-        {
-            new CapabilityInfo { Id = "bake.lighting", Available = true },
-            new CapabilityInfo { Id = "bake.occlusion", Available = true },
-            new CapabilityInfo
-            {
-                Id = "bake.navmesh",
-                Available = hasNavigation,
-                Reason = hasNavigation ? null
-                    : "com.unity.ai.navigation is not in Packages/manifest.json or packages-lock.json. "
-                    + "Install 'AI Navigation' via Package Manager, or use the built-in NavMesh workflow.",
-            },
+            // No capability IDs are currently defined - see ProjectSummary.Capabilities' own doc
+            // comment (the bake-target set DESIGN-06 introduced was retired along with scene_bake).
+            Capabilities = [],
         };
     }
 

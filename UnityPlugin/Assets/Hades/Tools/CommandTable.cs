@@ -143,37 +143,15 @@ namespace Hades.Tools
             ["project.get_console_log"] = ProjectCommands.GetConsoleLog,
             ["project.get_test_results"] = ProjectCommands.GetTestResults,
             ["inspector.inspect"] = InspectorCommands.InspectGameObject,
-
-            // DESIGN-02 (capture_view). Slice 1 only (view: "game"/"scene" - "prefab" refuses with
-            // an actionable NotSupportedException; see CaptureCommands' own class doc comment for
-            // the cut). No lease, for the same reason as every other class-4 entry above: the
-            // rendered bytes exist only for the instant of this call, so there is nothing a domain
-            // reload could interrupt mid-flight. Already allow-listed on AllowedWhilePlaying below
-            // (seeded by Lane B before this handler existed - see that dictionary's own doc comment).
-            ["capture.view"] = CaptureCommands.CaptureView,
-
-            // DESIGN-01 (play_mode). 'play.enter' is class 2 (bounded LeaseScope.Run prep, see
-            // PlayModeCommands.Enter's own doc comment); 'play.exit'/'play.set_paused'/'play.step'
-            // are single-tick with no lease; 'play.status' is class 4 (live-state read). See
-            // PlayModeCommands.cs's own class doc comment for the full picture.
-            ["play.enter"] = PlayModeCommands.Enter,
-            ["play.exit"] = PlayModeCommands.Exit,
-            ["play.set_paused"] = PlayModeCommands.SetPaused,
-            ["play.step"] = PlayModeCommands.Step,
-            ["play.status"] = PlayModeCommands.Status,
-
-            // DESIGN-06 (scene_bake). One wire method, three actions (start|status|cancel) - see
-            // SceneBakeCommands.cs's own class doc comment. 'start'/'cancel' are class 2 (bounded
-            // LeaseScope.Run prep); 'status' is class 4 (live-state read). Guard entries already
-            // exist in AllowedWhilePlaying above, seeded by Lane B before this handler existed.
-            ["scene.bake"] = SceneBakeCommands.Bake,
         };
 
         /// <summary>
-        /// DESIGN-01 §6.2's mutation guard, keyed "method" or "method:action" (DESIGN-08 §7.2's
-        /// action-keyed single-op shape - a command with a top-level 'action' JSON param, e.g. the
-        /// not-yet-built 'scene.bake', is looked up as "scene.bake:start" first, falling back to the
-        /// bare method so every existing, action-less entry is unaffected).
+        /// DESIGN-01 §6.2's mutation guard - refuses every mutating command while this Editor is in
+        /// Play Mode (entered by the user pressing Play; Hades has no tool of its own that enters or
+        /// exits it). Keyed "method" or "method:action" (DESIGN-08 §7.2's action-keyed single-op
+        /// shape - a command with a top-level 'action' JSON param is looked up as "method:action"
+        /// first, falling back to the bare method so every existing, action-less entry is
+        /// unaffected).
         ///
         /// A <see cref="Dictionary{TKey,TValue}"/> rather than a <see cref="HashSet{T}"/>
         /// (DESIGN-08 §7.1's recommendation): present-with-null means "permitted, the generic guard
@@ -187,23 +165,10 @@ namespace Hades.Tools
         /// exits (scene changes are discarded, asset-file writes persist - a split invisible in every
         /// result, which is why a uniform refusal is the only safe rule) - it turns only on what the
         /// command DOES, which is knowable by inspection.
-        ///
-        /// 'capture.view' is owned by DESIGN-02, not created here - permitted anyway, because the
-        /// decision ("is this permitted while playing") belongs to this guard regardless of which
-        /// design creates the command. Harmless if DESIGN-02 has not shipped: this dictionary is only
-        /// consulted after a successful <see cref="Handlers"/> lookup, so an allow-listed name with no
-        /// registered handler is unreachable and costs nothing but a string (DESIGN-01 §6.2's
-        /// "cross-document dependency" note). scene.bake's two "not yet built" entries below are the
-        /// same story, for DESIGN-06 (Lane G).
         /// </summary>
         public static readonly Dictionary<string, string> AllowedWhilePlaying = new Dictionary<string, string>
         {
             // Permitted - each one releases, reads, or recovers (see the generating rule above).
-            ["play.enter"] = null,
-            ["play.exit"] = null,
-            ["play.set_paused"] = null,
-            ["play.step"] = null,
-            ["play.status"] = null,
             ["lease.renew"] = null,
             ["lease.release"] = null,
             ["project.end_script_editing"] = null,
@@ -211,19 +176,12 @@ namespace Hades.Tools
             ["inspector.select"] = null,
             ["project.get_console_log"] = null,
             ["project.get_test_results"] = null,
-            ["capture.view"] = null, // DESIGN-02 - see this dictionary's own doc comment
 
             // Explicit refuse (DESIGN-08 §7.3) - present so the play-mode interaction is a stated
             // decision, not an oversight the guard's own default-deny happened to cover by silence.
-            // Functionally identical to being absent; each carries a message more specific than the
+            // Functionally identical to being absent; carries a message more specific than the
             // generic one CommandTable.Dispatch falls back to.
-            ["project.run_tests"] = PlayModeCommands.RunTestsRefusedWhilePlayingMessage,
-            ["scene.bake:start"] = PlayModeCommands.BakeStartRefusedWhilePlayingMessage,
-
-            // Allow entry for a command DESIGN-06 (Lane G) has not built yet - see this
-            // dictionary's own doc comment for why this is safe.
-            ["scene.bake:status"] = null,
-            ["scene.bake:cancel"] = null,
+            ["project.run_tests"] = RunTestsRefusedWhilePlayingMessage,
 
             // DESIGN-04 (Lane D): 'scriptableObject.apply' and 'asset.manage' are DELIBERATELY ABSENT
             // from this dictionary - both are refused while playing, registered by absence, per
@@ -237,6 +195,21 @@ namespace Hades.Tools
             // full reasoning and for 'setProperties' as a stated future allow-list candidate once the
             // live-reference question is answered.
         };
+
+        /// <summary>DESIGN-08 §7.3: stated as an explicit refuse (present in the guard's dictionary,
+        /// not merely absent from it) so the play-mode x test-run interaction is a decision, not an
+        /// oversight.</summary>
+        // NOTE: deliberately does not spell out the wire method name ("project.run_tests") or the
+        // MCP tool name ("project_run_tests") in this text - either would introduce an
+        // underscore-joined, tool-name-SHAPED token (e.g. "run_tests") that
+        // LiveMcpToolNames.AssertMessageNamesOnlyLiveTools' scan would flag as looking like an MCP
+        // tool name that is not one. Referring to the action in prose instead sidesteps that
+        // entirely.
+        public const string RunTestsRefusedWhilePlayingMessage =
+            "Hades refuses starting a new Unity Test Runner run while this Editor is in Play Mode - "
+            + "an EditMode run would itself trigger a domain reload that ends this play session, and "
+            + "a PlayMode run cannot start inside an already-running Play Mode. Exit Play Mode in the "
+            + "Editor first, then retry.";
 
         /// <summary>
         /// Task 7's Defect 3: exactly the Class 1 (single-tick mutation) keys from
@@ -352,15 +325,28 @@ namespace Hades.Tools
         /// <see cref="AllowedWhilePlaying"/> at all. States the split (scene changes are discarded on
         /// exit, asset-file writes persist) rather than picking one side of it for THIS specific
         /// <paramref name="method"/> - a claim resolved one way would be wrong for the majority of the
-        /// commands this message can be thrown for. Names exactly one tool-name-shaped token,
-        /// 'play_mode', which is live (LiveMcpToolNames.Names) and whose 'exit' action reaches
-        /// 'play.exit', itself on <see cref="AllowedWhilePlaying"/> - so the recovery this message
-        /// advertises is always callable from the state it is thrown in.</summary>
+        /// commands this message can be thrown for. Names no tool-name-shaped token at all: Hades has
+        /// no tool that enters or exits Play Mode (removed - Unity's own CLI/pipeline covers this
+        /// Editor action), so the only recovery is the user pressing Stop in the Editor
+        /// itself.</summary>
         public static string GenericPlayModeRefusal(string method) =>
             "'" + method + "' changes project state, and this Unity Editor is in Play Mode. Hades "
             + "refuses project mutations while playing: a scene change made now would be discarded "
             + "when Play Mode exits, while an asset-file write would persist - and the result would "
-            + "look the same either way. Call play_mode with action 'exit' first, then retry.";
+            + "look the same either way. Exit Play Mode in the Editor (press Stop) first, then retry.";
+
+        /// <summary>The seam <see cref="Dispatch"/> checks to decide whether the play-mode guard
+        /// applies at all - DESIGN-01 §6.1: not a testing nicety, the ONLY way this is testable at
+        /// all (a Unity EditMode test cannot enter Play Mode from inside itself). Same swappable
+        /// public-static-field convention as ProjectCommands.TriggerRecompile/RefreshAssets -
+        /// a test reassigning it MUST restore it in TearDown. Trimmed to just this one member now
+        /// that play_mode itself (which used to own the rest of this seam - Enter/Exit/SetPaused/
+        /// StepFrame/IsPaused/PlayClock/ScheduleAfterThisTick) is gone; the guard only ever needs to
+        /// know WHETHER this Editor is playing, never to drive Play Mode itself.</summary>
+        public static class EditorPlayModeApi
+        {
+            public static Func<bool> IsPlaying = () => EditorApplication.isPlaying;
+        }
 
         // ---------------------------------------------------------------- assets.refresh
 

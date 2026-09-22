@@ -272,7 +272,7 @@ The normal way to install it, in a `claude` session:
 /plugin marketplace add TheArcForge/hades-plugin
 ```
 
-then `/plugin install hades`. Run `/mcp` afterwards and confirm `hades` reports **32 tools** — if
+then `/plugin install hades`. Run `/mcp` afterwards and confirm `hades` reports **33 tools** — if
 it reports closer to 90, you have the retired v1.2 plugin; see "Confirm you're testing the new
 Hades" below.
 
@@ -323,7 +323,7 @@ Check both:
 
 1. **Tool count.** In Claude Code, run `/mcp`. Find `hades` in the list — it shows a tool
    count next to each server.
-   - **New app: 32 tools.** (counted directly from `[McpServerTool]` attributes in
+   - **New app: 33 tools.** (counted directly from `[McpServerTool]` attributes in
      `Core/src/Hades.Server/Mcp/*.cs` — also stated in `ReleasePipeline.md` §6.9 and the
      ~90→32 consolidation noted in `docs/backlog/mutation-tool-defects.md`)
    - **Old v1.2 package: ~90 tools.** (counted directly from `[MCPTool]` attributes in

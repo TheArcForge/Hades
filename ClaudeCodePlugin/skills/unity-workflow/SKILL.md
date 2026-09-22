@@ -88,11 +88,6 @@ Execute the approved design.
 
 These skills provide efficient tool sequences and ordering for their respective workflows. Load them when the relevant work begins.
 
-**Running and observing during implementation:**
-- `play_mode` enters/exits/pauses/steps Play Mode for exploratory running — author a change, run it, observe, without a full test suite. Poll `action: 'status'` rather than assuming a transition already finished; every mutating Hades tool is refused while playing.
-- `capture_view` renders the current `scene`/`game` view when a description of the hierarchy isn't enough to confirm something looks right.
-- `scene_bake` starts/polls/cancels a lighting, occlusion, or NavMesh bake when the work requires one (e.g. a new static environment piece, a new NavMeshSurface).
-
 **Unity 6+ conventions:**
 - Use `Awaitable.MainThreadAsync()` to marshal async work back to the main thread.
 - Prefer `Physics.RaycastNonAlloc` over `RaycastAll` for hot paths.
@@ -113,10 +108,6 @@ After implementation, confirm the work is correct before reporting completion.
 ```
 find_references_to("<modified_script>")   — confirm no unexpected dependents are broken
 ```
-
-**Runtime/visual verification, when static checks aren't enough:**
-- `play_mode` to actually run the change and observe it, rather than reasoning about it from source alone.
-- `capture_view` to see the current scene/game view directly.
 
 **Memory update:**
 - If the feature established a new convention or pattern, record it:
@@ -144,4 +135,4 @@ propose_memory_update("<domain>", "<what was decided and why>")
 
 **Skills:** `hades:unity-architect` — architecture decision frameworks. `hades:scene-authoring` — scene construction workflows. `hades:prefab-workflow` — prefab creation and editing. `hades:animation-workflow` — animation controller setup. `hades:unity-reviewer` — code review for Unity anti-patterns.
 
-**Hades MCP Tools:** `get_project_summary`, `get_scene_summary`, `search_by_name` (namePattern substring + optional declaration `kind` filter — no path or exact-match option), `find_references_to` (asset + C# code references), `trace_dependencies`, `recall_memory`, `propose_memory_update`, `graph_query`, `project_get_console_log`, `project_run_tests`, `script_editing_session` (action: `begin`/`end`), `play_mode` (exploratory Play Mode running: enter/exit/pause/resume/step/status), `capture_view` (render the scene/game view), `scriptable_object_apply` (create/configure ScriptableObject asset instances), `scene_bake` (lighting/occlusion/NavMesh baking).
+**Hades MCP Tools:** `get_project_summary`, `get_scene_summary`, `search_by_name` (namePattern substring + optional declaration `kind` filter — no path or exact-match option), `find_references_to` (asset + C# code references), `trace_dependencies`, `recall_memory`, `propose_memory_update`, `graph_query`, `project_get_console_log`, `project_run_tests`, `script_editing_session` (action: `begin`/`end`), `scriptable_object_apply` (create/configure ScriptableObject asset instances).

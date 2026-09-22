@@ -136,9 +136,6 @@ builder.Services
     .WithTools<EditorInspectorTools>()
     .WithTools<PrefabApplyTool>()
     .WithTools<EditorProjectTools>()
-    .WithTools<PlayModeTool>()
-    .WithTools<CaptureViewTool>()
-    .WithTools<SceneBakeTool>()
     .WithTools<MemoryTools>();
 
 // Tool-call tracing: every call to a registered tool passes through this filter, success or

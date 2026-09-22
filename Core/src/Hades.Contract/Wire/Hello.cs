@@ -21,21 +21,22 @@ namespace Hades.Contract.Wire
         public string? PluginVersion { get; set; }
         public long ProcessId { get; set; }
 
-        /// <summary>DESIGN-06 §6.2 Layer 2: which Editor-only capabilities (bake targets today - see
-        /// Hades.Tools.CapabilityProbe on the plugin side) this attached Editor's AppDomain can
-        /// actually reach, computed once at boot and sent with every handshake so
+        /// <summary>DESIGN-06 §6.2 Layer 2: which Editor-only capabilities this attached Editor's
+        /// AppDomain can actually reach, computed once at boot and sent with every handshake so
         /// hades_charon_status can serve it with zero round trips, including while the Editor is
         /// busy. <b>OPTIONAL - <see cref="TryParse(JsonValue?,out Hello?,out string?)"/> must never
         /// require this field.</b> Defaults to an empty list, both here and on parse, so a plugin
         /// built before this field existed still hands back a Hello TryParse accepts in full -
         /// plugin/app version skew is a supported state (see <see cref="CharonStatus.PluginVersionOnDisk"/>'s
-        /// own doc comment on the app side for the general policy this follows).</summary>
+        /// own doc comment on the app side for the general policy this follows). No capability IDs
+        /// are currently defined - the bake-target set DESIGN-06 introduced was retired along with
+        /// scene_bake; always sent as an empty list today.</summary>
         public List<Capability> Capabilities { get; set; } = new List<Capability>();
 
-        /// <summary>One entry of <see cref="Capabilities"/>: an id ("bake.lighting", "bake.occlusion",
-        /// "bake.navmesh"), whether it is available in this AppDomain right now, and - only when
-        /// unavailable - one actionable sentence naming why (DESIGN-06 §6.3's error-message layer,
-        /// reused here as the discovery layer's own detail rather than a second wording).</summary>
+        /// <summary>One entry of <see cref="Capabilities"/>: an id, whether it is available in this
+        /// AppDomain right now, and - only when unavailable - one actionable sentence naming why
+        /// (DESIGN-06 §6.3's error-message layer, reused here as the discovery layer's own detail
+        /// rather than a second wording).</summary>
         public sealed class Capability
         {
             public string? Id { get; set; }

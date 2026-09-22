@@ -81,11 +81,12 @@ public sealed record CharonStatusResult
 
     [JsonPropertyName("detail")] public required string Detail { get; init; }
 
-    /// <summary>DESIGN-06 §6.2 (Layer 2): which Editor-only capabilities (bake targets today) this
-    /// attached Editor's AppDomain can actually reach - hello-derived, so populated whenever
-    /// <see cref="Attached"/> is true (including while <see cref="Busy"/>), with NO extra wire round
-    /// trip. Empty while not attached - see get_project_summary's own 'capabilities' (Layer 1) for
-    /// the offline, package-manifest-derived answer to the same question.</summary>
+    /// <summary>DESIGN-06 §6.2 (Layer 2): which Editor-only capabilities this attached Editor's
+    /// AppDomain can actually reach - hello-derived, so populated whenever <see cref="Attached"/> is
+    /// true (including while <see cref="Busy"/>), with NO extra wire round trip. Empty while not
+    /// attached - see get_project_summary's own 'capabilities' (Layer 1) for the offline,
+    /// package-manifest-derived answer to the same question. Always empty today - see
+    /// ProjectSummary.Capabilities' own doc comment.</summary>
     [JsonPropertyName("capabilities")] public required IReadOnlyList<CapabilityResult> Capabilities { get; init; }
 }
 

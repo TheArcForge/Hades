@@ -8,16 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
-- **`play_mode`.** Enter, exit, pause, resume, and single-step Unity Play Mode from the agent, with
-  live `status`. Console output from the game keeps flowing to `project_get_console_log` across a
-  play-mode entry, and mutating tools are refused while playing rather than left to fail unclearly.
 - **`scriptable_object_apply`.** Create ScriptableObject assets and set their serialized properties
   in a batch, alongside the existing asset-authoring tools.
-- **`capture_view`.** Render an image of the current `scene`, `game`, or a `prefab` in isolation
-  straight from the attached Unity Editor, so the agent can see what it just built instead of only
-  reading state about it.
-- **`scene_bake`.** Start, poll, and cancel a lighting, occlusion, or navmesh bake, with status that
-  survives a script-recompile domain reload.
 - **Binary asset introspection.** `inspect_asset` can now read structural details out of common
   binary asset formats (textures, sprites, and more) without a Unity Editor attached, and
   `graph_query` gained filters over the richer per-asset data this makes available.

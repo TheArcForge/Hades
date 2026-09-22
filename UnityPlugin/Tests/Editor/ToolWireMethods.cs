@@ -23,7 +23,6 @@ namespace Hades.Tests.Editor
         public static readonly Dictionary<string, string[]> ByTool = new Dictionary<string, string[]>
         {
             ["script_editing_session"] = new[] { "project.begin_script_editing", "project.end_script_editing" },
-            ["play_mode"] = new[] { "play.enter", "play.exit", "play.set_paused", "play.step", "play.status" },
         };
     }
 
