@@ -105,13 +105,13 @@ public class MemoryToolsTests : IClassFixture<WebApplicationFactory<Program>>, I
     }
 
     [Fact]
-    public async Task GetMemorySummary_IsAdvertisedAsReadOnlyWithASchema()
+    public async Task GetMemorySummary_IsAdvertisedAsReadOnlyWithoutOutputSchema()
     {
         var tool = Assert.Single((await McpTestClient.ListTools(_factory))
             .GetProperty("result").GetProperty("tools").EnumerateArray(),
             t => t.GetProperty("name").GetString() == "get_memory_summary");
 
-        Assert.True(tool.TryGetProperty("outputSchema", out _));
+        Assert.False(tool.TryGetProperty("outputSchema", out _));
         Assert.True(tool.GetProperty("annotations").GetProperty("readOnlyHint").GetBoolean());
     }
 
@@ -220,13 +220,13 @@ public class MemoryToolsTests : IClassFixture<WebApplicationFactory<Program>>, I
     }
 
     [Fact]
-    public async Task RecallMemory_IsAdvertisedAsReadOnlyWithASchema()
+    public async Task RecallMemory_IsAdvertisedAsReadOnlyWithoutOutputSchema()
     {
         var tool = Assert.Single((await McpTestClient.ListTools(_factory))
             .GetProperty("result").GetProperty("tools").EnumerateArray(),
             t => t.GetProperty("name").GetString() == "recall_memory");
 
-        Assert.True(tool.TryGetProperty("outputSchema", out _));
+        Assert.False(tool.TryGetProperty("outputSchema", out _));
         Assert.True(tool.GetProperty("annotations").GetProperty("readOnlyHint").GetBoolean());
     }
 
@@ -434,13 +434,13 @@ public class MemoryToolsTests : IClassFixture<WebApplicationFactory<Program>>, I
     }
 
     [Fact]
-    public async Task ValidateMemory_IsAdvertisedAsReadOnlyWithASchema()
+    public async Task ValidateMemory_IsAdvertisedAsReadOnlyWithoutOutputSchema()
     {
         var tool = Assert.Single((await McpTestClient.ListTools(_factory))
             .GetProperty("result").GetProperty("tools").EnumerateArray(),
             t => t.GetProperty("name").GetString() == "validate_memory");
 
-        Assert.True(tool.TryGetProperty("outputSchema", out _));
+        Assert.False(tool.TryGetProperty("outputSchema", out _));
         Assert.True(tool.GetProperty("annotations").GetProperty("readOnlyHint").GetBoolean());
     }
 

@@ -99,46 +99,20 @@ public sealed class ScriptableObjectApplyTool(EditorProxy editor, ProjectService
     static readonly string[] ValidOps = ["create", "setProperties"];
 
     [McpServerTool(Name = "scriptable_object_apply", Title = "Apply ScriptableObject Operations (Batch)", ReadOnly = false, UseStructuredContent = true)]
-    [Description("Applies a batch of ScriptableObject asset operations - create(path, type), "
-               + "setProperties(path, values) - in ONE call, in the order given. 'path' is the ONE "
-               + "field name for the .asset every op acts on - its new file for create, its existing "
-               + "file for setProperties. create's 'type' is the ScriptableObject-derived class to "
-               + "instantiate: a short name ('ItemConfig') or namespace-qualified ('Game.Items."
-               + "ItemConfig') - namespace-qualified is REQUIRED when the short name matches more "
-               + "than one type across loaded assemblies, which create refuses rather than guessing, "
-               + "listing every match. If the type is not found at all, the most likely cause is that "
-               + "you just wrote or edited the script that defines it and the Editor has not compiled "
-               + "it yet - call project_recompile_scripts, poll hades_charon_status until it reports "
-               + "attached, then retry. [CreateAssetMenu] is ignored entirely - not consulted for "
-               + "gating, defaults, or validation. setProperties' 'values' is {fieldName: value}, the "
-               + "same grammar scene_apply's setProperties uses; object-reference fields resolve by "
-               + "asset path, including an asset created EARLIER IN THE SAME BATCH - so 'create A', "
-               + "'create B', 'setProperties B {ref: A}' resolves in one call. "
-               + "UNDO: the whole batch is ONE Unity Undo group - a single Ctrl/Cmd+Z reverts every "
-               + "setProperties field change AND destroys the in-memory objects create made in this "
-               + "batch, BUT THE .asset FILES create WROTE STAY ON DISK - remove them with "
-               + "asset_manage's delete op to finish undoing a create. A partial failure followed by "
-               + "re-running the identical batch will fail at create with 'already exists', because "
-               + "the file from the first attempt is still there; drop the create op and re-run "
-               + "setProperties alone, or delete the asset first and start over. "
-               + "The resulting asset's graph Kind is 'MonoBehaviour' (a ScriptableObject .asset is a "
-               + "!u!114 document, not a distinct graph kind) - find it with "
-               + "graph_query(fileType: \"ScriptableObject\") or search_by_name, never "
-               + "graph_query(kind: \"ScriptableObject\"). "
-               + "PARTIAL FAILURE, NOT ROLLED BACK: each operation's outcome is reported by its "
-               + "0-based index in 'applied' (succeeded) or 'failed' (with its own error) - operations "
-               + "that already succeeded are never undone because a LATER one failed. Every successful "
-               + "operation's own result (create's 'type'/'assembly'/'guid', setProperties' per-field "
-               + "'applied'/'failed') is reported in 'results' alongside 'applied'. An unrecognised "
-               + "'op' value rejects the WHOLE call before anything is sent to the Editor, listing the "
-               + "valid ops. Refused while the Editor is in Play Mode. Needs a live Editor - call "
-               + "hades_charon_status first if unsure.")]
+    [Description("Applies a batch of ScriptableObject asset operations in one call, as ONE Undo "
+               + "group: create(path, type), setProperties(path, values). 'type' is the class "
+               + "name, short or namespace-qualified (required if ambiguous). 'values' is "
+               + "{fieldName: value}; references resolve by asset path, including one created "
+               + "earlier in the batch. Undo destroys create's in-memory objects but leaves its "
+               + ".asset FILE on disk - use asset_manage's delete to finish undoing. Graph Kind is "
+               + "'MonoBehaviour', not 'ScriptableObject' - find via graph_query(fileType: "
+               + "\"ScriptableObject\") or search_by_name. Refused in Play Mode.")]
     public async Task<ScriptableObjectApplyResult> ScriptableObjectApply(
-        [Description("Operations to apply, in order. Each needs 'op' plus that op's own fields: "
+        [Description("Per-op fields (each op also needs 'op'): "
                    + "create{path,type}, setProperties{path,values}. 'path' always names the "
                    + ".asset the op is about.")]
         IReadOnlyList<ScriptableObjectApplyOperation> operations,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (operations is null || operations.Count == 0)

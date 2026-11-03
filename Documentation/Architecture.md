@@ -653,7 +653,7 @@ rules out project-local leftovers; it says nothing about the rest of the machine
 ## 8. Distribution
 
 Three install units, each with one job: **the app** (a DMG on macOS, an MSI on Windows — core +
-shell either way), the **Claude Code plugin** (`hades@arcforge` — 22 skills under `skills/`, 6
+shell either way), the **Claude Code plugin** (`hades@arcforge` — 23 skills under `skills/`, 6
 `/hades:*` commands under `commands/`, and the static MCP server declaration), and
 **`Assets/Hades/`** (written by the app itself, per project, optional — §2.3). What is *not* an
 install unit anymore: the UPM package, `Packages/manifest.json`, `.mcp.json`, a `CLAUDE.md` block,

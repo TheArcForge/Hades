@@ -86,7 +86,20 @@ public class TransportConformanceTests : IClassFixture<WebApplicationFactory<Pro
         {
             var name = tool.GetProperty("name").GetString();
             Assert.Equal(JsonValueKind.Object, tool.GetProperty("inputSchema").ValueKind);
-            Assert.True(tool.TryGetProperty("outputSchema", out _), $"{name} lacks outputSchema");
+
+            // outputSchema is OPTIONAL per the MCP spec (results still travel via
+            // CallToolResult.StructuredContent, populated independently — see
+            // McpServerToolCreateOptions.UseStructuredContent's own doc comment) and Program.cs
+            // strips it from every tool's advertised Tool.OutputSchema EXCEPT
+            // project_get_console_log, whose 'totalMatching' pagination signal has nowhere else to
+            // be documented — see EditorProjectToolsTests.
+            // ProjectGetConsoleLog_OutputSchema_DeclaresTotalMatching, which pins that one
+            // exception. Every other tool must NOT advertise one, so a payload-size regression
+            // (the schema silently coming back) is caught here too.
+            if (name == "project_get_console_log")
+                Assert.True(tool.TryGetProperty("outputSchema", out _), $"{name} should still advertise outputSchema");
+            else
+                Assert.False(tool.TryGetProperty("outputSchema", out _), $"{name} should not advertise outputSchema");
 
             // The SDK must advertise a readOnlyHint for every tool — that it does is transport
             // conformance. Which value a given tool gets is a per-tool business decision (most

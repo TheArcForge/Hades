@@ -106,39 +106,19 @@ public sealed class AssetManageTool(EditorProxy editor, ProjectService projects)
     static readonly string[] ValidOps = ["move", "import", "refresh", "delete", "duplicate"];
 
     [McpServerTool(Name = "asset_manage", Title = "Manage Assets (Batch)", ReadOnly = false, UseStructuredContent = true)]
-    [Description("Applies a batch of asset file-lifecycle operations - move(sourcePath, destPath), "
-               + "import(path, forceUpdate?, recursive?), refresh(), delete(path), "
-               + "duplicate(sourcePath, destPath) - in ONE call, in the order given. This is the "
-               + "batch form of asset_move/asset_import/project_refresh_assets, plus two ops with no "
-               + "prior standalone tool. "
-               + "UNDO IS UNEVEN: 'move'/'import'/'refresh'/'delete' have none - an asset's path/"
-               + "import state is not a serialized field Unity's Undo can snapshot, and 'delete' is "
-               + "not undoable via Ctrl/Cmd+Z at all (see below). 'duplicate' DOES register Undo for "
-               + "the new copy (same primitive as material_apply's create/duplicate) - but Ctrl/Cmd+Z "
-               + "only destroys the in-memory object; the copied .asset FILE remains on disk, so "
-               + "finishing that undo needs a 'delete' op on the copy. Do not assume one Ctrl/Cmd+Z "
-               + "reverts this whole batch. "
-               + "DELETE moves the asset to the OS trash/recycle bin, never a permanent delete, so it "
-               + "can be restored outside Hades on macOS/Windows; Linux/headless recoverability is "
-               + "unverified - treat 'delete' as reversible only on a platform you have checked. It "
-               + "refuses folders outright (delete their contents instead) and refuses loudly - landing in 'failed', "
-               + "never reporting success - if the underlying move-to-trash call itself fails (a "
-               + "locked file, a VCS hold, or similar); nothing is deleted in that case. Call "
-               + "find_references_to before deleting an asset other content may reference, and "
-               + "find_unset_references afterward to find the holes a delete left behind. "
-               + "PARTIAL FAILURE, NOT ROLLED BACK: each operation's outcome is reported by its "
-               + "0-based index in 'applied' (succeeded) or 'failed' (with its own error) - "
-               + "operations that already succeeded are never undone because a LATER one failed. "
-               + "Every successful operation's own result is reported in 'results' alongside "
-               + "'applied'. An unrecognised 'op' value rejects the WHOLE call before anything is "
-               + "sent to the Editor, listing the valid ops. Needs a live Editor - call "
-               + "hades_charon_status first if unsure.")]
+    [Description("Applies a batch of asset file-lifecycle operations in one call: move, import, "
+               + "refresh, delete, duplicate. Per-op fields are listed on 'operations'. UNDO IS "
+               + "UNEVEN: move/import/refresh/delete have none; duplicate registers Undo for the "
+               + "new copy, but Ctrl/Cmd+Z only destroys the in-memory object - the copied .asset "
+               + "FILE stays on disk, so finish that undo with a 'delete' op. DELETE moves the "
+               + "asset to the OS trash (not permanent, unverified on Linux/headless); it refuses "
+               + "folders and lands in 'failed', not success, if the trash call itself fails.")]
     public async Task<AssetManageResult> AssetManage(
-        [Description("Operations to apply, in order. Each needs 'op' plus that op's own fields: "
+        [Description("Per-op fields (each op also needs 'op'): "
                    + "move{sourcePath,destPath}, import{path,forceUpdate?,recursive?}, refresh{}, "
                    + "delete{path}, duplicate{sourcePath,destPath}.")]
         IReadOnlyList<AssetManageOperation> operations,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (operations is null || operations.Count == 0)

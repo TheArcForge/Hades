@@ -52,7 +52,7 @@ Sequential steps:
 1. Runs `scripts/sync-plugin.sh` to assemble `ClaudeCodePlugin/` — the current Claude Code
    plugin — into the plugin repo content. No build step: the plugin is a static manifest,
    skills, commands, and an HTTP `.mcp.json`, so there is nothing to compile first.
-2. Validates the output: 22 skills, 6 commands, a valid `plugin.json`, an `.mcp.json` with a
+2. Validates the output: 23 skills, 6 commands, a valid `plugin.json`, an `.mcp.json` with a
    plugin-root HTTP `hades` entry at `http://127.0.0.1:7823/mcp` (no `mcpServers` wrapper), no
    leaked `.meta`/`.cs`/`node_modules`, and no `Bridge~`/`Scanner~` (the retired v1.2 shape).
 3. Clones `TheArcForge/hades-plugin` using the `PLUGIN_REPO_TOKEN` secret.
@@ -74,7 +74,7 @@ Checks:
 - All required files present (plugin.json, .mcp.json, Bridge dist, Scanner source, README, LICENSE, CLAUDE.md).
 - `plugin.json` and `.mcp.json` are valid JSON.
 - `.mcp.json` uses `${CLAUDE_PLUGIN_ROOT}` paths.
-- Exactly 22 skills and 6 commands.
+- Exactly 23 skills and 6 commands.
 - No `.meta`, `.cs`, or `node_modules` leaked in.
 
 Purpose: guard rail against sync bugs or accidental direct edits.

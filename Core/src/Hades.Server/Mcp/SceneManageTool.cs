@@ -109,30 +109,19 @@ public sealed class SceneManageTool(EditorProxy editor, ProjectService projects)
     static readonly string[] ValidOps = ["save", "create", "open", "duplicate"];
 
     [McpServerTool(Name = "scene_manage", Title = "Manage Scenes (Batch)", ReadOnly = false, UseStructuredContent = true)]
-    [Description("Applies a batch of scene file-lifecycle operations - save(path?), "
-               + "create(path, template?, discardUnsaved?), open(path, additive?, discardUnsaved?), "
-               + "duplicate(sourcePath, destPath) - in ONE call, in the order given. This is the "
-               + "batch form of scene_save/scene_create/scene_open/scene_duplicate. "
-               + "IMPORTANT: 'create' OPENS the new scene as the active scene, exactly like a "
-               + "non-additive 'open' would - both REPLACE every currently loaded scene. Both REFUSE "
-               + "if any currently loaded scene has unsaved changes, naming the dirty scene(s) - "
-               + "call a 'save' op first, or pass discardUnsaved:true on that operation to proceed "
-               + "and discard them anyway. Additive 'open' (additive=true) unloads nothing, so it is "
-               + "never refused this way. Both report the active scene's path in their result. "
-               + "UNDO IS UNEVEN: 'create'/'duplicate' register Undo for the new scene asset; 'save' "
-               + "(a pure filesystem write) and 'open' (a live-Editor state change) have none - do "
-               + "not assume one Ctrl/Cmd+Z reverts this whole batch. "
-               + "PARTIAL FAILURE, NOT ROLLED BACK: each operation's outcome is reported by its "
-               + "0-based index in 'applied' (succeeded) or 'failed' (with its own error). "
-               + "An unrecognised 'op' value rejects the WHOLE call before anything is sent to the "
-               + "Editor, listing the valid ops. Needs a live Editor - call hades_charon_status first "
-               + "if unsure.")]
+    [Description("Applies a batch of scene file-lifecycle operations in one call: save, "
+               + "create, open, duplicate. Per-op fields are listed on 'operations'. 'create' OPENS "
+               + "the new scene as the active scene, like a non-additive 'open' - both REPLACE every loaded "
+               + "scene and REFUSE if any has unsaved changes (names the dirty scene, or pass "
+               + "discardUnsaved:true to proceed). Additive open (additive:true) unloads nothing "
+               + "and is never refused this way. UNDO IS UNEVEN: create/duplicate register Undo; "
+               + "save/open do not. Needs a live Editor.")]
     public async Task<SceneManageResult> SceneManage(
-        [Description("Operations to apply, in order. Each needs 'op' plus that op's own fields: "
+        [Description("Per-op fields (each op also needs 'op'): "
                    + "save{path?}, create{path,template?,discardUnsaved?}, "
                    + "open{path,additive?,discardUnsaved?}, duplicate{sourcePath,destPath}.")]
         IReadOnlyList<SceneManageOperation> operations,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (operations is null || operations.Count == 0)

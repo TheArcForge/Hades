@@ -10,9 +10,9 @@ This is the Claude Code plugin half of [**Hades**](https://github.com/TheArcForg
 
 | Component | Count | Description |
 |---|---|---|
-| **Skills** | 22 | Architecture decisions, workflow guidance, domain expertise (networking, audio, UI, shaders, ECS, testing, and more) |
+| **Skills** | 23 | Architecture decisions, workflow guidance, domain expertise (networking, audio, UI, shaders, ECS, testing, and more) |
 | **Commands** | 6 | `/hades:status`, `/hades:rebuild-graph`, `/hades:show-traces`, `/hades:validate-memory`, `/hades:show-proposals`, `/hades:export-traces` |
-| **MCP Server** | 32 tools | Connects Claude Code directly over HTTP to the standalone Hades app (`http://127.0.0.1:7823/mcp`) — no local process for the plugin to manage |
+| **MCP Server** | 33 tools | Connects Claude Code directly over HTTP to the standalone Hades app (`http://127.0.0.1:7823/mcp`) — no local process for the plugin to manage |
 
 ## Prerequisites
 
@@ -31,7 +31,7 @@ This is the Claude Code plugin half of [**Hades**](https://github.com/TheArcForg
 ```
 
 You only do this once — it persists across sessions. Afterwards run `/mcp` and confirm `hades`
-reports **32 tools** over an HTTP URL. If it reports closer to 90, or a `node` command, you have
+reports **33 tools** over an HTTP URL. If it reports closer to 90, or a `node` command, you have
 the retired v1.2 plugin — see "Already have the old plugin?" below.
 
 ### Option B: Per-session, from a clone
@@ -68,7 +68,7 @@ walkthrough.
 3. Start Claude Code: `claude`
 4. Check the connection: `/hades:status`
 
-Skills activate automatically based on context. All 32 MCP tools are available once Hades.app is running; tools that need a live Unity Editor also need the Editor open and the Unity-side integration installed for that project.
+Skills activate automatically based on context. All 33 MCP tools are available once Hades.app is running; tools that need a live Unity Editor also need the Editor open and the Unity-side integration installed for that project.
 
 ## How it connects
 

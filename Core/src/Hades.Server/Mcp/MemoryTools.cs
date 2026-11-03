@@ -77,7 +77,7 @@ public sealed class MemoryTools(ProjectService projects)
                + "would have to interpret. Does not include memory/proposals/ - pending, "
                + "unaccepted suggestions are not part of this overview.")]
     public async Task<MemorySummaryResult> GetMemorySummary(
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
@@ -110,7 +110,7 @@ public sealed class MemoryTools(ProjectService projects)
     public async Task<MemoryRecallResult> RecallMemory(
         [Description("Free-text search query, e.g. \"render pipeline\" - matched as literal words")] string query,
         [Description("Maximum excerpts to return (1-50, default 10)")] int limit = 10,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (string.IsNullOrWhiteSpace(query))
@@ -148,7 +148,7 @@ public sealed class MemoryTools(ProjectService projects)
         [Description("Plain basename of the authored document this proposal is about, e.g. \"patterns.md\" or \"patterns\" (\".md\" is appended automatically when omitted) — not a path, and not empty.")] string targetFile,
         [Description("The proposed markdown text, to be reviewed and (if accepted) merged into targetFile by a human.")] string content,
         [Description("Why this is being proposed - evidence, reasoning, or context for the human reviewer.")] string? rationale = null,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (string.IsNullOrWhiteSpace(targetFile))
@@ -190,7 +190,7 @@ public sealed class MemoryTools(ProjectService projects)
                + "not bare class names or prose mentions." + ToolSupport.SavedStateClause)]
     public async Task<MemoryValidationResult> ValidateMemory(
         [Description("Maximum findings to return (1-500, default 100)")] int limit = 100,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);

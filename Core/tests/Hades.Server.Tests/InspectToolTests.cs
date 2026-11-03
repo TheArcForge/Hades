@@ -1104,10 +1104,10 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
     // ================================================================== inspect_asset: metadata
 
     [Fact]
-    public async Task InspectAsset_IsAdvertisedAsReadOnlyWithASchemaAndTheSavedStateClause()
+    public async Task InspectAsset_IsAdvertisedAsReadOnlyWithoutOutputSchemaAndTheSavedStateClause()
     {
         var tool = await ToolMeta("inspect_asset");
-        Assert.True(tool.TryGetProperty("outputSchema", out _));
+        Assert.False(tool.TryGetProperty("outputSchema", out _));
         Assert.True(tool.GetProperty("annotations").GetProperty("readOnlyHint").GetBoolean());
         Assert.Contains("saved state on disk", tool.GetProperty("description").GetString());
     }
@@ -1232,10 +1232,10 @@ public class InspectToolTests : IClassFixture<WebApplicationFactory<Program>>, I
     // ================================================================== find_unset_references: metadata
 
     [Fact]
-    public async Task FindUnsetReferences_IsAdvertisedAsReadOnlyWithASchemaAndTheSavedStateClause()
+    public async Task FindUnsetReferences_IsAdvertisedAsReadOnlyWithoutOutputSchemaAndTheSavedStateClause()
     {
         var tool = await ToolMeta("find_unset_references");
-        Assert.True(tool.TryGetProperty("outputSchema", out _));
+        Assert.False(tool.TryGetProperty("outputSchema", out _));
         Assert.True(tool.GetProperty("annotations").GetProperty("readOnlyHint").GetBoolean());
         Assert.Contains("saved state on disk", tool.GetProperty("description").GetString());
 

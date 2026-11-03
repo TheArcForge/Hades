@@ -16,9 +16,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **Deeper animation authoring.** `animation_apply`/`inspect_asset` cover more of the Animator
   surface — describing existing clips and controllers in more detail, building blend trees, and
   authoring new clips and curves — beyond the property-level access that shipped before.
+- **A `tool-reference` skill.** The per-tool detail that the `tools/list` descriptions no longer
+  carry — rationale, edge cases, worked `graph_query`/`inspect_asset` patterns, and the batch
+  tools' shared result contract — now lives in a skill an agent loads when it needs it, instead of
+  being paid for on every turn. Brings the plugin to 23 skills.
 
 ### Changed
 
+- **Tool definitions cost less than half what they did.** The `tools/list` payload is sent before
+  the first user message of every session, and at 33 tools it had grown to roughly 101 KB
+  (~27,000 tokens) — past the ~25,000-token budget the tool consolidation was designed around. It
+  now measures 43 KB (~12,000 tokens) for the same 33 tools. Two changes get there: `outputSchema`
+  is no longer advertised — it is optional per the MCP spec, results still arrive as structured
+  content, and it was almost entirely a restatement of what each description and `inputSchema`
+  already say — and the descriptions themselves were cut back to what a caller needs at the call
+  site. `project_get_console_log` keeps its `outputSchema`, the only place its `totalMatching`
+  pagination signal is discoverable without a second call.
+- **The knowledge graph rebuilds itself once, on the first launch after this update.** Binary asset
+  introspection and `.meta`-aware incremental indexing both needed new columns, so the graph schema
+  moves from v4 to v5. The graph is derived data, so the migration is a drop and a re-index rather
+  than a conversion — nothing you authored is at risk, but expect that first indexing pass to take
+  as long as a fresh one.
 - **`scene_manage` no longer discards unsaved work silently.** A non-additive `open`, and `create`,
   now refuse while any loaded scene has unsaved changes, naming the scene; save first or pass
   `discardUnsaved: true`. `create` now opens the scene it creates (previously later edits went to

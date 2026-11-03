@@ -828,13 +828,13 @@ public class QueryToolsTests : IClassFixture<WebApplicationFactory<Program>>, ID
     }
 
     [Fact]
-    public async Task GraphQuery_IsAdvertisedAsReadOnlyWithASchemaAndTheSavedStateClause()
+    public async Task GraphQuery_IsAdvertisedAsReadOnlyWithoutOutputSchemaAndTheSavedStateClause()
     {
         var tool = Assert.Single((await McpTestClient.ListTools(_factory))
             .GetProperty("result").GetProperty("tools").EnumerateArray(),
             t => t.GetProperty("name").GetString() == "graph_query");
 
-        Assert.True(tool.TryGetProperty("outputSchema", out _));
+        Assert.False(tool.TryGetProperty("outputSchema", out _));
         Assert.True(tool.GetProperty("annotations").GetProperty("readOnlyHint").GetBoolean());
         Assert.Contains("saved state on disk", tool.GetProperty("description").GetString());
     }

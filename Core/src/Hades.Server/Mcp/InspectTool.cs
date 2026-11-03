@@ -430,45 +430,21 @@ public sealed class InspectTool(ProjectService projects)
     const int MaxValueUnits = 2000;
 
     [McpServerTool(Name = "inspect_asset", Title = "Inspect Asset", ReadOnly = true, UseStructuredContent = true)]
-    [Description("Reads one named asset from disk, narrowing progressively as more arguments are "
-               + "given. 'path' alone returns the file's own structure - a GameObject hierarchy for "
-               + "a scene or prefab, shader/float/color/texture values for a material, states and "
-               + "transitions for an animator controller, or identity (type, guid) for anything "
-               + "else - PLUS the file's own 'guid' (from its .meta, null if not yet imported) at "
-               + "the top level regardless of type, so identity is always available even alongside "
-               + "a hierarchy/material/controller payload, not only on the 'anything else' branch. "
-               + "For a texture, model, or audio clip specifically, ALSO returns 'introspection': "
-               + "decoded importer settings (rig type, compression, load type, ...) plus, for a "
-               + "texture, its MEASURED source pixel dimensions ('sourceWidth'/'sourceHeight'). "
-               + "'maxTextureSize' is the import CEILING Unity was configured with, NOT the source "
-               + "image's size - a 64x64 icon and an 8192x8192 texture both report 2048 under "
-               + "default settings; 'sourceWidth'/'sourceHeight' are the measured values, and are "
-               + "null for a format Hades cannot read a header from. "
-               + "Add 'target' (a GameObject's fileId, exactly as the structure result reports "
-               + "it) to instead see that GameObject's own components - a MonoBehaviour whose script "
-               + "guid does not resolve still appears, with its raw guid and missing=true, rather "
-               + "than being silently dropped. Add 'component' (a component's fileId, exactly as "
-               + "the 'target' result reports it) to see that component's field names plus every "
-               + "UnityEvent field's wired listeners on it (e.g. a Button's m_OnClick) - a listener "
-               + "is reported even when its own target is unset. Add 'property' (a field name, "
-               + "exactly as the 'component' result reports it) to read that one field's value; when "
-               + "the value is itself a reference ({fileID, guid, type}), it is ALSO resolved to a "
-               + "project-relative path the same way it always was - an unresolved external guid or "
-               + "Unity's own null reference is reported plainly, never as an error. Each argument "
-               + "requires every one before it: 'component' needs 'target' too, 'property' needs "
-               + "both. A whole-file hierarchy bigger than 'limit' truncates in document order and "
-               + "reports 'truncated': true - call inspect_asset again with 'target' set to a "
-               + "specific GameObject's fileId (from the objects already returned) to inspect it "
-               + "directly, rather than re-requesting the whole file. A legacy pre-2018.3 'Prefab:' "
-               + "format file is reported as unsupported by name, not silently returned empty."
+    [Description("Reads one named asset from disk, narrowing as more arguments are given. 'path' "
+               + "alone returns the file's structure (hierarchy for a scene/prefab, properties for "
+               + "a material, states for a controller, or identity otherwise) plus its 'guid'; "
+               + "textures/models/audio also return importer 'introspection'. Add 'target' (a "
+               + "fileId) for that object's components, 'component' for its fields/listeners, "
+               + "'property' for that value - each needs every prior argument. A hierarchy over "
+               + "'limit' truncates - re-call with 'target' instead of re-requesting the file."
                + ToolSupport.SavedStateClause)]
     public async Task<InspectAssetResult> InspectAsset(
-        [Description("Project-relative asset path - prefab, scene, material, animator controller, or any other asset - as returned by search_by_name")] string path,
-        [Description("Narrows to one GameObject's components: its fileId, exactly as the whole-file structure result reports it. Requires a prefab or scene path.")] long? target = null,
-        [Description("Narrows to one component's properties and UnityEvent listeners: its fileId, exactly as the 'target'-narrowed result reports it. Requires 'target'.")] long? component = null,
-        [Description("Narrows to one field's value: its name, exactly as the 'component'-narrowed result reports it. Requires 'component'.")] string? property = null,
-        [Description("Maximum GameObjects to include in a whole-file hierarchy result (1-500, default 100). Ignored once 'target' is given.")] int limit = DefaultHierarchyLimit,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project-relative asset path, as returned by search_by_name.")] string path,
+        [Description("A GameObject's fileId, from the structure result. Requires a prefab or scene path.")] long? target = null,
+        [Description("A component's fileId, from the 'target' result. Requires 'target'.")] long? component = null,
+        [Description("A field name, from the 'component' result. Requires 'component'.")] string? property = null,
+        [Description("Maximum GameObjects in a whole-file hierarchy result (1-500, default 100). Ignored once 'target' is given.")] int limit = DefaultHierarchyLimit,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -512,28 +488,16 @@ public sealed class InspectTool(ProjectService projects)
 
     [McpServerTool(Name = "find_unset_references", Title = "Find Unset References", ReadOnly = true, UseStructuredContent = true)]
     [Description("Finds wiring gaps and UnityEvent listeners across a scope. Given 'path' (a prefab "
-               + "or scene), scans that ONE file for every object-reference field whose value is "
-               + "Unity's null reference ({fileID: 0}, no guid) - a script's public GameObject/"
-               + "Component field left unassigned in the Inspector, for instance. HONEST LIMITATION: "
-               + "Unity's serialized YAML does not record WHY a reference is empty - a field "
-               + "deliberately left optional and one simply forgotten are byte-for-byte identical on "
-               + "disk, so Hades cannot tell them apart and reports every occurrence, unfiltered, "
-               + "rather than presenting a guess as fact. This also surfaces Unity's OWN structural "
-               + "bookkeeping fields, not just user script fields - m_Father is unset on every root "
-               + "GameObject's Transform (correct: it has no parent). A field whose name does not "
-               + "start with \"m_\" is more likely a genuine, user-authored gap worth investigating "
-               + "first. Omit 'path' (or leave it blank) to instead find UnityEvent fields with AT "
-               + "LEAST ONE WIRED LISTENER across the WHOLE PROJECT (e.g. a Button's m_OnClick) - "
-               + "graph-served, so it only sees what Unity's own serialization turns into a "
-               + "reference at all: an event with zero listeners, or whose every listener has an "
-               + "unset target, leaves no trace and will not appear here, and 'listenerCount' is a "
-               + "LOWER BOUND, not always exact. Call inspect_asset with 'target' and 'component' on "
-               + "a specific component for the complete, exact picture instead."
+               + "or scene), scans that file for every object-reference field set to Unity's null "
+               + "reference ({fileID: 0}) - an unassigned GameObject/Component field, for instance. "
+               + "Hades cannot tell a deliberately-optional field from a forgotten one, so every "
+               + "occurrence is reported. Omit 'path' to instead find UnityEvents with a wired "
+               + "listener across the WHOLE PROJECT; 'listenerCount' is a lower bound."
                + ToolSupport.SavedStateClause)]
     public async Task<FindUnsetReferencesResult> FindUnsetReferences(
         [Description("Project-relative prefab or scene path to scan for unset references. Omit (or leave blank) to instead find UnityEvents with wired listeners across the whole project.")] string? path = null,
         [Description("Maximum results to return (1-500, default 100)")] int limit = 100,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         var clampedLimit = Math.Clamp(limit, 1, 500);

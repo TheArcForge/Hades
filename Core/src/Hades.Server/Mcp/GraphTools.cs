@@ -86,23 +86,17 @@ public sealed class GraphTools(ProjectService projects)
 
     [McpServerTool(Name = "trace_dependencies", Title = "Trace Dependencies", ReadOnly = true, UseStructuredContent = true)]
     [Description("Everything a Unity asset depends on, walking `references` and `instance_of` "
-               + "edges outward up to a depth — the outward-facing twin of find_references_to, so "
-               + "nested-prefab chains (a prefab instantiating another) are walked too. Only "
-               + "`corresponds_to` is excluded: every nested instance that writes one also writes "
-               + "an `instance_of` edge to the same file, so it would duplicate hits. Terminates "
-               + "safely on reference cycles, which Unity projects contain routinely (a prefab "
-               + "referencing a manager that references the prefab back). Takes the "
-               + "project-relative path exactly as search_by_name returns it. A dependency whose "
-               + "target lives outside every root Hades scans (e.g. a package resolved into "
-               + "Library/PackageCache) or whose asset kind Hades does not yet index cannot appear "
-               + "in 'results', but is not silently dropped either: it is reported under 'dangling' "
-               + "instead, so an empty 'results' never masks a real, un-traceable dependency as "
-               + "'depends on nothing'." + ToolSupport.SavedStateClause)]
+               + "edges outward - the outward-facing twin of find_references_to, so nested-prefab "
+               + "chains are walked too. Terminates safely on reference cycles. A dependency Hades "
+               + "can't resolve (outside every scanned root, or an unindexed kind) is reported "
+               + "under 'dangling' instead of dropped - an empty 'results' never masks a real "
+               + "dependency as \"depends on nothing\"."
+               + ToolSupport.SavedStateClause)]
     public async Task<TraceDependenciesResult> TraceDependencies(
         [Description("Project-relative asset path to trace outward from, as returned by search_by_name")] string assetPath,
         [Description("How many hops outward to follow (1-10, default 3)")] int maxDepth = 3,
         [Description("Maximum dependency hits to return (1-500, default 200)")] int limit = 200,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (string.IsNullOrWhiteSpace(assetPath))

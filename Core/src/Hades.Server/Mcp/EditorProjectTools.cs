@@ -233,7 +233,7 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
                + "once this call returns - the connection will briefly drop and reconnect. Needs a "
                + "live Editor - call hades_charon_status first if unsure.")]
     public async Task<RecompileScriptsResult> ProjectRecompileScripts(
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null)
     {
         var result = await editor.SendCommandAsync(project, "project.recompile_scripts").ConfigureAwait(false);
         return new RecompileScriptsResult
@@ -253,7 +253,7 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
     public async Task<RunTestsResult> ProjectRunTests(
         [Description("Regex filter matched against full test names - a class or namespace name selects everything beneath it. Omit to run all tests.")] string? filter = null,
         [Description("EditMode, PlayMode, or All (default EditMode)")] string? testMode = null,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null)
     {
         var @params = WireJson.NewObject();
         if (!string.IsNullOrEmpty(filter)) @params.SetProperty("filter", WireJson.String(filter));
@@ -281,7 +281,7 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
     public async Task<ConsoleLogResult> ProjectGetConsoleLog(
         [Description("Max entries to return (default 50, max 200)")] int? count = null,
         [Description("Filter to one severity: 'Error', 'Warning', or 'Log'. Omit for every severity.")] string? type = null,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null)
     {
         var @params = WireJson.NewObject();
         if (count is { } c) @params.SetProperty("count", WireJson.Integer(c));
@@ -316,15 +316,14 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
 
     [McpServerTool(Name = "project_get_test_results", Title = "Get Test Results", ReadOnly = true, UseStructuredContent = true)]
     [Description("Polls for the outcome of a project_run_tests run, reconciled by 'runId': "
-               + "'running' while the run (and any domain reload EditMode triggers) is still in "
-               + "progress, 'complete' with total/passed/failed/skipped/inconclusive counts and "
-               + "failure details once finished, 'none' if no run has been started this session, "
-               + "or 'unknown' if 'runId' does not match the most recently started run. Omit "
-               + "'runId' to poll whichever run started most recently. Needs a live Editor - call "
-               + "hades_charon_status first if unsure." + ToolSupport.LiveStateClause)]
+               + "'running' while the run is still in progress, 'complete' with total/passed/"
+               + "failed/skipped/inconclusive counts and failure details once finished, 'none' if "
+               + "no run has been started this session, or 'unknown' if 'runId' does not match the "
+               + "most recently started run. Omit 'runId' to poll the most recent run. Needs a live "
+               + "Editor." + ToolSupport.LiveStateClause)]
     public async Task<TestResultsResult> ProjectGetTestResults(
         [Description("The runId project_run_tests returned. Omit to poll the most recently started run.")] string? runId = null,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null)
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null)
     {
         var @params = WireJson.NewObject();
         if (!string.IsNullOrEmpty(runId)) @params.SetProperty("runId", WireJson.String(runId));
@@ -385,17 +384,15 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
     [McpServerTool(Name = "script_editing_session", Title = "Script Editing Session", ReadOnly = false, UseStructuredContent = true)]
     [Description("Begins or ends a script-editing session that holds Unity's reload lock, so the "
                + "Editor does not recompile out from under a multi-file change in progress. "
-               + "action='begin' acquires the lock - call action='end' when done, or Unity resumes "
-               + "recompiling on its own once the lease's TTL expires (see expiresAtUtc); calling "
-               + "'begin' again before 'end' renews it. action='end' releases the lock (if held) "
-               + "and triggers recompilation - release then trigger, never fighting its own lock - "
-               + "and is safe to call even if 'begin' was never called or already expired (released "
-               + "comes back false; recompilation is still requested). Needs a live Editor - call "
-               + "hades_charon_status first if unsure.")]
+               + "action='begin' acquires the lock - call action='end' when done, or it releases on "
+               + "its own once the lease's TTL expires; calling 'begin' again before 'end' renews "
+               + "it. action='end' releases the lock (if held) and triggers recompilation, and is "
+               + "safe to call even if 'begin' was never called or already expired. Needs a live "
+               + "Editor.")]
     public async Task<ScriptEditingSessionResult> ScriptEditingSession(
         [Description("'begin' or 'end'")] string action,
         [Description("begin only: how long the lease may be held before it expires if never renewed, in seconds. Omit for the plugin's default (30s).")] double? ttlSeconds = null,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         EditorComponentTools.RequireNonBlank(action, nameof(action), "script_editing_session");
@@ -455,28 +452,17 @@ public sealed class EditorProjectTools(EditorProxy editor, ProjectService projec
     // ---------------------------------------------------------------- hades_regression
 
     [McpServerTool(Name = "hades_regression", Title = "Regression Record/Replay", ReadOnly = false, UseStructuredContent = true)]
-    [Description("Records or replays Hades tool calls made in this session - not just what the "
-               + "attached Unity Editor executes. action='start' begins an empty recording; every "
-               + "subsequent tool call (Editor-routed, graph-served, or disk-served - anything but "
-               + "hades_regression itself) is captured until action='stop', which returns the "
-               + "captured entries as 'calls': {method, params, expected, format} - EXACTLY the "
-               + "shape action='replay' accepts in its own 'calls' parameter, so this tool's own "
-               + "'stop' result can be passed straight into a later 'replay' call with no "
-               + "translation step. Stopping with nothing recorded (or never started) is a no-op, "
-               + "not an error. A tool whose result varies between calls (a timestamp, an uptime "
-               + "counter - e.g. hades_ping) replays as a mismatch every time; such tools make poor "
-               + "fixture entries. action='replay' replays a batch of calls: an entry with "
-               + "'format':'tool' (what 'stop' now produces) names an MCP tool and calls it "
-               + "directly with 'params' as its arguments; an entry with no 'format' - the shape "
-               + "every fixture recorded before this tool covered the graph/disk surface, e.g. "
-               + "'scene.create_gameobject' - is dispatched by its UnityPlugin wire method name instead "
-               + "and needs a live Editor (call hades_charon_status first if unsure). Either way, "
-               + "where an 'expected' value is supplied, the actual result is compared against it; "
-               + "a per-call failure does not stop the rest of the batch.")]
+    [Description("Records or replays Hades tool calls made in this session. action='start' begins "
+               + "recording; action='stop' ends it and returns 'calls': {method, params, expected, "
+               + "format} - the exact shape action='replay' accepts. action='replay' replays a "
+               + "batch: format:'tool' calls an MCP tool directly with 'params' as arguments; no "
+               + "format dispatches by UnityPlugin wire method name instead (needs a live Editor). "
+               + "Where 'expected' is supplied, the result is compared against it; a per-call "
+               + "failure does not stop the rest of the batch.")]
     public async Task<HadesRegressionResult> HadesRegression(
         [Description("'start', 'stop', or 'replay'")] string action,
         [Description("replay only: calls to replay, each { method, params, expected? }")] IReadOnlyList<RegressionCallSpec>? calls = null,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         EditorComponentTools.RequireNonBlank(action, nameof(action), "hades_regression");

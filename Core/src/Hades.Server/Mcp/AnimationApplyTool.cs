@@ -152,51 +152,22 @@ public sealed class AnimationApplyTool(EditorProxy editor, ProjectService projec
     const int MaxBlendTreeDepth = 4;
 
     [McpServerTool(Name = "animation_apply", Title = "Apply Animation Operations (Batch)", ReadOnly = false, UseStructuredContent = true)]
-    [Description("Applies a batch of animation operations - assignController (gameObjectPath, "
-               + "controllerPath), assignClip (controllerPath, layer?, stateName, clipPath), "
-               + "createController (controllerPath, parameters?, states?, transitions?), "
-               + "editController (controllerPath, layer?, addParameters?/removeParameters?/"
-               + "addStates?/removeStates?/addTransitions?/removeTransitions?, at least one "
-               + "required), addLayer (controllerPath, name, weight?, blending?, avatarMask?, "
-               + "ikPass?), setBlendTree (controllerPath, layer?, stateName, tree - REPLACES the "
-               + "state's whole motion; validated whole-tree before anything is touched, so a bad "
-               + "tree leaves the controller exactly as it was), createClip (clipPath, frameRate?, "
-               + "loop?, defaultEasing?), setCurve (clipPath, path, type, property, keys - REPLACES "
-               + "that one EditorCurveBinding's curve wholesale), setEvents (clipPath, events, "
-               + "receiver? - REPLACES all of the clip's events), describe (controllerPath OR "
-               + "clipPath, exactly one - a READ, returns the controller's layers/parameters/states "
-               + "incl. blend tree contents, or the clip's curves/events, in the same shape "
-               + "setBlendTree/setCurve/setEvents accept - read, mutate the JSON, send back) - in "
-               + "ONE call, in the order given. This is the batch form of "
-               + "animation_assign_controller/animation_assign_clip/animation_create_controller/"
-               + "animation_edit_controller plus six new ops. "
-               + "'controllerPath' is the ONE field name for which AnimatorController every "
-               + "controller-targeting op uses - always a file on disk; 'clipPath' is the same for "
-               + "which AnimationClip. 'gameObjectPath' (assignController only) is a scene object "
-               + "instead, never a file on disk. 'layer' (assignClip/editController/setBlendTree) "
-               + "names a layer by NAME, not index - omitted means layer 0 (today's behaviour, "
-               + "unchanged). "
-               + "IMPORTED CLIPS: setCurve/setEvents work only on an authored .anim clip's own "
-               + "asset - an FBX-embedded clip's curves/events are configured through "
-               + "project_settings_apply setClipImportSettings instead (a different Unity "
-               + "mechanism entirely); this tool detects an imported clip and names that tool in "
-               + "its error. "
-               + "UNDO: the whole batch is ONE Unity Undo group - a single Ctrl/Cmd+Z reverts every "
-               + "operation in the spec, not just the last one; setBlendTree's created/replaced "
-               + "sub-assets are ordinary, complete undo entries, no exceptions. "
-               + "PARTIAL FAILURE, NOT ROLLED BACK: each operation's outcome is reported by its "
-               + "0-based index in 'applied' (succeeded) or 'failed' (with its own error). Every "
-               + "successful operation's own result (createController/editController's own "
-               + "'errors'/'added'/'removed' lists for entries that individually failed inside an "
-               + "otherwise-successful op, assignController's 'addedAnimator', ...) is reported in "
-               + "'results' alongside 'applied'. "
-               + "An unrecognised 'op' value rejects the WHOLE call before anything is sent to the "
-               + "Editor, listing the valid ops. 'describe' is refused for the WHOLE batch while "
-               + "Play Mode is active (like every other op here) - it is a read, but this tool has "
-               + "no per-op play-mode granularity yet. Needs a live Editor - call hades_charon_status "
-               + "first if unsure.")]
+    [Description("Applies a batch of animation operations in one call, in order, as ONE Undo group "
+               + "(a single undo reverts everything). Ops: assignController, assignClip, "
+               + "createController, editController, addLayer, setBlendTree, createClip, setCurve, "
+               + "setEvents, describe (a read - returns a controller's layers/parameters/states, or "
+               + "a clip's curves/events, in the same shape setBlendTree/setCurve/setEvents accept). "
+               + "Per-op required fields are listed on 'operations'. 'controllerPath'/'clipPath' "
+               + "always name a file on disk; assignController's 'gameObjectPath' names a scene "
+               + "object instead. setBlendTree/setCurve/setEvents REPLACE the whole target (motion/"
+               + "curve/event list) wholesale, validated before anything is touched. Imported "
+               + "(FBX-embedded) clips: use project_settings_apply's setClipImportSettings instead "
+               + "of setCurve/setEvents. Each op's outcome is reported by index in 'applied' or "
+               + "'failed' with its own error; nothing rolls back on partial failure. An unknown op "
+               + "or field refuses the WHOLE call before anything reaches the Editor. Needs a live "
+               + "Editor; refused during Play Mode.")]
     public async Task<AnimationApplyResult> AnimationApply(
-        [Description("Operations to apply, in order. Each needs 'op' plus that op's own fields: "
+        [Description("Per-op fields (each op also needs 'op'): "
                    + "assignController{gameObjectPath,controllerPath}, "
                    + "assignClip{controllerPath,layer?,stateName,clipPath}, "
                    + "createController{controllerPath,parameters?,states?,transitions?}, "
@@ -207,12 +178,9 @@ public sealed class AnimationApplyTool(EditorProxy editor, ProjectService projec
                    + "createClip{clipPath,frameRate?,loop?,defaultEasing?}, "
                    + "setCurve{clipPath,path,type,property,keys}, "
                    + "setEvents{clipPath,events,receiver?}, "
-                   + "describe{controllerPath} OR describe{clipPath} (exactly one). "
-                   + "'controllerPath'/'clipPath' always name a file on disk; "
-                   + "assignController's 'gameObjectPath' always names a scene object, never a "
-                   + "file on disk.")]
+                   + "describe{controllerPath} OR describe{clipPath} (exactly one).")]
         IReadOnlyList<AnimationApplyOperation> operations,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (operations is null || operations.Count == 0)

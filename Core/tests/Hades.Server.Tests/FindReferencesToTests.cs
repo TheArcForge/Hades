@@ -194,13 +194,13 @@ public class FindReferencesToTests : IClassFixture<WebApplicationFactory<Program
     }
 
     [Fact]
-    public async Task TheToolIsAdvertisedWithSchemasAndReadOnly()
+    public async Task TheToolIsAdvertisedReadOnlyWithoutOutputSchema()
     {
         var tool = Assert.Single((await McpTestClient.ListTools(_factory))
             .GetProperty("result").GetProperty("tools").EnumerateArray(),
             t => t.GetProperty("name").GetString() == "find_references_to");
 
-        Assert.True(tool.TryGetProperty("outputSchema", out _));
+        Assert.False(tool.TryGetProperty("outputSchema", out _));
         Assert.True(tool.GetProperty("annotations").GetProperty("readOnlyHint").GetBoolean());
         Assert.Contains("assetPath", tool.GetProperty("inputSchema").GetProperty("required").EnumerateArray()
             .Select(x => x.GetString()));

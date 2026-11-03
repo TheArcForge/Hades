@@ -225,6 +225,50 @@ builder.Services.Configure<McpServerOptions>(options =>
 
         return result;
     });
+
+    // tools/list payload-size cut: outputSchema is OPTIONAL per the MCP spec, and every tool here
+    // carries one only because UseStructuredContent=true on its [McpServerTool] attribute asks for
+    // both it AND CallToolResult.StructuredContent together (see McpServerToolCreateOptions.
+    // UseStructuredContent's own doc comment) - the two are not independently toggleable on the
+    // attribute. Mutating the registered McpServerTool.ProtocolTool.OutputSchema directly (the
+    // same seam the boolean-schema-fix loop below uses for InputSchema/OutputSchema) was tried
+    // first and reverted: the SDK's own tool-invocation path reads that SAME Tool instance to
+    // decide whether to populate CallToolResult.StructuredContent, so nulling it there silently
+    // stopped every real caller — and every test's own Structured(...) helper — from ever seeing
+    // structured content again (217 test failures caught this, not a static read of the SDK).
+    // This filter instead rewrites only the OUTGOING tools/list response - a fresh Tool copy per
+    // tool, OutputSchema stripped - leaving the shared, registered McpServerTool.ProtocolTool
+    // instances (and therefore every real invocation's StructuredContent) untouched. Advertising
+    // it was ~24KB of a ~101KB payload at 33 tools - the single largest field, and almost entirely
+    // redundant with prose the description/inputSchema already carry. Kept for
+    // project_get_console_log alone: its outputSchema is the only place 'totalMatching' (whether
+    // more buffered console entries exist than 'count' returned) is documented anywhere a caller
+    // can discover without an extra call - see EditorProjectToolsTests.
+    // ProjectGetConsoleLog_OutputSchema_DeclaresTotalMatching, which pins that one exception.
+    options.Filters.Request.ListToolsFilters.Add(next => async (context, cancellationToken) =>
+    {
+        var result = await next(context, cancellationToken).ConfigureAwait(false);
+
+        if (result.Tools is { } tools)
+        {
+            result.Tools = tools.Select(tool =>
+                tool.OutputSchema is null || tool.Name == "project_get_console_log"
+                    ? tool
+                    : new Tool
+                    {
+                        Name = tool.Name,
+                        Title = tool.Title,
+                        Description = tool.Description,
+                        InputSchema = tool.InputSchema,
+                        OutputSchema = null,
+                        Annotations = tool.Annotations,
+                        Icons = tool.Icons,
+                        Meta = tool.Meta,
+                    }).ToList();
+        }
+
+        return result;
+    });
 });
 
 var app = builder.Build();

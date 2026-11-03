@@ -137,41 +137,21 @@ public sealed class PrefabApplyTool(EditorProxy editor, ProjectService projects)
     static readonly string[] ValidOps = ["create", "instantiate", "applyOverrides", "editProperty", "createVariant"];
 
     [McpServerTool(Name = "prefab_apply", Title = "Apply Prefab Operations (Batch)", ReadOnly = false, UseStructuredContent = true)]
-    [Description("Applies a batch of prefab operations - create (gameObjectPath, prefabPath), "
-               + "instantiate (prefabPath, parent?), applyOverrides (gameObjectPath), editProperty "
-               + "(prefabPath, componentType, propertyName, value, gameObjectPath? for a nested "
-               + "child), createVariant (basePrefabPath, variantPath) - in ONE call, in the order "
-               + "given. 'prefabPath' is the ONE field name for the prefab asset every op acts on "
-               + "- its new file for create, its existing file for instantiate/editProperty - "
-               + "always a file on disk. 'gameObjectPath' is always a SCENE object instead - "
-               + "create's source, applyOverrides' instance, or editProperty's optional nested "
-               + "child - never a file on disk, a different concept from 'prefabPath' entirely. "
-               + "This is the batch form of prefab_create/prefab_instantiate/"
-               + "prefab_apply_overrides/prefab_edit_property/prefab_open_editing/"
-               + "prefab_save_editing/prefab_create_variant. Every editProperty op is ATOMIC "
-               + "(load, edit, save in one step) - there is no 'open' op, so this tool cannot leave "
-               + "a prefab stuck open the way the old open/edit/save sequence could. "
-               + "UNDO: the whole batch is ONE Unity Undo group. RELOAD LEASE: the whole batch "
-               + "acquires and releases Unity's reload lock exactly ONCE, not once per operation. "
-               + "PARTIAL FAILURE, NOT ROLLED BACK: each operation's outcome is reported by its "
-               + "0-based index in 'applied' (succeeded) or 'failed' (with its own error). Every "
-               + "successful operation's own result is reported in 'results' alongside 'applied' - "
-               + "in particular, applyOverrides ALWAYS reports 'unappliedProperties': Unity can never "
-               + "write a prefab instance root's own name/position/rotation back to the prefab asset "
-               + "(permanent Unity behaviour, not an error), so a caller must check 'results', never "
-               + "assume 'applied' alone means everything was written. "
-               + "An unrecognised 'op' value rejects the WHOLE call before anything is sent to the "
-               + "Editor, listing the valid ops. Needs a live Editor - call hades_charon_status first "
-               + "if unsure.")]
+    [Description("Applies a batch of prefab operations in one call, as ONE Undo group: "
+               + "create, instantiate, applyOverrides, editProperty, createVariant. Per-op fields "
+               + "are listed on 'operations'. editProperty is ATOMIC (load, edit, save in one step "
+               + "- no separate open/save). applyOverrides ALWAYS reports 'unappliedProperties': "
+               + "Unity can never write an instance root's own name/position/rotation back to the "
+               + "prefab asset (permanent Unity behaviour) - check 'results', not just 'applied'. "
+               + "Needs a live Editor.")]
     public async Task<PrefabApplyResult> PrefabApply(
-        [Description("Operations to apply, in order. Each needs 'op' plus that op's own fields: "
+        [Description("Per-op fields (each op also needs 'op'): "
                    + "create{gameObjectPath,prefabPath}, instantiate{prefabPath,parent?}, "
                    + "applyOverrides{gameObjectPath}, editProperty{prefabPath,componentType,"
                    + "propertyName,value,gameObjectPath?}, createVariant{basePrefabPath,variantPath}. "
-                   + "'prefabPath' always names the prefab asset the op is about (a file on disk); "
-                   + "'gameObjectPath' always names a scene object, never a file on disk.")]
+                   + "'prefabPath' is always a file on disk; 'gameObjectPath' is always a scene object.")]
         IReadOnlyList<PrefabApplyOperation> operations,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (operations is null || operations.Count == 0)

@@ -108,7 +108,7 @@ public sealed class HadesTools(ProjectService projects)
                    + "Font, Shader, ShaderGraph, ComputeShader, AnimationClip. Unity object "
                    + "types (Material, GameObject, ...) also match by their exact type name.")] string? kind = null,
         [Description("Maximum results to return (1-200, default 50)")] int limit = 50,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (string.IsNullOrWhiteSpace(namePattern))
@@ -170,19 +170,17 @@ public sealed class HadesTools(ProjectService projects)
     }
 
     [McpServerTool(Name = "find_references_to", Title = "Find References To", ReadOnly = true, UseStructuredContent = true)]
-    [Description("Find everything that references a Unity asset or C# script — which scenes "
+    [Description("Find everything that references a Unity asset or C# script - which scenes "
                + "instantiate a prefab, which prefabs use a script, what would break if it were "
-               + "removed. Results are grouped by file, most-used first, with a count per file. "
-               + "Takes the project-relative path exactly as search_by_name returns it, "
-               + "e.g. \"Assets/Scripts/PlayerController.cs\". A path that exists on disk but is "
-               + "an asset kind Hades does not (yet) index as a graph node cannot be resolved here "
-               + "even though the file is right there — the error distinguishes that case from a "
-               + "path that genuinely does not exist."
+               + "removed. Results are grouped by file, most-used first, with a count per file. A "
+               + "path that exists on disk but is an asset kind Hades does not (yet) index as a "
+               + "graph node cannot be resolved here - the error distinguishes that from a path "
+               + "that genuinely does not exist."
                + ToolSupport.SavedStateClause)]
     public async Task<ReferencesResult> FindReferencesTo(
         [Description("Project-relative asset path, as returned by search_by_name")] string assetPath,
         [Description("Maximum FILES to return (1-500, default 100)")] int limit = 100,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (string.IsNullOrWhiteSpace(assetPath))
@@ -241,16 +239,12 @@ public sealed class HadesTools(ProjectService projects)
     [Description("Structured overview of a Unity project: node counts by kind, index freshness, "
                + "and where the project lives." + ToolSupport.SavedStateClause
                + " appliedDefines lists the C# preprocessor symbols indexing applied when "
-               + "evaluating #if (UNITY_EDITOR, the Unity-version ladder from ProjectVersion.txt, "
-               + "this project's own scriptingDefineSymbols, and every asmdef versionDefine whose "
-               + "named package resolves to a satisfying version) - the SAME set project-wide, for "
-               + "every file, which is an approximation: Unity's real compiler uses a DIFFERENT "
-               + "set per assembly (asmdef), and Hades does not yet track file-to-asmdef "
-               + "membership. Code gated on a symbol outside this list - a platform define, a "
-               + "csc.rsp-only symbol, or a versionDefine keyed to a built-in Unity module rather "
-               + "than an installed package - is not in the graph at all.")]
+               + "evaluating #if - the SAME set project-wide for every file, an approximation: "
+               + "Unity's real compiler uses a different set per assembly, and Hades does not yet "
+               + "track file-to-asmdef membership. Code gated on a symbol outside this list is not "
+               + "in the graph at all.")]
     public async Task<ProjectSummary> GetProjectSummary(
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
