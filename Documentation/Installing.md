@@ -47,7 +47,7 @@ That builds the app, embeds the self-contained core, ad-hoc signs it, and stages
 **Windows** — from a checkout (needs the .NET 10 SDK and WiX 7, `dotnet tool install --global wix`):
 
 ```powershell
-Windows\Installer\build-msi.ps1 -Rid win-x64 -Version 2.1.0
+Windows\Installer\build-msi.ps1 -Rid win-x64 -Version 2.2.0
 ```
 
 That publishes the shell, the CLI and the core self-contained, assembles the install layout, and
@@ -174,7 +174,7 @@ this was developed on has SAC off (`VerifiedAndReputablePolicyState = 0`).
 Curious whether a given file actually carries a mark?
 
 ```powershell
-Get-Content .\Hades-2.1.0-win-x64.msi -Stream Zone.Identifier
+Get-Content .\Hades-2.2.0-win-x64.msi -Stream Zone.Identifier
 ```
 
 An error saying the stream does not exist means the file is clean.

@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 
 # ----------------------------------------------------------------------------- pinned per release
 
-$Version = '2.1.0'
+$Version = '2.2.0'
 
 # Sentinel, not a placeholder to be quietly ignored: the script hard-fails while either is unset,
 # because an installer that skips checksum verification is worse than one that refuses to run.
