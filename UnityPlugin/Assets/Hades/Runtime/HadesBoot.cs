@@ -36,7 +36,7 @@ namespace Hades.Runtime
         /// sites Documentation/ReleasePipeline.md section 2 lists; nothing
         /// in this netstandard2.1, zero-dependency folder can read that file once installed into
         /// a stranger's project, so it cannot be computed automatically.</summary>
-        public const string PluginVersion = "1.4.0";
+        public const string PluginVersion = "1.5.0";
 
         static readonly MainThreadPump Pump;
         static readonly ReloadGate Gate;

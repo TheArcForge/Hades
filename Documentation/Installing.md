@@ -354,7 +354,7 @@ Check both:
 
    **Do not** use the Unity-side plugin's own version number for this — the
    *new* plugin's `Assets/Hades/Runtime/HadesBoot.cs` carries its own independent version line,
-   currently `"1.4.0"` (`PluginVersion` constant, verified in source, kept in sync with two test
+   currently `"1.5.0"` (`PluginVersion` constant, verified in source, kept in sync with two test
    mirrors). That number tells you nothing about old-vs-new; only the two checks above do.
 
 3. **Extra tell, if you want a third data point:** the new tool list includes `prefab_apply`.

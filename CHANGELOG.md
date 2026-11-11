@@ -37,6 +37,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   moves from v4 to v5. The graph is derived data, so the migration is a drop and a re-index rather
   than a conversion — nothing you authored is at risk, but expect that first indexing pass to take
   as long as a fresh one.
+- **The Unity plugin moves to 1.5.0, so a stale copy is detectable.** The new asset- and
+  animation-authoring tools are answered by commands that live in the plugin, so an `Assets/Hades/`
+  left at 1.4.0 cannot serve them. Its version line is independent of the app's by design, but it
+  is now the only thing that distinguishes the two — the one capability set it used to report went
+  out with `scene_bake` — so leaving it unchanged would have meant a bare failure where there is
+  now a warning naming both versions and pointing at Install/Update Plugin.
 - **`scene_manage` no longer discards unsaved work silently.** A non-additive `open`, and `create`,
   now refuse while any loaded scene has unsaved changes, naming the scene; save first or pass
   `discardUnsaved: true`. `create` now opens the scene it creates (previously later edits went to
