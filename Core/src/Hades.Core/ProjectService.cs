@@ -59,6 +59,35 @@ public sealed record ProjectSummary
     /// themselves to: an honest superset/approximation beats a silent one.
     /// </summary>
     public required IReadOnlyList<string> AppliedDefines { get; init; }
+
+    /// <summary>
+    /// DESIGN-06 §6.1 (Layer 1 - static, offline, no Editor required): which Editor-only
+    /// capabilities this project's installed packages make reachable, resolved from
+    /// <c>Packages/manifest.json</c>/<c>packages-lock.json</c> alone - the SAME resolver
+    /// <see cref="AppliedDefines"/> already reuses for versionDefines (<see cref="Projects.ProjectDefines.ReadInstalledPackageVersions"/>).
+    /// A declaration, not proof the assembly loaded - <see cref="CharonStatus.Capabilities"/>
+    /// (Layer 2, live and authoritative) is the one to trust once an Editor is attached; this layer
+    /// answers the same question with no Editor at all. Always empty today - the one capability set
+    /// this ever reported (the bake targets DESIGN-06 introduced) was retired along with scene_bake;
+    /// kept as a declared, always-empty field rather than removed outright, since a future
+    /// capability-gated tool would reuse this exact mechanism rather than reinvent it.
+    /// </summary>
+    public required IReadOnlyList<CapabilityInfo> Capabilities { get; init; }
+}
+
+/// <summary>One Editor-only capability's availability - shared shape for
+/// <see cref="ProjectSummary.Capabilities"/> (Layer 1, package-manifest-derived) and
+/// <see cref="CharonStatus.Capabilities"/> (Layer 2, live-Editor-derived, hello-sourced). No IDs are
+/// currently defined - see <see cref="ProjectSummary.Capabilities"/>'s own doc comment.</summary>
+public sealed record CapabilityInfo
+{
+    public required string Id { get; init; }
+    public required bool Available { get; init; }
+
+    /// <summary>Null when <see cref="Available"/> is true - one actionable sentence naming why not,
+    /// otherwise (DESIGN-06 §6.3's error-message layer, reused here rather than a second
+    /// wording).</summary>
+    public string? Reason { get; init; }
 }
 
 public sealed record SceneSummary
@@ -189,6 +218,14 @@ public sealed record CharonStatus
     /// "not installed" and "installed but unreadable" collapse to the same null.
     /// </summary>
     public string? PluginVersionOnDisk { get; init; }
+
+    /// <summary>DESIGN-06 §6.2 (Layer 2 - live and authoritative): hello-derived, same "populated
+    /// whenever Attached is true, regardless of Busy" rule as every other field on this record - the
+    /// whole point of carrying it on the handshake rather than a wire round trip is that it answers
+    /// even while <see cref="Busy"/> is true. Empty (never null) while not attached - Layer 1
+    /// (<see cref="ProjectSummary.Capabilities"/>) answers the same question with no Editor at
+    /// all.</summary>
+    public IReadOnlyList<CapabilityInfo> Capabilities { get; init; } = [];
 }
 
 /// <summary>
@@ -916,7 +953,8 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
     public IReadOnlyList<GraphNode> QueryGraph(string productGuid, string? kind, string? namePattern,
         string? pathPrefix, string? edgeKind, string edgeDirection, int limit = 100,
         string? edgeTargetPath = null, string? edgeTargetNamePattern = null, bool edgeAbsent = false,
-        string? kindPattern = null, string? edgeTargetKind = null)
+        string? kindPattern = null, string? edgeTargetKind = null,
+        int? minWidth = null, int? minHeight = null, string? assetSubtype = null)
     {
         if (_store.Get(productGuid) is null) return [];
 
@@ -930,7 +968,8 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
         }
 
         return database.QueryGraph(kind, namePattern, pathPrefix, edgeKind, edgeDirection, limit,
-            edgeTargetGuid, edgeTargetNamePattern, edgeAbsent, kindPattern, edgeTargetKind);
+            edgeTargetGuid, edgeTargetNamePattern, edgeAbsent, kindPattern, edgeTargetKind,
+            minWidth, minHeight, assetSubtype);
     }
 
     /// <summary>
@@ -975,6 +1014,10 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
             // comment for why recomputing here (two small file reads) is cheap enough to not
             // need caching alongside the indexed graph.
             AppliedDefines = ProjectDefines.Resolve(project.Path).Symbols,
+
+            // No capability IDs are currently defined - see ProjectSummary.Capabilities' own doc
+            // comment (the bake-target set DESIGN-06 introduced was retired along with scene_bake).
+            Capabilities = [],
         };
     }
 
@@ -1115,6 +1158,9 @@ public sealed class ProjectService(AppPaths paths, EditorRegistry? registry = nu
             ProcessId = editor.Hello.ProcessId,
             ConnectionAge = DateTimeOffset.UtcNow - editor.ConnectedAtUtc,
             PluginVersion = editor.Hello.PluginVersion,
+            Capabilities = (editor.Hello.Capabilities ?? [])
+                .Select(c => new CapabilityInfo { Id = c.Id ?? "", Available = c.Available, Reason = c.Reason })
+                .ToList(),
         };
     }
 

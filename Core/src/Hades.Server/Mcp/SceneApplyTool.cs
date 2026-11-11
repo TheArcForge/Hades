@@ -149,27 +149,15 @@ public sealed class SceneApplyTool(EditorProxy editor, ProjectService projects)
     ];
 
     [McpServerTool(Name = "scene_apply", Title = "Apply Scene Operations (Batch)", ReadOnly = false, UseStructuredContent = true)]
-    [Description("Applies a batch of scene/component/wiring operations - create (optionally a "
-               + "primitive, and/or with tag/layer/position/rotation/scale), addComponent, "
-               + "setProperties, setReference, removeComponent, addListener, removeListener, "
-               + "delete, reparent, rename, select - in ONE call, in the order given, so a later "
-               + "operation can act on a GameObject an earlier one in this SAME call just created, "
-               + "renamed, or reparented. This is the batch form of scene_create_gameobject/"
-               + "scene_create_primitive/scene_delete_gameobject/scene_reparent_gameobject/"
-               + "scene_rename_gameobject/scene_setup/component_add/component_remove/component_"
-               + "set_property/component_set_properties/reference_set/event_add_listener/event_"
-               + "remove_listener/inspector_select. "
-               + "UNDO: the whole batch is ONE Unity Undo group - a single Ctrl/Cmd+Z reverts every "
-               + "operation in the spec, not just the last one. "
-               + "PARTIAL FAILURE, NOT ROLLED BACK: each operation's outcome is reported by its "
-               + "0-based index in 'applied' (succeeded) or 'failed' (with its own error) - "
-               + "operations that already succeeded are never undone because a LATER one failed, so "
-               + "a partial result is a partially-applied scene, not an all-or-nothing transaction. "
-               + "An unrecognised 'op' value rejects the WHOLE call before anything is sent to the "
-               + "Editor, listing the valid ops. Needs a live Editor - call hades_charon_status "
-               + "first if unsure.")]
+    [Description("Applies a batch of scene/component/wiring operations in one call, as ONE Undo "
+               + "group: create, addComponent, setProperties, setReference, removeComponent, "
+               + "addListener, removeListener, delete, reparent, rename, select. A later operation "
+               + "can act on a GameObject an earlier one in this SAME call just created, renamed, "
+               + "or reparented. Per-op fields are listed on 'operations'. Nothing rolls back on "
+               + "partial failure - a partial result is a partially-applied scene. An unknown op or "
+               + "field refuses the WHOLE call before anything reaches the Editor.")]
     public async Task<SceneApplyResult> SceneApply(
-        [Description("Operations to apply, in order. Each needs 'op' plus that op's own fields: "
+        [Description("Per-op fields (each op also needs 'op'): "
                    + "create{name,parent?,primitive?,tag?,layer?,position?,rotation?,scale?}, "
                    + "addComponent/removeComponent{target,type}, "
                    + "setProperties{target,component,values:{name:value}}, "
@@ -180,7 +168,7 @@ public sealed class SceneApplyTool(EditorProxy editor, ProjectService projects)
                    + "delete{target}, reparent{target,newParent?}, rename{target,newName}, "
                    + "select{target}.")]
         IReadOnlyList<SceneApplyOperation> operations,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (operations is null || operations.Count == 0)

@@ -83,21 +83,45 @@ internal static class PluginWireContract
             // AnimationApplyCommands.DispatchOne - assignController/assignClip forward verbatim;
             // createController/editController both go through ControllerPathToPath first (context
             // "animation_apply", field "controllerPath") - see this class's own doc comment.
+            // DESIGN-05 Wave 1-3: addLayer/setBlendTree/createClip/setCurve/setEvents forward
+            // verbatim into AnimationCommands' own new methods, each with its own RequireString
+            // context; 'describe' has no RequireString field at all (controllerPath/clipPath are
+            // both OptionalString, since exactly one is required - an XOR RequireString cannot
+            // express - and that XOR is checked app-side, before the wire, in AnimationApplyTool
+            // itself), so it maps to no context, like asset.manage's "refresh".
             ["animation.apply"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
                 ["assignController"] = new[] { "animation.assign_controller" },
                 ["assignClip"] = new[] { "animation.assign_clip" },
                 ["createController"] = new[] { "animation_apply" },
                 ["editController"] = new[] { "animation_apply" },
+                ["addLayer"] = new[] { "animation.add_layer" },
+                ["setBlendTree"] = new[] { "animation.set_blend_tree" },
+                ["createClip"] = new[] { "animation.create_clip" },
+                ["setCurve"] = new[] { "animation.set_curve" },
+                ["setEvents"] = new[] { "animation.set_events" },
+                ["describe"] = Array.Empty<string>(),
             },
 
             // AssetManageCommands.DispatchOne - "move"/"import" forward verbatim; "refresh" needs no
-            // fields (AssetDatabase.Refresh() takes none).
+            // fields (AssetDatabase.Refresh() takes none); "delete"/"duplicate" (DESIGN-04 Lane D)
+            // forward verbatim into AssetCommands.DeleteAsset/DuplicateAsset.
             ["asset.manage"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
                 ["move"] = new[] { "asset.move" },
                 ["import"] = new[] { "asset.import" },
                 ["refresh"] = Array.Empty<string>(),
+                ["delete"] = new[] { "asset.delete" },
+                ["duplicate"] = new[] { "asset.duplicate" },
+            },
+
+            // ScriptableObjectApplyCommands.DispatchOne - both ops forward verbatim into this class's
+            // own Create/SetProperties (DESIGN-04 Lane D; a brand-new tool, no pre-existing
+            // single-purpose command to delegate to).
+            ["scriptableObject.apply"] = new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["create"] = new[] { "scriptableObject.create" },
+                ["setProperties"] = new[] { "scriptableObject.set_properties" },
             },
 
             // SceneManageCommands.DispatchOne - "save"/"create"/"open"/"duplicate" forward verbatim;
@@ -146,6 +170,10 @@ internal static class PluginWireContract
             // AssetCommands.DoSetClipImportSettings (AssetCommands.cs): "asset.set_clip_import_settings
             // requires a non-empty 'clips' array parameter."
             ["asset.set_clip_import_settings"] = "clips",
+            // AnimationCommands.SetCurve (AnimationCommands.cs): "animation.set_curve requires a
+            // non-empty 'keys' array." Unlike setEvents' 'events' (an explicit [] is the "clear
+            // everything" signal and is legitimately empty), a curve with zero keys is never valid.
+            ["animation.set_curve"] = "keys",
         };
 
     /// <summary>Same idea as <see cref="NonEmptyCollectionFieldsByContext"/>, but keyed directly by

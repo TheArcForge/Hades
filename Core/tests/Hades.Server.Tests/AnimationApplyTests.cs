@@ -59,6 +59,40 @@ public sealed class AnimationApplyTests(WebApplicationFactory<Program> factory) 
             Assert.Contains(op, text);
     }
 
+    // ---------------------------------------------------------------- F7: a missing required nested field gives an actionable error
+
+    /// <summary>Live defect: 'setEvents' with an event shaped {time, functionName} instead of
+    /// {time, function} returned only "An error occurred invoking 'animation_apply'." - the MCP
+    /// SDK's own argument binding fails deep inside AnimationEventSpec's required 'Function' member,
+    /// and the SDK swallows that JsonException into its own opaque generic message before this
+    /// tool's body - which has excellent per-op validation - ever runs. Program.cs's own
+    /// CallToolFilters now catches this generically (MissingRequiredFieldRejection), driven by the
+    /// tool's own JSON Schema rather than any animation_apply-specific code - see that method's own
+    /// doc comment for why this fixes every typed operation array, not just this one.</summary>
+    [Fact]
+    public async Task AnimationApply_SetEvents_MissingRequiredEventField_GivesAnActionableError_NotAnOpaqueOne()
+    {
+        var envelope = await McpTestClient.CallTool(Factory, "animation_apply", new
+        {
+            operations = new[]
+            {
+                new Dictionary<string, object>
+                {
+                    ["op"] = "setEvents",
+                    ["clipPath"] = "Assets/Walk.anim",
+                    ["events"] = new[] { new Dictionary<string, object> { ["time"] = 0.5, ["functionName"] = "Footstep" } },
+                },
+            },
+        });
+
+        var text = McpTestClient.ErrorText(envelope);
+        Assert.DoesNotContain("An error occurred invoking", text);
+        Assert.Contains("animation_apply", text);
+        Assert.Contains("operations[0]", text);
+        Assert.Contains("events[0]", text);
+        Assert.Contains("function", text);
+    }
+
     // ---------------------------------------------------------------- unknown FIELD refused before any wire call (per-op, not per-tool)
 
     /// <summary>Enumerates EVERY op animation_apply accepts (not a spot check) and proves each one,
@@ -66,7 +100,11 @@ public sealed class AnimationApplyTests(WebApplicationFactory<Program> factory) 
     [Fact]
     public async Task AnimationApply_UnknownField_RejectedForEveryOp()
     {
-        foreach (var op in new[] { "assignController", "assignClip", "createController", "editController" })
+        foreach (var op in new[]
+        {
+            "assignController", "assignClip", "createController", "editController",
+            "addLayer", "setBlendTree", "createClip", "setCurve", "setEvents", "describe",
+        })
         {
             var envelope = await McpTestClient.CallTool(Factory, "animation_apply", new
             {
@@ -326,5 +364,172 @@ public sealed class AnimationApplyTests(WebApplicationFactory<Program> factory) 
             Assert.Equal(path, Prop(ops.Items[i], "controllerPath").AsString());
             Assert.False(ops.Items[i].TryGetProperty("path", out _), $"operations[{i}] should not carry a 'path' key - the rename to 'path' is the PLUGIN's job, not the app's.");
         }
+    }
+
+    // ---------------------------------------------------------------- DESIGN-05 Wave 1-3: the six new ops
+
+    [Fact]
+    public async Task AnimationApply_SetBlendTree_TreeNestedTooDeep_RejectedAppSide_BeforeAnyWireCall()
+    {
+        // 6 levels of "children[0].tree" nesting - past the 4-level cap - built bottom-up.
+        object node = new Dictionary<string, object> { ["type"] = "Simple1D", ["parameter"] = "P", ["children"] = Array.Empty<object>() };
+        for (var i = 0; i < 6; i++)
+        {
+            node = new Dictionary<string, object>
+            {
+                ["type"] = "Simple1D", ["parameter"] = "P",
+                ["children"] = new object[] { new Dictionary<string, object> { ["threshold"] = 0, ["tree"] = node } },
+            };
+        }
+
+        var envelope = await McpTestClient.CallTool(Factory, "animation_apply", new
+        {
+            operations = new[] { new Dictionary<string, object> { ["op"] = "setBlendTree", ["controllerPath"] = "Assets/P.controller", ["stateName"] = "Locomotion", ["tree"] = node } },
+        });
+
+        var text = McpTestClient.ErrorText(envelope);
+        Assert.Contains("nested", text);
+        Assert.Contains("4", text);
+    }
+
+    [Fact]
+    public async Task AnimationApply_Describe_RequiresExactlyOneOfControllerPathOrClipPath()
+    {
+        var bothEnvelope = await McpTestClient.CallTool(Factory, "animation_apply", new
+        {
+            operations = new[] { new Dictionary<string, object> { ["op"] = "describe", ["controllerPath"] = "Assets/A.controller", ["clipPath"] = "Assets/B.anim" } },
+        });
+        Assert.Contains("exactly one", McpTestClient.ErrorText(bothEnvelope));
+
+        var neitherEnvelope = await McpTestClient.CallTool(Factory, "animation_apply", new
+        {
+            operations = new[] { new Dictionary<string, object> { ["op"] = "describe" } },
+        });
+        Assert.Contains("exactly one", McpTestClient.ErrorText(neitherEnvelope));
+    }
+
+    [Fact]
+    public async Task AnimationApply_NewOps_TranslateEveryFieldVerbatim()
+    {
+        var (reads, writes) = await ConnectAsFakeUnityAsync();
+
+        var appliedAll = JsonValue.NewArray();
+        var results = JsonValue.NewArray();
+        string[] opNames = ["addLayer", "setBlendTree", "createClip", "setCurve", "setEvents", "describe"];
+        for (var i = 0; i < opNames.Length; i++)
+        {
+            appliedAll.Add(JsonValue.Integer(i));
+            results.Add(Obj(("index", JsonValue.Integer(i)), ("op", JsonValue.String(opNames[i])), ("result", JsonValue.NewObject())));
+        }
+
+        var responder = AnswerBusyProbeThenRespondAsync(reads, writes, Obj(
+            ("applied", appliedAll), ("results", results), ("failed", JsonValue.NewArray()),
+            ("summary", JsonValue.String("6 applied, 0 failed of 6 operation(s)."))));
+
+        Structured(await McpTestClient.CallTool(Factory, "animation_apply", new
+        {
+            operations = new object[]
+            {
+                new Dictionary<string, object>
+                {
+                    ["op"] = "addLayer", ["controllerPath"] = "Assets/P.controller", ["name"] = "Combat",
+                    ["weight"] = 1.0, ["blending"] = "Additive", ["avatarMask"] = "Assets/Upper.mask", ["ikPass"] = true,
+                },
+                new Dictionary<string, object>
+                {
+                    ["op"] = "setBlendTree", ["controllerPath"] = "Assets/P.controller", ["layer"] = "Base Layer", ["stateName"] = "Locomotion",
+                    ["tree"] = new Dictionary<string, object>
+                    {
+                        ["type"] = "Simple1D", ["parameter"] = "Speed",
+                        ["children"] = new object[] { new Dictionary<string, object> { ["clip"] = "Assets/Idle.anim", ["threshold"] = 0.0 } },
+                    },
+                },
+                new Dictionary<string, object> { ["op"] = "createClip", ["clipPath"] = "Assets/Panel.anim", ["frameRate"] = 30.0, ["loop"] = true },
+                new Dictionary<string, object>
+                {
+                    ["op"] = "setCurve", ["clipPath"] = "Assets/Panel.anim", ["path"] = "", ["type"] = "RectTransform", ["property"] = "m_AnchoredPosition.x",
+                    ["keys"] = new object[]
+                    {
+                        new Dictionary<string, object> { ["time"] = 0.0, ["value"] = -400 },
+                        new Dictionary<string, object> { ["time"] = 0.25, ["value"] = 0, ["easing"] = "easeOut" },
+                    },
+                },
+                new Dictionary<string, object>
+                {
+                    ["op"] = "setEvents", ["clipPath"] = "Assets/Attack.anim", ["receiver"] = "Player/Model",
+                    ["events"] = Array.Empty<object>(),
+                },
+                new Dictionary<string, object> { ["op"] = "describe", ["controllerPath"] = "Assets/P.controller" },
+            },
+        }));
+
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
+        var ops = Prop(request.Params!, "operations");
+        Assert.Equal(6, ops.Items.Count);
+
+        var addLayer = ops.Items[0];
+        Assert.Equal("Combat", Prop(addLayer, "name").AsString());
+        Assert.Equal("Additive", Prop(addLayer, "blending").AsString());
+        Assert.True(Prop(addLayer, "ikPass").AsBoolean());
+        Assert.Equal("Assets/Upper.mask", Prop(addLayer, "avatarMask").AsString());
+
+        var setBlendTree = ops.Items[1];
+        Assert.Equal("Base Layer", Prop(setBlendTree, "layer").AsString());
+        Assert.Equal("Locomotion", Prop(setBlendTree, "stateName").AsString());
+        var tree = Prop(setBlendTree, "tree");
+        Assert.Equal("Simple1D", Prop(tree, "type").AsString());
+        Assert.Equal("Speed", Prop(tree, "parameter").AsString());
+        var child = Prop(tree, "children").Items[0];
+        Assert.Equal("Assets/Idle.anim", Prop(child, "clip").AsString());
+        Assert.Equal(0.0, Prop(child, "threshold").AsDouble());
+
+        var createClip = ops.Items[2];
+        Assert.Equal("Assets/Panel.anim", Prop(createClip, "clipPath").AsString());
+        Assert.True(Prop(createClip, "loop").AsBoolean());
+
+        var setCurve = ops.Items[3];
+        Assert.Equal("", Prop(setCurve, "path").AsString());
+        Assert.Equal("m_AnchoredPosition.x", Prop(setCurve, "property").AsString());
+        var keys = Prop(setCurve, "keys");
+        Assert.Equal(2, keys.Items.Count);
+        Assert.False(keys.Items[0].TryGetProperty("easing", out _), "the first key sent no easing, so none should be on the wire");
+        Assert.Equal("easeOut", Prop(keys.Items[1], "easing").AsString());
+
+        var setEvents = ops.Items[4];
+        Assert.Equal("Player/Model", Prop(setEvents, "receiver").AsString());
+        var events = Prop(setEvents, "events");
+        Assert.Equal(WireKind.Array, events.Kind);
+        Assert.Empty(events.Items); // explicit [] must reach the wire, not be omitted - it means "clear everything"
+
+        var describe = ops.Items[5];
+        Assert.Equal("Assets/P.controller", Prop(describe, "controllerPath").AsString());
+        Assert.False(describe.TryGetProperty("clipPath", out _));
+    }
+
+    [Fact]
+    public async Task AnimationApply_LayerField_TranslatedVerbatimForAssignClipAndEditController()
+    {
+        var (reads, writes) = await ConnectAsFakeUnityAsync();
+        var responder = AnswerBusyProbeThenRespondAsync(reads, writes, Obj(
+            ("applied", JsonValue.NewArray().Add(JsonValue.Integer(0)).Add(JsonValue.Integer(1))),
+            ("results", JsonValue.NewArray()
+                .Add(Obj(("index", JsonValue.Integer(0)), ("op", JsonValue.String("assignClip")), ("result", JsonValue.NewObject())))
+                .Add(Obj(("index", JsonValue.Integer(1)), ("op", JsonValue.String("editController")), ("result", JsonValue.NewObject())))),
+            ("failed", JsonValue.NewArray()),
+            ("summary", JsonValue.String("2 applied, 0 failed of 2 operation(s)."))));
+
+        Structured(await McpTestClient.CallTool(Factory, "animation_apply", new
+        {
+            operations = new object[]
+            {
+                new Dictionary<string, object> { ["op"] = "assignClip", ["controllerPath"] = "Assets/P.controller", ["layer"] = "Combat", ["stateName"] = "Punch", ["clipPath"] = "Assets/Punch.anim" },
+                new Dictionary<string, object> { ["op"] = "editController", ["controllerPath"] = "Assets/P.controller", ["layer"] = "Combat", ["removeStates"] = new[] { "Old" } },
+            },
+        }));
+
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
+        var ops = Prop(request.Params!, "operations");
+        Assert.Equal("Combat", Prop(ops.Items[0], "layer").AsString());
+        Assert.Equal("Combat", Prop(ops.Items[1], "layer").AsString());
     }
 }

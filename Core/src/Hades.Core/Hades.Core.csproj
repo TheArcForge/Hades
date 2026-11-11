@@ -89,6 +89,9 @@
     <EmbeddedResource Include="..\..\..\UnityPlugin\Assets\Hades\Tools\MaterialApplyCommands.cs">
       <LogicalName>Hades.Plugin.Tools.MaterialApplyCommands.cs</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="..\..\..\UnityPlugin\Assets\Hades\Tools\ScriptableObjectApplyCommands.cs">
+      <LogicalName>Hades.Plugin.Tools.ScriptableObjectApplyCommands.cs</LogicalName>
+    </EmbeddedResource>
     <EmbeddedResource Include="..\..\..\UnityPlugin\Assets\Hades\Tools\AnimationCommands.cs">
       <LogicalName>Hades.Plugin.Tools.AnimationCommands.cs</LogicalName>
     </EmbeddedResource>

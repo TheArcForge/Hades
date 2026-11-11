@@ -47,8 +47,8 @@ namespace Hades.Tests.Editor
             "hades_status", "inspect_asset", "inspector_inspect", "material_apply", "prefab_apply",
             "project_get_console_log", "project_get_test_results", "project_recompile_scripts",
             "project_run_tests", "project_settings", "project_settings_apply", "propose_memory_update",
-            "recall_memory", "scene_apply", "scene_manage", "script_editing_session", "search_by_name",
-            "trace_dependencies", "validate_memory",
+            "recall_memory", "scene_apply", "scene_manage", "script_editing_session",
+            "scriptable_object_apply", "search_by_name", "trace_dependencies", "validate_memory",
         };
 
         /// <summary>Matches this codebase's own naming convention for every one of the 32 live tools:
@@ -89,9 +89,16 @@ namespace Hades.Tests.Editor
     public sealed class LiveMcpToolNamesTests
     {
         [Test]
-        public void Names_HasExactly32Entries_MatchingPlan10Task6sMeasuredCutoverSurface()
+        public void Names_HasExactly33Entries_AfterPlayModeCaptureViewSceneBakeRemoval()
         {
-            Assert.AreEqual(32, LiveMcpToolNames.Names.Length);
+            // 32 -> 33 -> 34 -> 35 -> 36 -> 37: DESIGN-01 (Lane B) added 'play_mode'; DESIGN-03
+            // (Lane C) added 'project_build'; DESIGN-04 (Lane D) added 'scriptable_object_apply';
+            // DESIGN-02 (Lane F) added 'capture_view'; DESIGN-06 (Lane G) added 'scene_bake' - the
+            // programme-wide final count (see docs/design/ROADMAP.md §4/§20).
+            // 37 -> 36: project_build removed - devs don't use in-Editor builds.
+            // 36 -> 33: play_mode, capture_view, scene_bake removed - Unity's own CLI/pipeline
+            // covers these Editor actions.
+            Assert.AreEqual(33, LiveMcpToolNames.Names.Length);
         }
 
         [Test]

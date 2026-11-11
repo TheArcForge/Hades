@@ -52,7 +52,7 @@ Sequential steps:
 1. Runs `scripts/sync-plugin.sh` to assemble `ClaudeCodePlugin/` — the current Claude Code
    plugin — into the plugin repo content. No build step: the plugin is a static manifest,
    skills, commands, and an HTTP `.mcp.json`, so there is nothing to compile first.
-2. Validates the output: 22 skills, 6 commands, a valid `plugin.json`, an `.mcp.json` with a
+2. Validates the output: 23 skills, 6 commands, a valid `plugin.json`, an `.mcp.json` with a
    plugin-root HTTP `hades` entry at `http://127.0.0.1:7823/mcp` (no `mcpServers` wrapper), no
    leaked `.meta`/`.cs`/`node_modules`, and no `Bridge~`/`Scanner~` (the retired v1.2 shape).
 3. Clones `TheArcForge/hades-plugin` using the `PLUGIN_REPO_TOKEN` secret.
@@ -74,7 +74,7 @@ Checks:
 - All required files present (plugin.json, .mcp.json, Bridge dist, Scanner source, README, LICENSE, CLAUDE.md).
 - `plugin.json` and `.mcp.json` are valid JSON.
 - `.mcp.json` uses `${CLAUDE_PLUGIN_ROOT}` paths.
-- Exactly 22 skills and 6 commands.
+- Exactly 23 skills and 6 commands.
 - No `.meta`, `.cs`, or `node_modules` leaked in.
 
 Purpose: guard rail against sync bugs or accidental direct edits.
@@ -1010,7 +1010,7 @@ When you do it:
    first. If that workflow is ever reverted there, re-apply it BEFORE tagging, not after.
 3. Confirm the synced marketplace actually serves the current plugin, not the retired one - the
    same check `Documentation/Installing.md`'s "Confirm you're testing the new Hades"
-   section already walks a tester through: tool count (32, not ~90) and `hades_status`'s `version`
+   section already walks a tester through: tool count (33, not ~90) and `hades_status`'s `version`
    field.
 
 ### 8.6 Post-publish
@@ -1022,7 +1022,7 @@ When you do it:
    cost of being wrong in the window between shipping the docs and pushing the tag. Confirm each
    still reads correctly post-sync; the work to do here is checking, not rewriting.
 2. Re-verify the marketplace install end to end: `/plugin marketplace add TheArcForge/hades-plugin`
-   → `/plugin install hades` → `/mcp` reports `hades` at 32 tools over the HTTP URL, not a `node`
+   → `/plugin install hades` → `/mcp` reports `hades` at 33 tools over the HTTP URL, not a `node`
    command.
 
 ## 9. Windows distribution (Windows/Installer)

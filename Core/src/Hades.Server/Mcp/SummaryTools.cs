@@ -80,6 +80,24 @@ public sealed record CharonStatusResult
     [JsonPropertyName("leaseExpiresAtUtc")] public DateTimeOffset? LeaseExpiresAtUtc { get; init; }
 
     [JsonPropertyName("detail")] public required string Detail { get; init; }
+
+    /// <summary>DESIGN-06 §6.2 (Layer 2): which Editor-only capabilities this attached Editor's
+    /// AppDomain can actually reach - hello-derived, so populated whenever <see cref="Attached"/> is
+    /// true (including while <see cref="Busy"/>), with NO extra wire round trip. Empty while not
+    /// attached - see get_project_summary's own 'capabilities' (Layer 1) for the offline,
+    /// package-manifest-derived answer to the same question. Always empty today - see
+    /// ProjectSummary.Capabilities' own doc comment.</summary>
+    [JsonPropertyName("capabilities")] public required IReadOnlyList<CapabilityResult> Capabilities { get; init; }
+}
+
+/// <summary>Wire shape of <see cref="Hades.CapabilityInfo"/> - kept as its own MCP-facing record
+/// (rather than reusing the core one directly) for the same reason every other *Result record in
+/// this file is: JsonPropertyName control independent of the core type's own naming.</summary>
+public sealed record CapabilityResult
+{
+    [JsonPropertyName("id")] public required string Id { get; init; }
+    [JsonPropertyName("available")] public required bool Available { get; init; }
+    [JsonPropertyName("reason")] public string? Reason { get; init; }
 }
 
 /// <summary>
@@ -100,7 +118,7 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
                + ToolSupport.SavedStateClause)]
     public async Task<SceneSummary> GetSceneSummary(
         [Description("Project-relative scene or prefab path, as returned by search_by_name")] string path,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -129,7 +147,7 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
         [Description("Only include files changed at or after this ISO-8601 timestamp, e.g. "
                     + "\"2026-08-01T00:00:00Z\". Omit for no lower bound.")] string? since = null,
         [Description("Maximum files to return (1-500, default 50)")] int limit = 50,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         DateTimeOffset? sinceParsed = null;
@@ -170,17 +188,15 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
     }
 
     [McpServerTool(Name = "hades_rebuild_graph", Title = "Rebuild Graph", ReadOnly = false, UseStructuredContent = true)]
-    [Description("Forces a full reindex of a project from scratch, ignoring whatever this process "
-               + "already had cached, and reports the node count before and after. Full rebuilds "
-               + "can take 10-60 seconds on large projects; the graph stays queryable throughout "
-               + "but results may be stale until it completes. This call is fully synchronous for "
-               + "that entire duration — no cancellation, no progress reporting, and it waits its "
-               + "turn behind any other indexing already running for this project — so it can run "
-               + "longer than a typical client-side timeout on a large project. Hades' incremental "
-               + "sync already keeps the graph current on its own — call this when you suspect the "
-               + "graph has drifted from disk, not as routine maintenance." + ToolSupport.SavedStateClause)]
+    [Description("Forces a full reindex of a project from scratch, ignoring whatever was cached, "
+               + "and reports the node count before and after. Can take 10-60 seconds on large "
+               + "projects; the graph stays queryable throughout but results may be stale until "
+               + "done. Fully synchronous - no cancellation, no progress reporting - so it can "
+               + "outlast a typical client-side timeout. Hades' incremental sync already keeps the "
+               + "graph current - call this only when you suspect drift."
+               + ToolSupport.SavedStateClause)]
     public async Task<RebuildResult> RebuildGraph(
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
@@ -206,21 +222,13 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
 
     [McpServerTool(Name = "hades_charon_status", Title = "Charon Status", ReadOnly = true, UseStructuredContent = true)]
     [Description("Whether a Unity Editor is attached over Charon, Hades' plugin transport, and "
-               + "whether its main thread is currently responsive. Three states: not attached (no "
-               + "Editor connected for this project), attached (Unity version, project path, pid "
-               + "and connection age are reported), or busy — attached, but the main thread has "
-               + "not answered within the probe window (e.g. mid-compile, importing assets, or "
-               + "blocked on a long-running operation). Busy is distinct from not attached: the "
-               + "connection itself is alive, only the Editor is momentarily unresponsive. Roughly "
-               + "50 of Hades' Editor-dependent tools — scene, prefab, component, material and "
-               + "animation authoring; play-mode and console access; live trace capture — do not "
-               + "appear in tools/list here regardless of attachment: they cannot be proxied yet, "
-               + "so listing them would only mean discovering the failure on every call. Everything "
-               + "derivable from files on disk (search, references, dependencies, scene/prefab "
-               + "summaries) works regardless of Editor state. Call this to confirm an Editor-only "
-               + "capability is genuinely unavailable, or to tell 'busy' apart from 'gone'.")]
+               + "responsive. Three states: not attached; attached (Unity version, project path, "
+               + "pid, connection age); or busy - attached but unresponsive within the probe "
+               + "window (e.g. mid-compile) - the connection is alive, only momentarily busy. "
+               + "Editor-dependent tools need attachment; disk-derived ones (search, references, "
+               + "dependencies, summaries) work regardless. Tells \"busy\" apart from \"gone\".")]
     public async Task<CharonStatusResult> CharonStatus(
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         var (productGuid, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
@@ -250,6 +258,9 @@ public sealed class SummaryTools(ProjectService projects, LeaseRegistry leases)
             LeaseHeldForSeconds = lease is not null ? (DateTimeOffset.UtcNow - lease.AcquiredAtUtc).TotalSeconds : null,
             LeaseExpiresAtUtc = lease?.ExpiresAtUtc,
             Detail = DescribeCharonStatus(status, lease),
+            Capabilities = status.Capabilities
+                .Select(c => new CapabilityResult { Id = c.Id, Available = c.Available, Reason = c.Reason })
+                .ToList(),
         };
     }
 

@@ -222,8 +222,11 @@ namespace Hades.Tests.Editor
         // ------------------------------------------------------------------------------ scene.create
 
         [Test]
-        public void CreateScene_NoTemplate_WritesNewSceneFile_WithoutDisturbingCurrentlyOpenScene_NoLeaseTouched()
+        public void CreateScene_NoTemplate_WritesNewSceneFile_AndOpensItAsTheActiveScene_NoLeaseTouched()
         {
+            // F5 fix: 'create' now opens the new scene as the active scene, matching non-additive
+            // 'open' - see SceneManageCommands' own doc comment for why the earlier
+            // additive-create-then-close behaviour traded one defect for another.
             var activeBefore = SceneManager.GetActiveScene().path;
 
             var (gate, fake, pump) = NoopGateParts();
@@ -234,12 +237,51 @@ namespace Hades.Tests.Editor
                 var result = CommandTable.Dispatch(gate, Request("scene.create", @params));
 
                 Assert.AreEqual(path, StringProp(result, "created"));
+                Assert.AreEqual(path, StringProp(result, "activeScene"));
                 Assert.IsNotNull(AssetDatabase.LoadAssetAtPath<SceneAsset>(path));
-                Assert.AreEqual(activeBefore, SceneManager.GetActiveScene().path,
-                    "scene.create must not change which scene is currently open");
+                Assert.AreEqual(path, SceneManager.GetActiveScene().path, "scene.create must open the new scene as the active scene");
+                Assert.AreNotEqual(activeBefore, SceneManager.GetActiveScene().path);
 
                 AssertNeverTouchedLease(fake, gate);
             }
+        }
+
+        [Test]
+        public void CreateScene_CurrentSceneIsDirty_Refused_NamingItAndDiscardUnsaved()
+        {
+            // MarkSceneDirty, not "new GameObject(...) and assume it dirties synchronously" - see
+            // ProjectCommandsTests.AssertRunTestsNeverSavesDirtyScene's own doc comment.
+            var dirtyPath = SceneManager.GetActiveScene().path;
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            Assert.IsTrue(SceneManager.GetActiveScene().isDirty, "fixture must start dirty for this test to prove anything");
+
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var path = ScratchDir + "/ShouldNotBeCreated.unity";
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String(path));
+            var ex = Assert.Throws<InvalidOperationException>(() => CommandTable.Dispatch(gate, Request("scene.create", @params)));
+
+            StringAssert.Contains(dirtyPath, ex.Message);
+            StringAssert.Contains("discardUnsaved", ex.Message);
+            Assert.IsNull(AssetDatabase.LoadAssetAtPath<SceneAsset>(path), "a refused create must never write the new scene file");
+        }
+
+        [Test]
+        public void CreateScene_DiscardUnsaved_ProceedsDespiteADirtyCurrentScene()
+        {
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            Assert.IsTrue(SceneManager.GetActiveScene().isDirty, "fixture must start dirty for this test to prove anything");
+
+            using var pump = new MainThreadPump();
+            using var gate = new ReloadGate(new FakeEditorLockApi(), pump, () => DateTime.UtcNow, TimeSpan.FromHours(1));
+
+            var path = ScratchDir + "/CreatedDespiteDirty.unity";
+            var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String(path)).SetProperty("discardUnsaved", JsonValue.Bool(true));
+            var result = CommandTable.Dispatch(gate, Request("scene.create", @params));
+
+            Assert.AreEqual(path, StringProp(result, "created"));
+            Assert.AreEqual(path, SceneManager.GetActiveScene().path);
         }
 
         [Test]

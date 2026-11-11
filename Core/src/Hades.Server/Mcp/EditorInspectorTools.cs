@@ -81,7 +81,7 @@ public sealed class EditorInspectorTools(EditorProxy editor, ProjectService proj
                + "live Editor - call hades_charon_status first if unsure." + ToolSupport.LiveStateClause)]
     public async Task<InspectorInspectResult> InspectorInspect(
         [Description("Hierarchy path of the GameObject to inspect")] string path,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         EditorComponentTools.RequireNonBlank(path, nameof(path), "inspector_inspect");

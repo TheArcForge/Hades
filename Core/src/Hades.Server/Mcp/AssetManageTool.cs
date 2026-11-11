@@ -19,12 +19,17 @@ public sealed record AssetManageOperation : IBatchOperation
 {
     [JsonPropertyName("op")] public required string Op { get; init; }
 
-    // move
-    [JsonPropertyName("sourcePath")] [OpField("move")] public string? SourcePath { get; init; }
-    [JsonPropertyName("destPath")] [OpField("move")] public string? DestPath { get; init; }
+    // move, duplicate - 'move' renames/relocates an existing asset; 'duplicate' copies it to a new
+    // path. Same field names as asset_manage's OWN pre-existing 'move' op (DESIGN-04 §3.2) - NOT
+    // material_apply.duplicate's 'sourcePath'/'path' shape. Internal consistency within the tool a
+    // caller is currently reading beats cross-tool consistency with a tool it is not (documented wart,
+    // not extended - see AssetManageTool's own class doc comment).
+    [JsonPropertyName("sourcePath")] [OpField("move", "duplicate")] public string? SourcePath { get; init; }
+    [JsonPropertyName("destPath")] [OpField("move", "duplicate")] public string? DestPath { get; init; }
 
-    // import
-    [JsonPropertyName("path")] [OpField("import")] public string? Path { get; init; }
+    // import, delete - 'the asset this op is about', reusing the SAME 'path' field name for both
+    // (DESIGN-04 §3.2: delete uses 'path', matching import{path}).
+    [JsonPropertyName("path")] [OpField("import", "delete")] public string? Path { get; init; }
     [JsonPropertyName("forceUpdate")] [OpField("import")] public bool? ForceUpdate { get; init; }
     [JsonPropertyName("recursive")] [OpField("import")] public bool? Recursive { get; init; }
 
@@ -81,38 +86,39 @@ public sealed record AssetManageResult
 /// for why calling each operation's normal, self-leasing entry point per-op would be both wasteful
 /// and unsafe.</para>
 ///
-/// <para><b>No Undo, for all three ops - unlike prefab_apply/project_settings_apply.</b> Unlike every
-/// earlier batch tool, NONE of asset_manage's three operations have ever had Undo coverage: moving/
-/// renaming an asset has no Unity Undo primitive that covers a path the way
+/// <para><b>Undo is UNEVEN, like scene_manage - no longer a blanket "no undo".</b> DESIGN-04 Lane D
+/// added 'delete'/'duplicate' to what used to be three ops with genuinely no Undo coverage at all:
+/// moving/renaming an asset has no Unity Undo primitive that covers a path the way
 /// <see cref="UnityEditor.Undo.RecordObject"/> covers a serialized field (see the standalone
 /// asset_move tool's own description), and import/refresh are project-file-level operations, not
-/// in-memory object state. A caller must not expect a single Ctrl/Cmd+Z to undo an asset_manage call
-/// at all - reversing a move is a second asset_manage call.</para>
+/// in-memory object state - 'delete' is the same story (moving to the OS trash is the recoverability
+/// story, not Ctrl/Cmd+Z). But 'duplicate' DOES register its new copy with
+/// <see cref="UnityEditor.Undo.RegisterCreatedObjectUndo"/> - the same primitive material_apply's own
+/// create/duplicate use, probe-verified (DESIGN-04 §5.2) to destroy the in-memory object on undo
+/// WITHOUT removing the copied file from disk. So a caller must not expect a single Ctrl/Cmd+Z to
+/// undo an asset_manage call uniformly: 'move'/'import'/'refresh'/'delete' never register anything;
+/// 'duplicate' registers a create that only partially undoes (reverse a move with a second
+/// asset_manage call; finish undoing a duplicate with a 'delete' op on the copy).</para>
 /// </summary>
 [McpServerToolType]
 public sealed class AssetManageTool(EditorProxy editor, ProjectService projects)
 {
-    static readonly string[] ValidOps = ["move", "import", "refresh"];
+    static readonly string[] ValidOps = ["move", "import", "refresh", "delete", "duplicate"];
 
     [McpServerTool(Name = "asset_manage", Title = "Manage Assets (Batch)", ReadOnly = false, UseStructuredContent = true)]
-    [Description("Applies a batch of asset file-lifecycle operations - move(sourcePath, destPath), "
-               + "import(path, forceUpdate?, recursive?), refresh() - in ONE call, in the order "
-               + "given. This is the batch form of asset_move/asset_import/project_refresh_assets. "
-               + "NO UNDO for any of the three ops: an asset's path/import state is not a serialized "
-               + "field Unity's Undo can snapshot - reversing a move, or re-importing, is a second "
-               + "asset_manage call, not Ctrl/Cmd+Z. "
-               + "PARTIAL FAILURE, NOT ROLLED BACK: each operation's outcome is reported by its "
-               + "0-based index in 'applied' (succeeded) or 'failed' (with its own error) - "
-               + "operations that already succeeded are never undone because a LATER one failed. "
-               + "Every successful operation's own result is reported in 'results' alongside "
-               + "'applied'. An unrecognised 'op' value rejects the WHOLE call before anything is "
-               + "sent to the Editor, listing the valid ops. Needs a live Editor - call "
-               + "hades_charon_status first if unsure.")]
+    [Description("Applies a batch of asset file-lifecycle operations in one call: move, import, "
+               + "refresh, delete, duplicate. Per-op fields are listed on 'operations'. UNDO IS "
+               + "UNEVEN: move/import/refresh/delete have none; duplicate registers Undo for the "
+               + "new copy, but Ctrl/Cmd+Z only destroys the in-memory object - the copied .asset "
+               + "FILE stays on disk, so finish that undo with a 'delete' op. DELETE moves the "
+               + "asset to the OS trash (not permanent, unverified on Linux/headless); it refuses "
+               + "folders and lands in 'failed', not success, if the trash call itself fails.")]
     public async Task<AssetManageResult> AssetManage(
-        [Description("Operations to apply, in order. Each needs 'op' plus that op's own fields: "
-                   + "move{sourcePath,destPath}, import{path,forceUpdate?,recursive?}, refresh{}.")]
+        [Description("Per-op fields (each op also needs 'op'): "
+                   + "move{sourcePath,destPath}, import{path,forceUpdate?,recursive?}, refresh{}, "
+                   + "delete{path}, duplicate{sourcePath,destPath}.")]
         IReadOnlyList<AssetManageOperation> operations,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (operations is null || operations.Count == 0)

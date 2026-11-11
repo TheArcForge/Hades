@@ -52,7 +52,7 @@ idea that survives is memory (`.arcforge/memory/`), which v2 imports on sight �
               │  Core/src/Hades.Server                │
               │  (.NET 10, headless)                  │
               │                                       │
-              │  MCP endpoint (32 tools)              │
+              │  MCP endpoint (33 tools)              │
               │  control API (bearer token)           │
               │  knowledge graph (SQLite)             │
               │  Roslyn + Unity-YAML indexers         │
@@ -454,9 +454,9 @@ that same habit. Stated plainly:
 
 ## 5. The tool surface
 
-Exactly **32** MCP tools — confirmed two independent ways: a `grep` over every
+Exactly **33** MCP tools — confirmed two independent ways: a `grep` over every
 `[McpServerTool(Name = "…")]` attribute in `Core/src/Hades.Server/Mcp/*.cs`, and a live
-`tools/list` call against the core actually running on this machine (port 7823), which returned 32
+`tools/list` call against the core actually running on this machine (port 7823), which returned 33
 tool names identical to the source-tree list.
 
 | Group | Tools |
@@ -465,13 +465,13 @@ tool names identical to the source-tree list.
 | Graph & disk reads | `search_by_name`, `find_references_to`, `find_unset_references`, `trace_dependencies`, `graph_query`, `get_project_summary`, `get_scene_summary`, `get_recently_changed`, `inspect_asset` |
 | Memory (Asphodel) | `get_memory_summary`, `recall_memory`, `propose_memory_update`, `validate_memory` |
 | Settings | `project_settings` |
-| Editor — batch authoring (mutating) | `scene_apply`, `prefab_apply`, `material_apply`, `animation_apply`, `asset_manage`, `scene_manage`, `project_settings_apply` |
+| Editor — batch authoring (mutating) | `scene_apply`, `prefab_apply`, `material_apply`, `animation_apply`, `asset_manage`, `scene_manage`, `project_settings_apply`, `scriptable_object_apply` |
 | Editor — live state & project-level | `inspector_inspect`, `project_recompile_scripts`, `project_run_tests`, `project_get_console_log`, `project_get_test_results`, `script_editing_session`, `hades_regression` |
 
-Sixteen `[McpServerToolType]` classes register these 32 tools (`Program.cs`'s `.WithTools<T>()`
+Seventeen `[McpServerToolType]` classes register these 33 tools (`Program.cs`'s `.WithTools<T>()`
 chain).
 
-**The consolidation.** These 32 replace what was, briefly, ~90 one-call-per-API-operation tools. A
+**The consolidation.** These tools (32 after the consolidation, 33 today) replace what was, briefly, ~90 one-call-per-API-operation tools. A
 live `tools/list` measured on 2026-08-03 recorded 90 tools at 123,511 bytes of serialized
 definitions — roughly 33,381 tokens, paid on every session before the first user message, and
 already larger than Claude Code's own ~25,000-token cap on a single tool *response*
@@ -504,7 +504,7 @@ consolidation… not done here," and its decision D8 says to "port the existing 
 `docs/backlog/tool-surface-consolidation.md` goes further and calls the 90-tool surface "a known
 divergence from Anthropic's published guidance, carried on purpose." Two days later, a plan
 (`docs/superpowers/plans/2026-08-03-tool-consolidation.md`) reversed that call and executed the
-consolidation in full. The code today — 32 tools, batch `apply` operations, camelCase op vocabularies
+consolidation in full. The code today — 33 tools, batch `apply` operations, camelCase op vocabularies
 — reflects the *plan*, not the specs' original sequencing decision. If you read the specs before
 the code, expect this mismatch.
 
@@ -653,7 +653,7 @@ rules out project-local leftovers; it says nothing about the rest of the machine
 ## 8. Distribution
 
 Three install units, each with one job: **the app** (a DMG on macOS, an MSI on Windows — core +
-shell either way), the **Claude Code plugin** (`hades@arcforge` — 22 skills under `skills/`, 6
+shell either way), the **Claude Code plugin** (`hades@arcforge` — 23 skills under `skills/`, 6
 `/hades:*` commands under `commands/`, and the static MCP server declaration), and
 **`Assets/Hades/`** (written by the app itself, per project, optional — §2.3). What is *not* an
 install unit anymore: the UPM package, `Packages/manifest.json`, `.mcp.json`, a `CLAUDE.md` block,

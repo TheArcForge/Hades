@@ -219,15 +219,74 @@ public class IncrementalIndexTests : IDisposable
     }
 #pragma warning restore CA1416
 
-    // I4 (.meta-only changes invisible to the sweep) was investigated but NOT fixed this round:
-    // the natural fix — folding a .meta's own mtime into its owning asset's tracked mtime — was
-    // implemented, proven to correctly detect a guid-only edit, and then REVERTED after it broke
-    // Hades.Server.Tests.SummaryToolTests.GetRecentlyChanged_SortsNewestFirstAndHonoursSince:
+    // I4 (.meta-only changes invisible to the sweep) was investigated in an earlier pass and NOT
+    // fixed then: the natural fix — folding a .meta's own mtime into its owning asset's tracked
+    // mtime — was implemented, proven to correctly detect a guid-only edit, and then REVERTED
+    // after it broke Hades.Server.Tests.SummaryToolTests.GetRecentlyChanged_SortsNewestFirstAndHonoursSince:
     // file_state.mtime_utc is also the sort key get_recently_changed exposes to callers, and
     // folding in an unrelated .meta timestamp can pull an asset's reported "last changed" time
-    // forward independent of its own content ever changing. A correct fix needs the .meta's own
-    // mtime tracked separately from file_state (e.g. its own table), which is a GraphSchema/
-    // GraphDatabase change outside this pass's file ownership. See the final report for detail.
+    // forward independent of its own content ever changing. DESIGN-07 §7.3 fixes it properly: the
+    // .meta's own mtime/size are tracked in two SEPARATE, new file_state columns
+    // (meta_mtime_utc/meta_size — see GraphSchema v5), so mtime_utc keeps meaning exactly what
+    // get_recently_changed needs it to mean. The test below is the direct proof; its companion in
+    // SummaryToolTests.cs (GetRecentlyChanged_AMetaOnlyEditReindexesButDoesNotReorder) pins the
+    // separation the other direction.
+    [Fact]
+    public void AMetaOnlyEditIsDetectedAndReindexesTheAsset()
+    {
+        MakeProject();
+        WriteTexture();
+        var service = NewService();
+        service.AdoptAndIndex(_projectRoot);
+
+        AssertTextureSubtype(expected: "Default"); // textureType: 0
+
+        // Only the .meta changes — the texture's own bytes, mtime, and size are untouched.
+        // Give the .meta a mtime clearly later than the initial index (one-second filesystem
+        // granularity on some platforms makes an immediate re-write unreliable otherwise).
+        var metaPath = Path.Combine(_projectRoot, "Assets/Rock.png.meta");
+        WriteTextureMeta(textureType: 2); // "GUI"
+        File.SetLastWriteTimeUtc(metaPath, DateTime.UtcNow.AddMinutes(5));
+
+        var sweep = service.SyncChanges(Guid)!;
+
+        Assert.Contains("Assets/Rock.png", sweep.Changed);
+        AssertTextureSubtype(expected: "GUI");
+    }
+
+    void WriteTexture()
+    {
+        // Content is irrelevant to BinaryAssetIndexer — existence is all that matters for the
+        // node itself; the .meta is what carries textureType.
+        Write("Assets/Rock.png", "\0not real png bytes, existence is all that matters");
+        WriteTextureMeta(textureType: 0);
+    }
+
+    void WriteTextureMeta(int textureType) => Write("Assets/Rock.png.meta", $"""
+        fileFormatVersion: 2
+        guid: cccc3333cccc3333cccc3333cccc3333
+        TextureImporter:
+          mipmaps:
+            enableMipMap: 0
+            sRGBTexture: 1
+          isReadable: 0
+          streamingMipmaps: 0
+          maxTextureSize: 2048
+          textureType: {textureType}
+        """);
+
+    // Asserted through GraphDatabase.QueryGraph's own assetSubtype filter — the actual production
+    // path graph_query exercises (DESIGN-07 §8.2) — rather than a raw column read, so this proves
+    // the whole write-then-filter round trip, not just that a value landed in a column nothing
+    // reads back.
+    void AssertTextureSubtype(string expected)
+    {
+        using var db = OpenGraph();
+        var match = db.QueryGraph(kind: "Texture2D", namePattern: null, pathPrefix: null, edgeKind: null,
+            assetSubtype: expected);
+        var node = Assert.Single(match);
+        Assert.Equal("Assets/Rock.png", node.Path);
+    }
 
     public void Dispose()
     {

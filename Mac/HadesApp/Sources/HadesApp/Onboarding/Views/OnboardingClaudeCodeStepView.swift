@@ -57,7 +57,7 @@ struct OnboardingClaudeCodeStepView: View {
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
 
             Text(
-                "This installs the plugin permanently — you don't repeat it per session. Afterwards run /mcp and confirm hades reports 32 tools."
+                "This installs the plugin permanently — you don't repeat it per session. Afterwards run /mcp and confirm hades reports 33 tools."
             )
             .font(.caption)
             .foregroundStyle(.secondary)

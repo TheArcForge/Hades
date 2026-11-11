@@ -84,6 +84,7 @@ Execute the approved design.
 - For scene construction: `hades:scene-authoring`
 - For prefab creation and editing: `hades:prefab-workflow`
 - For animation controller setup: `hades:animation-workflow`
+- For designer-facing data (item configs, event channels, runtime sets): `hades:data-modeling` — use `scriptable_object_apply` to create/configure the actual asset instances, not hand-written `.asset` YAML.
 
 These skills provide efficient tool sequences and ordering for their respective workflows. Load them when the relevant work begins.
 
@@ -134,4 +135,4 @@ propose_memory_update("<domain>", "<what was decided and why>")
 
 **Skills:** `hades:unity-architect` — architecture decision frameworks. `hades:scene-authoring` — scene construction workflows. `hades:prefab-workflow` — prefab creation and editing. `hades:animation-workflow` — animation controller setup. `hades:unity-reviewer` — code review for Unity anti-patterns.
 
-**Hades MCP Tools:** `get_project_summary`, `get_scene_summary`, `search_by_name` (namePattern substring + optional declaration `kind` filter — no path or exact-match option), `find_references_to` (asset + C# code references), `trace_dependencies`, `recall_memory`, `propose_memory_update`, `graph_query`, `project_get_console_log`, `project_run_tests`, `script_editing_session` (action: `begin`/`end`).
+**Hades MCP Tools:** `get_project_summary`, `get_scene_summary`, `search_by_name` (namePattern substring + optional declaration `kind` filter — no path or exact-match option), `find_references_to` (asset + C# code references), `trace_dependencies`, `recall_memory`, `propose_memory_update`, `graph_query`, `project_get_console_log`, `project_run_tests`, `script_editing_session` (action: `begin`/`end`), `scriptable_object_apply` (create/configure ScriptableObject asset instances).

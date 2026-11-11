@@ -128,6 +128,7 @@ builder.Services
     .WithTools<QueryTools>()
     .WithTools<SceneApplyTool>()
     .WithTools<MaterialApplyTool>()
+    .WithTools<ScriptableObjectApplyTool>()
     .WithTools<AnimationApplyTool>()
     .WithTools<SceneManageTool>()
     .WithTools<AssetManageTool>()
@@ -164,6 +165,35 @@ builder.Services.Configure<McpServerOptions>(options =>
             await RecordTraceForRefusalAsync(context, toolName, startUtcMs, stopwatch.ElapsedMilliseconds,
                 DescribeError(rejection), rejection, cancellationToken).ConfigureAwait(false);
             return rejection;
+        }
+
+        // L1: a required TOP-LEVEL parameter the caller never sent at all. MissingRequiredFieldRejection
+        // below walks only INTO arguments that WERE sent, so it cannot see this; the SDK's own binding
+        // then failed with the opaque "An error occurred invoking '<tool>'." and nothing appended, for
+        // the 19 of 33 tools that declare a required parameter - the single most common call mistake
+        // there is. Refused here, in the same position and for the same reason as its two siblings;
+        // see MissingRequiredParameterRejection's own doc comment.
+        if (MissingRequiredParameterRejection(context) is { } missingParameterRejection)
+        {
+            await RecordTraceForRefusalAsync(context, toolName, startUtcMs, stopwatch.ElapsedMilliseconds,
+                DescribeError(missingParameterRejection), missingParameterRejection, cancellationToken).ConfigureAwait(false);
+            return missingParameterRejection;
+        }
+
+        // F7: a required field missing from a typed operation array (e.g. animation_apply's
+        // setEvents sending 'functionName' instead of 'function') used to bind successfully at the
+        // TOP level - 'operations' is itself just a JSON array - and only fail deep inside the SDK's
+        // own per-element deserialization into the typed record, where a required-member failure
+        // becomes a JsonException the SDK's tool dispatch already catches and reports as the opaque
+        // "An error occurred invoking '<tool>'." (never this call's own actionable validation
+        // messages - those never got a chance to run). Checked here instead, BEFORE next() ever
+        // reaches that deserialization, the same "refused, not ignored" position as
+        // UnknownParameterRejection just above - see MissingRequiredFieldRejection's own doc comment.
+        if (MissingRequiredFieldRejection(context) is { } missingFieldRejection)
+        {
+            await RecordTraceForRefusalAsync(context, toolName, startUtcMs, stopwatch.ElapsedMilliseconds,
+                DescribeError(missingFieldRejection), missingFieldRejection, cancellationToken).ConfigureAwait(false);
+            return missingFieldRejection;
         }
 
         CallToolResult result;
@@ -205,6 +235,50 @@ builder.Services.Configure<McpServerOptions>(options =>
         // RegressionRecorder itself, so a session recording other tools never records its own
         // start/stop/replay - the same exclusion CaptureIfRecording used to make wire-side.
         if (toolName != "hades_regression") CaptureForRegression(context, toolName, result);
+
+        return result;
+    });
+
+    // tools/list payload-size cut: outputSchema is OPTIONAL per the MCP spec, and every tool here
+    // carries one only because UseStructuredContent=true on its [McpServerTool] attribute asks for
+    // both it AND CallToolResult.StructuredContent together (see McpServerToolCreateOptions.
+    // UseStructuredContent's own doc comment) - the two are not independently toggleable on the
+    // attribute. Mutating the registered McpServerTool.ProtocolTool.OutputSchema directly (the
+    // same seam the boolean-schema-fix loop below uses for InputSchema/OutputSchema) was tried
+    // first and reverted: the SDK's own tool-invocation path reads that SAME Tool instance to
+    // decide whether to populate CallToolResult.StructuredContent, so nulling it there silently
+    // stopped every real caller — and every test's own Structured(...) helper — from ever seeing
+    // structured content again (217 test failures caught this, not a static read of the SDK).
+    // This filter instead rewrites only the OUTGOING tools/list response - a fresh Tool copy per
+    // tool, OutputSchema stripped - leaving the shared, registered McpServerTool.ProtocolTool
+    // instances (and therefore every real invocation's StructuredContent) untouched. Advertising
+    // it was ~24KB of a ~101KB payload at 33 tools - the single largest field, and almost entirely
+    // redundant with prose the description/inputSchema already carry. Kept for
+    // project_get_console_log alone: its outputSchema is the only place 'totalMatching' (whether
+    // more buffered console entries exist than 'count' returned) is documented anywhere a caller
+    // can discover without an extra call - see EditorProjectToolsTests.
+    // ProjectGetConsoleLog_OutputSchema_DeclaresTotalMatching, which pins that one exception.
+    options.Filters.Request.ListToolsFilters.Add(next => async (context, cancellationToken) =>
+    {
+        var result = await next(context, cancellationToken).ConfigureAwait(false);
+
+        if (result.Tools is { } tools)
+        {
+            result.Tools = tools.Select(tool =>
+                tool.OutputSchema is null || tool.Name == "project_get_console_log"
+                    ? tool
+                    : new Tool
+                    {
+                        Name = tool.Name,
+                        Title = tool.Title,
+                        Description = tool.Description,
+                        InputSchema = tool.InputSchema,
+                        OutputSchema = null,
+                        Annotations = tool.Annotations,
+                        Icons = tool.Icons,
+                        Meta = tool.Meta,
+                    }).ToList();
+        }
 
         return result;
     });
@@ -712,6 +786,200 @@ static CallToolResult? UnknownParameterRejection(RequestContext<CallToolRequestP
         ],
     };
 }
+
+/// <summary>
+/// L1: null when every parameter the matched tool's own JSON Schema marks <c>required</c> at the TOP
+/// level is present in <c>context.Params.Arguments</c>; otherwise a ready-to-return error
+/// <see cref="CallToolResult"/> naming the missing parameter(s), the tool's full parameter list, and
+/// which of them are required - so a caller can self-correct without guessing.
+///
+/// <para>The ROOT-level sibling of <see cref="MissingRequiredFieldRejection"/> just below, which
+/// iterates the arguments the caller actually SENT and walks into each one; a required parameter
+/// that was never sent at all appears nowhere in that iteration, so nothing checked it. The SDK's
+/// own binding then failed with the opaque "An error occurred invoking '&lt;tool&gt;'." and nothing
+/// appended - confirmed live against 6 tools, with 19 of 33 declaring a required parameter and so
+/// exposed - found by the 2026-11-10 pre-merge live pass (finding L1; that pass's own notes live
+/// under the gitignored docs/, so the substance is restated here rather than referenced). Reads
+/// <c>tool.ProtocolTool.InputSchema</c>, the SAME schema <c>tools/list</c> advertises and both
+/// siblings already read, rather than a second hand-maintained list.</para>
+///
+/// <para>Unlike both siblings this deliberately runs even when the call carried NO arguments at
+/// all: a tool with a required parameter called with <c>{}</c> is exactly the case that must be
+/// refused, and their shared <c>Arguments is not { Count: &gt; 0 }</c> early-out is what let it
+/// through. <c>graph_query</c>, which declares no <c>required</c> and validates its filter
+/// combination by hand, is unaffected - no <c>required</c> array means nothing to enforce.</para>
+///
+/// <para>Presence only, never the value's type - the same deliberate narrowness
+/// <see cref="MissingRequiredFieldRejection"/> documents for itself. A present-but-null required
+/// parameter counts as sent; whether null is acceptable is the tool's own business, and reporting
+/// it here would claim the caller omitted something they did not.</para>
+/// </summary>
+static CallToolResult? MissingRequiredParameterRejection(RequestContext<CallToolRequestParams> context)
+{
+    if (context.MatchedPrimitive is not McpServerTool tool) return null;
+
+    var schema = tool.ProtocolTool.InputSchema;
+    if (!schema.TryGetProperty("required", out var requiredElement) || requiredElement.ValueKind != JsonValueKind.Array)
+    {
+        return null;
+    }
+
+    var required = requiredElement.EnumerateArray()
+        .Select(element => element.GetString())
+        .Where(name => !string.IsNullOrEmpty(name))
+        .Select(name => name!)
+        .ToList();
+    if (required.Count == 0) return null;
+
+    var arguments = context.Params.Arguments;
+    var missing = required.Where(name => arguments is null || !arguments.ContainsKey(name)).ToList();
+    if (missing.Count == 0) return null;
+
+    var validNames = schema.TryGetProperty("properties", out var properties) && properties.ValueKind == JsonValueKind.Object
+        ? properties.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal).ToList()
+        : required;
+    var quotedMissing = string.Join(", ", missing.Select(name => $"'{name}'"));
+    var noun = missing.Count == 1 ? "parameter" : "parameters";
+
+    return new CallToolResult
+    {
+        IsError = true,
+        Content =
+        [
+            new TextContentBlock
+            {
+                Text = $"{context.Params.Name} is missing required {noun} {quotedMissing}. "
+                     + $"Valid parameters: {string.Join(", ", validNames)}; "
+                     + $"required: {string.Join(", ", required)}.",
+            },
+        ],
+    };
+}
+
+/// <summary>
+/// F7: null when every 'required' property the matched tool's OWN JSON Schema names (at any
+/// nesting depth reachable from a top-level argument the caller actually sent - typically a typed
+/// operation array's own element type, e.g. animation_apply's setEvents 'events[i]') is genuinely
+/// present in <c>context.Params.Arguments</c>; otherwise a ready-to-return error <see
+/// cref="CallToolResult"/> naming the exact position and the missing field, so a caller can
+/// self-correct without the SDK's own opaque "An error occurred invoking '&lt;tool&gt;'." (which
+/// this specifically stands in front of - see this filter's own comment at the call site).
+///
+/// <para>Driven entirely by <c>tool.ProtocolTool.InputSchema</c> - the SAME schema <c>tools/list</c>
+/// already advertises, and the SAME one <see cref="UnknownParameterRejection"/> reads one level up -
+/// rather than a per-tool, hand-maintained field list that could drift from the DTOs' own
+/// <c>required</c> members. A tool's typed operation record marks a member <c>required</c>
+/// (AnimationEventSpec.Function, SceneManageOperation has none, etc.) precisely so ITS OWN schema
+/// already states this; this check simply enforces what the schema already promises, before the
+/// SDK's own strict binding gets a chance to enforce the identical rule with a far worse
+/// error.</para>
+///
+/// <para>Deliberately narrow: only checks PRESENCE of a required key, never its VALUE's type - a
+/// present-but-wrong-typed field (e.g. a string where 'time' wants a number) is a different failure
+/// this does not attempt to cover, and still falls through to the SDK's own (opaque) handling. Only
+/// walks into an object/array the CALLER actually sent (<c>TryGetProperty</c> on the instance) - an
+/// omitted OPTIONAL nested value is never treated as if it were sent empty.</para>
+/// </summary>
+static CallToolResult? MissingRequiredFieldRejection(RequestContext<CallToolRequestParams> context)
+{
+    if (context.Params.Arguments is not { Count: > 0 } arguments) return null;
+    if (context.MatchedPrimitive is not McpServerTool tool) return null;
+
+    if (!tool.ProtocolTool.InputSchema.TryGetProperty("properties", out var properties)
+        || properties.ValueKind != JsonValueKind.Object)
+    {
+        return null;
+    }
+
+    foreach (var argument in arguments)
+    {
+        // An unrecognised top-level argument name is UnknownParameterRejection's own job, just
+        // above - skip it here rather than reporting it twice under a different message.
+        if (!properties.TryGetProperty(argument.Key, out var parameterSchema)) continue;
+
+        if (FindMissingRequiredField(parameterSchema, argument.Value, argument.Key) is not { } missing) continue;
+
+        return new CallToolResult
+        {
+            IsError = true,
+            Content =
+            [
+                new TextContentBlock
+                {
+                    Text = $"{context.Params.Name}: '{missing.Path}' is missing required field '{missing.Field}'. "
+                         + $"Valid fields there: {missing.ValidFields}.",
+                },
+            ],
+        };
+    }
+
+    return null;
+}
+
+/// <summary>Recursively walks <paramref name="instance"/> (a value the caller actually sent) against
+/// its own <paramref name="schema"/>, depth-first, returning the FIRST missing-required-property
+/// violation found - array items are walked by index (against the array schema's own "items"
+/// sub-schema), object properties by name (against that property's own sub-schema), matching
+/// exactly the nesting <c>System.Text.Json</c>'s own required-member deserialization would walk.
+///
+/// <para>Dispatches on the INSTANCE's own JSON kind plus the schema's "items"/"properties" shape,
+/// never on the schema's own "type" keyword: a nullable array/object member's generated schema
+/// states <c>"type": ["array", "null"]</c> (a JSON array of strings, not the single string a plain
+/// non-nullable member gets) - checking for the literal string "array" would silently never match
+/// any of these typed operation DTOs, since every field but 'op' itself is nullable.</para></summary>
+static MissingRequiredField? FindMissingRequiredField(JsonElement schema, JsonElement instance, string path)
+{
+    if (schema.ValueKind != JsonValueKind.Object) return null;
+
+    if (instance.ValueKind == JsonValueKind.Array)
+    {
+        if (!schema.TryGetProperty("items", out var itemSchema)) return null;
+
+        var index = 0;
+        foreach (var item in instance.EnumerateArray())
+        {
+            if (FindMissingRequiredField(itemSchema, item, $"{path}[{index}]") is { } found) return found;
+            index++;
+        }
+
+        return null;
+    }
+
+    if (instance.ValueKind != JsonValueKind.Object) return null;
+
+    if (schema.TryGetProperty("required", out var requiredElement) && requiredElement.ValueKind == JsonValueKind.Array)
+    {
+        foreach (var requiredNameElement in requiredElement.EnumerateArray())
+        {
+            var requiredName = requiredNameElement.GetString();
+            if (requiredName is null || instance.TryGetProperty(requiredName, out _)) continue;
+
+            var validFields = schema.TryGetProperty("properties", out var ownProperties) && ownProperties.ValueKind == JsonValueKind.Object
+                ? string.Join(", ", ownProperties.EnumerateObject().Select(p => p.Name))
+                : "(none declared)";
+            return new MissingRequiredField(path, requiredName, validFields);
+        }
+    }
+
+    if (schema.TryGetProperty("properties", out var childProperties) && childProperties.ValueKind == JsonValueKind.Object)
+    {
+        foreach (var childProperty in childProperties.EnumerateObject())
+        {
+            if (instance.TryGetProperty(childProperty.Name, out var childInstance)
+                && FindMissingRequiredField(childProperty.Value, childInstance, $"{path}.{childProperty.Name}") is { } found)
+            {
+                return found;
+            }
+        }
+    }
+
+    return null;
+}
+
+/// <summary>One JSON Schema "required" violation MissingRequiredFieldRejection found: 'Path' names
+/// where (e.g. "operations[0].events[1]"), 'Field' names the missing property, 'ValidFields' lists
+/// every property that position's own schema actually accepts.</summary>
+readonly record struct MissingRequiredField(string Path, string Field, string ValidFields);
 
 /// <summary>Exposed so WebApplicationFactory&lt;Program&gt; can host the app in tests.</summary>
 public partial class Program;

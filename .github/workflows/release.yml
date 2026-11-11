@@ -99,7 +99,7 @@ jobs:
 
           SKILL_COUNT=$(find ./plugin-output/skills -name "SKILL.md" | wc -l | tr -d ' ')
           echo "Skills found: $SKILL_COUNT"
-          [ "$SKILL_COUNT" -eq 22 ] || { echo "FAIL: expected 22 skills, got $SKILL_COUNT"; exit 1; }
+          [ "$SKILL_COUNT" -eq 23 ] || { echo "FAIL: expected 23 skills, got $SKILL_COUNT"; exit 1; }
 
           CMD_COUNT=$(ls ./plugin-output/commands/*.md 2>/dev/null | wc -l | tr -d ' ')
           echo "Commands found: $CMD_COUNT"

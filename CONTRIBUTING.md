@@ -37,8 +37,8 @@ The Unity plugin is optional (only needed for live-Editor features) and isn't ad
 |---|---|
 | `Mac/` | SwiftUI macOS app (`HadesApp`) + Swift packages `HadesControl`, `HadesSupervision` |
 | `Core/` | .NET 10 core — `Hades.Server`, `Hades.Core`, `Hades.Contract`, `Hades.Cli` (tests under `Core/tests`) |
-| `UnityPlugin/` | Unity Editor plugin (C#, v1.4.0) — optional, dials out to the app over a local socket |
-| `ClaudeCodePlugin/` | The Claude Code plugin — manifest, `.mcp.json`, 22 skills, 6 commands. Source of truth for the `hades-plugin` repo, which is generated from it |
+| `UnityPlugin/` | Unity Editor plugin (C#, v1.5.0) — optional, dials out to the app over a local socket |
+| `ClaudeCodePlugin/` | The Claude Code plugin — manifest, `.mcp.json`, 23 skills, 6 commands. Source of truth for the `hades-plugin` repo, which is generated from it |
 | `Documentation/` | Architecture docs, install guides, release pipeline. `Retired/` holds retired v1.2 docs (see its README) |
 
 These directories used to carry a `~` suffix, which hides them from Unity's asset pipeline. That

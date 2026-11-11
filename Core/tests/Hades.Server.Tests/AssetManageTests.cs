@@ -52,7 +52,7 @@ public sealed class AssetManageTests(WebApplicationFactory<Program> factory) : E
         var text = McpTestClient.ErrorText(envelope);
         Assert.Contains("frobnicate", text);
         Assert.Contains("operations[1]", text);
-        foreach (var op in new[] { "move", "import", "refresh" })
+        foreach (var op in new[] { "move", "import", "refresh", "delete", "duplicate" })
             Assert.Contains(op, text);
     }
 
@@ -65,7 +65,7 @@ public sealed class AssetManageTests(WebApplicationFactory<Program> factory) : E
     [Fact]
     public async Task AssetManage_UnknownField_RejectedForEveryOp()
     {
-        foreach (var op in new[] { "move", "import", "refresh" })
+        foreach (var op in new[] { "move", "import", "refresh", "delete", "duplicate" })
         {
             var envelope = await McpTestClient.CallTool(Factory, "asset_manage", new
             {
@@ -201,5 +201,86 @@ public sealed class AssetManageTests(WebApplicationFactory<Program> factory) : E
         await responder.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Contains("asset.manage requires an 'operations' array parameter.", McpTestClient.ErrorText(envelope));
+    }
+
+    // ---------------------------------------------------------------- DESIGN-04 Lane D: delete/duplicate wiring
+
+    [Fact]
+    public async Task AssetManage_DeleteAndDuplicate_SendOneWireCallWithEveryFieldTranslated_MapsAppliedAndSummary()
+    {
+        var (reads, writes) = await ConnectAsFakeUnityAsync();
+
+        var results = JsonValue.NewArray()
+            .Add(Obj(("index", JsonValue.Integer(0)), ("op", JsonValue.String("delete")),
+                ("result", Obj(("path", JsonValue.String("Assets/Old.asset")), ("movedToTrash", JsonValue.Bool(true))))))
+            .Add(Obj(("index", JsonValue.Integer(1)), ("op", JsonValue.String("duplicate")),
+                ("result", Obj(("source", JsonValue.String("Assets/Template.asset")), ("destination", JsonValue.String("Assets/Copy.asset")),
+                    ("guid", JsonValue.String("copyguid"))))));
+
+        var appliedAll = JsonValue.NewArray().Add(JsonValue.Integer(0)).Add(JsonValue.Integer(1));
+
+        var responder = AnswerBusyProbeThenRespondAsync(reads, writes, Obj(
+            ("applied", appliedAll),
+            ("results", results),
+            ("failed", JsonValue.NewArray()),
+            ("summary", JsonValue.String("2 applied, 0 failed of 2 operation(s)."))));
+
+        var structured = Structured(await McpTestClient.CallTool(Factory, "asset_manage", new
+        {
+            operations = new object[]
+            {
+                new Dictionary<string, object> { ["op"] = "delete", ["path"] = "Assets/Old.asset" },
+                new Dictionary<string, object> { ["op"] = "duplicate", ["sourcePath"] = "Assets/Template.asset", ["destPath"] = "Assets/Copy.asset" },
+            },
+        }));
+
+        var request = await responder.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal("asset.manage", request.Method);
+        var ops = Prop(request.Params!, "operations");
+        Assert.Equal(2, ops.Items.Count);
+
+        Assert.Equal("Assets/Old.asset", Prop(ops.Items[0], "path").AsString());
+
+        Assert.Equal("Assets/Template.asset", Prop(ops.Items[1], "sourcePath").AsString());
+        Assert.Equal("Assets/Copy.asset", Prop(ops.Items[1], "destPath").AsString());
+
+        var applied = structured.GetProperty("applied").EnumerateArray().Select(e => e.GetInt32()).ToArray();
+        Assert.Equal(new[] { 0, 1 }, applied);
+        Assert.Equal(0, structured.GetProperty("failed").GetArrayLength());
+
+        var resultsEl = structured.GetProperty("results");
+        Assert.True(resultsEl[0].GetProperty("result").GetProperty("movedToTrash").GetBoolean());
+        Assert.Equal("copyguid", resultsEl[1].GetProperty("result").GetProperty("guid").GetString());
+    }
+
+    /// <summary>DESIGN-04 §5.3.1: MoveAssetToTrash returning false must land in 'failed', never
+    /// 'applied' - the wire-mapping half of that contract (the plugin-side behaviour that PRODUCES
+    /// this shape is proven in AssetManageCommandsTests.cs against a real Editor).</summary>
+    [Fact]
+    public async Task AssetManage_DeleteReportedAsFailedByThePlugin_MapsToFailed_NeverApplied()
+    {
+        var (reads, writes) = await ConnectAsFakeUnityAsync();
+        var responder = AnswerBusyProbeThenRespondAsync(reads, writes, Obj(
+            ("applied", JsonValue.NewArray()),
+            ("results", JsonValue.NewArray()),
+            ("failed", JsonValue.NewArray().Add(Obj(
+                ("index", JsonValue.Integer(0)), ("op", JsonValue.String("delete")),
+                ("error", JsonValue.String(
+                    "Failed to move 'Assets/Locked.asset' to the trash - AssetDatabase.MoveAssetToTrash returned false. "
+                    + "The file may be locked, held by a version-control integration, or otherwise unwritable. Nothing was deleted."))))),
+            ("summary", JsonValue.String("0 applied, 1 failed of 1 operation(s)."))));
+
+        var structured = Structured(await McpTestClient.CallTool(Factory, "asset_manage", new
+        {
+            operations = new[] { new Dictionary<string, object> { ["op"] = "delete", ["path"] = "Assets/Locked.asset" } },
+        }));
+        await responder.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(0, structured.GetProperty("applied").GetArrayLength());
+        var failed = structured.GetProperty("failed");
+        Assert.Equal(1, failed.GetArrayLength());
+        Assert.Equal("delete", failed[0].GetProperty("op").GetString());
+        Assert.Contains("Nothing was deleted", failed[0].GetProperty("error").GetString());
     }
 }

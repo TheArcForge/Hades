@@ -175,8 +175,8 @@ public class ClaudeCodePluginTests
     public void Plugin_ShipsTheDocumentedNumberOfSkillsAndCommands()
     {
         var skills = Directory.GetFiles(Path.Combine(PluginRoot, "skills"), "SKILL.md", SearchOption.AllDirectories);
-        Assert.True(skills.Length == 22,
-            $"ClaudeCodePlugin ships {skills.Length} skills, not the documented 22. Update the README, "
+        Assert.True(skills.Length == 23,
+            $"ClaudeCodePlugin ships {skills.Length} skills, not the documented 23. Update the README, "
             + "CONTRIBUTING, and release.yml's SKILL_COUNT gate together with this number - they are "
             + "each asserted separately and drift silently otherwise.");
 

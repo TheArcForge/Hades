@@ -35,6 +35,7 @@ Before making recommendations:
    - If the project already has a save system → extend it rather than introduce a parallel one
    - If the project has established SO naming conventions → follow them in new assets
    - After agreeing on a new pattern, call `propose_memory_update` to record the decision
+   - To actually create and configure new asset instances (not just the C# class), use `scriptable_object_apply` — see "Creating and Configuring Instances" below
 
 ## Decision Framework
 
@@ -140,6 +141,28 @@ How large and complex is the save data?
 | `[Space]` | Add vertical breathing room between groups |
 
 Never expose fields with `public` just to see them in the Inspector — always use `[SerializeField] private`.
+
+### Creating and Configuring Instances
+
+Once a ScriptableObject class exists in code (defined here, or already present in the project per the Project Context Check above), create and configure actual `.asset` instances with `scriptable_object_apply` — never by hand-writing `.asset` YAML or generating a `.meta` file yourself; both are forbidden, and Unity's serialization dialect (backing-field names, `managedReferences`, array syntax) is not something to guess at.
+
+- `create { path, type }` makes a new asset of a ScriptableObject-derived type. `type` is a short (`ItemConfig`) or namespace-qualified (`Game.Items.ItemConfig`) class name — ambiguous matches refuse rather than guess.
+- `setProperties { path, values }` sets fields on an existing asset — `{ fieldName: value }`, the same value grammar `scene_apply.setProperties` uses, including object references by asset path.
+- Both ops batch in one call with one Undo group, and later ops can reference assets `create`d earlier in the **same** batch:
+
+  ```json
+  { "operations": [
+    { "op": "create", "path": "Assets/Data/Fire.asset",  "type": "DamageType" },
+    { "op": "create", "path": "Assets/Data/Sword.asset", "type": "ItemConfig" },
+    { "op": "setProperties", "path": "Assets/Data/Sword.asset",
+      "values": { "displayName": "Iron Sword", "damage": 12, "damageType": "Assets/Data/Fire.asset" } }
+  ] }
+  ```
+
+  One call, three assets' worth of wiring — the natural way to seed "ten enemy configs from this template."
+- **Gotcha:** `create` refuses a path that already exists. If `create` succeeds but a later `setProperties` in the same batch fails, re-running the identical batch fails at `create` — drop the `create` op and re-run `setProperties` alone, or `asset_manage(delete)` the half-made asset and start over.
+- `asset_manage` covers the two operations that follow creation: `delete` (removes the asset; recoverable from the OS trash on macOS/Windows) and `duplicate` (works for any asset type, not just the type-specific duplicates on `material_apply`/`scene_manage`).
+- Not available while the Editor is in Play Mode — refused uniformly like every other mutating Hades tool, since a change made during Play may or may not persist depending on what changed.
 
 ## Code Examples
 
@@ -546,5 +569,5 @@ public PlayerSaveData ExtractSaveData() =>
 ## Cross-References
 
 - Related skills: `hades:component-design`, `hades:unity-architect`, `hades:prefab-architecture`
-- Hades MCP tools: `search_by_name`, `graph_query`, `get_project_summary`, `recall_memory`, `propose_memory_update`
+- Hades MCP tools: `search_by_name`, `graph_query`, `get_project_summary`, `recall_memory`, `propose_memory_update`, `scriptable_object_apply`, `asset_manage`
 - Unity docs: [ScriptableObject](https://docs.unity3d.com/6000.0/Documentation/Manual/class-ScriptableObject.html), [JsonUtility](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/JsonUtility.html), [Application.persistentDataPath](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/Application-persistentDataPath.html), [CreateAssetMenu](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/CreateAssetMenuAttribute.html)

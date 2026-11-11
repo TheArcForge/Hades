@@ -34,7 +34,6 @@ public class ImportedAssetKindTests
     [InlineData("Assets/Shaders/Custom.shader", "Shader")]
     [InlineData("Assets/Shaders/Custom.shadergraph", "ShaderGraph")]
     [InlineData("Assets/Shaders/Blur.compute", "ComputeShader")]
-    [InlineData("Assets/Animations/Idle.anim", "AnimationClip")]
     public void RecognisedExtensions_MapToTheirGraphNodeKind(string path, string expected)
     {
         Assert.Equal(expected, ImportedAssetKind.KindForPath(path));
@@ -45,6 +44,10 @@ public class ImportedAssetKindTests
     [InlineData("Assets/Prefabs/Enemy.prefab")]
     [InlineData("Assets/Notes.txt")]
     [InlineData("Assets/NoExtensionAtAll")]
+    // DESIGN-07 §11: ".anim" is plain Unity YAML (class ID 74, AnimationClip), not binary - moved
+    // to Indexing.AssetIndexer's own extension list, so it is no longer part of THIS mapping at
+    // all. Covered here as a negative case rather than a positive one above.
+    [InlineData("Assets/Animations/Idle.anim")]
     public void UnrecognisedExtensions_ReturnNullRatherThanGuessing(string path)
     {
         Assert.Null(ImportedAssetKind.KindForPath(path));
@@ -66,7 +69,7 @@ public class ImportedAssetKindTests
             ".wav", ".mp3", ".ogg", ".aiff",
             ".ttf", ".otf",
             ".shader", ".shadergraph", ".compute",
-            ".anim",
+            // ".anim" deliberately absent - see UnrecognisedExtensions_ReturnNullRatherThanGuessing.
         ];
 
         Assert.Equal(expected.Length, ImportedAssetKind.Extensions.Count);

@@ -13,7 +13,12 @@ namespace Hades.Tools
     /// wire commands) into one declarative batch - the SAME "one call, one handler body, never
     /// re-entering CommandTable.Dispatch" shape <see cref="SceneApplyCommands"/> (Plan 10 Task 1)
     /// established, mixing lease classes the way <see cref="PrefabApplyCommands"/>/
-    /// <see cref="ProjectSettingsApplyCommands"/> (Plan 10 Tasks 2 and 4) already do.
+    /// <see cref="ProjectSettingsApplyCommands"/> (Plan 10 Tasks 2 and 4) already do. DESIGN-04 Lane D
+    /// later added "delete"/"duplicate" - two content-agnostic lifecycle ops with no prior
+    /// standalone tool of their own (see AssetCommands.DeleteAsset/DuplicateAsset) - to the same
+    /// batch, on the rule that placement follows content-awareness (DESIGN-04 §2.1): a ScriptableObject
+    /// needed its own content-model-aware tool (scriptable_object_apply), but delete/duplicate do not
+    /// care what the file is, so they belong here instead.
     ///
     /// <para><b>Mixed lease classes - ONE lease for the whole batch regardless.</b> "move" is
     /// class-1 (AssetCommands.MoveAsset never touches the gate); "import" and "refresh" are class-2,
@@ -38,16 +43,22 @@ namespace Hades.Tools
     /// material.apply/animation.apply, all entirely class-1) is not available the same way - this
     /// class opens ONE Undo group itself, before any operation runs, for the SAME isolation reason
     /// <c>asset.move</c> alone is already a CommandTable.MutatingMethods entry today (Task 7's
-    /// Defect 3: two back-to-back RPC mutations must never land in the same group) even though NONE
-    /// of this batch's three operations ever have anything for <see cref="Undo.RecordObject"/> to
-    /// snapshot - see AssetCommands.MoveAsset's own doc comment ("no Unity Undo primitive that covers
-    /// [a path]") and CommandTable's own "assets.refresh"/asset.import comments (project-file-level
-    /// operations, not serialized in-memory object state). Unlike PrefabApplyCommands/
-    /// ProjectSettingsApplyCommands, no operation in THIS batch's vocabulary ever populates the
-    /// group - it stays uniformly empty - but the group still opens uniformly for the same "a caller
-    /// of a batch tool should never have to reason per-op about this" reason. A caller must not
-    /// expect a single Ctrl/Cmd+Z to undo an asset_manage call, exactly as asset_move's own existing
-    /// tool already documents.</para>
+    /// Defect 3: two back-to-back RPC mutations must never land in the same group).
+    ///
+    /// <b>DESIGN-04 Lane D: the group is no longer uniformly empty.</b> "move"/"import"/"refresh" still
+    /// have nothing for <see cref="Undo.RecordObject"/> to snapshot (see AssetCommands.MoveAsset's own
+    /// doc comment - "no Unity Undo primitive that covers [a path]" - and CommandTable's own
+    /// "assets.refresh"/asset.import comments: project-file-level operations, not serialized
+    /// in-memory object state); "delete" has none either (moving to trash is the recoverability
+    /// story, not Ctrl/Cmd+Z - see AssetCommands.DeleteAsset's own doc comment). But "duplicate" DOES
+    /// register the new copy with <see cref="Undo.RegisterCreatedObjectUndo"/> (AssetCommands.
+    /// DuplicateAsset) - probe-verified (DESIGN-04 §5.2) to destroy the in-memory object on undo
+    /// WITHOUT removing the copied file, the same caveat scriptableObject.apply's create carries. So
+    /// Undo here is UNEVEN, not absent: a batch containing "duplicate" has something for Ctrl/Cmd+Z
+    /// to (partially) revert, one containing only "move"/"import"/"refresh"/"delete" does not - see
+    /// Hades.Server.Mcp.AssetManageTool's own description for the caller-facing wording. The group
+    /// still opens uniformly regardless of which ops a given call happens to contain, for the same "a
+    /// caller of a batch tool should never have to reason per-op about this" isolation reason.</para>
     ///
     /// <para><b>Partial failure, unknown op, per-op result data.</b> Identical contract to
     /// <see cref="PrefabApplyCommands"/>/<see cref="ProjectSettingsApplyCommands"/>: each operation's
@@ -59,7 +70,7 @@ namespace Hades.Tools
     /// </summary>
     internal static class AssetManageCommands
     {
-        static readonly string[] ValidOps = { "move", "import", "refresh" };
+        static readonly string[] ValidOps = { "move", "import", "refresh", "delete", "duplicate" };
 
         internal static JsonValue Apply(ReloadGate gate, JsonValue @params)
         {
@@ -134,6 +145,10 @@ namespace Hades.Tools
                 case "refresh":
                     AssetDatabase.Refresh();
                     return JsonValue.NewObject().SetProperty("refreshed", JsonValue.Bool(true));
+                case "delete":
+                    return AssetCommands.DeleteAsset(CopyFields(op, "path"));
+                case "duplicate":
+                    return AssetCommands.DuplicateAsset(CopyFields(op, "sourcePath", "destPath"));
                 default:
                     throw new ArgumentException(
                         "asset_manage: unknown op '" + (opName ?? "(missing)") + "'. Valid ops: " + string.Join(", ", ValidOps) + ".");

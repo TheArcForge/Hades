@@ -425,7 +425,11 @@ public static partial class ProjectDefines
     /// <para>Built-in modules are excluded from both sources — see
     /// <see cref="IsBuiltinModuleName"/>.</para>
     /// </summary>
-    static IReadOnlyDictionary<string, string> ReadInstalledPackageVersions(string projectRoot)
+    /// <summary>Promoted from <c>private</c> (no modifier) to <c>internal</c> for DESIGN-06 §6.1
+    /// (Layer 1 - <see cref="Hades.ProjectSummary.Capabilities"/>): "a complete, tested,
+    /// project-aware 'which packages does this project have' resolver already sitting in the
+    /// codebase for a different purpose." Reused as-is, unmodified otherwise.</summary>
+    internal static IReadOnlyDictionary<string, string> ReadInstalledPackageVersions(string projectRoot)
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
 

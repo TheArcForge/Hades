@@ -29,6 +29,7 @@ namespace Hades.Tests.Editor
         public void SetUp()
         {
             Undo.ClearAll();
+            AssetCommands.MoveAssetToTrash = AssetDatabase.MoveAssetToTrash;
             if (AssetDatabase.IsValidFolder(ScratchDir)) AssetDatabase.DeleteAsset(ScratchDir);
             AssetDatabase.CreateFolder("Assets/Tests", "_HadesAssetManageScratch");
         }
@@ -38,6 +39,10 @@ namespace Hades.Tests.Editor
         {
             Undo.ClearAll();
             if (AssetDatabase.IsValidFolder(ScratchDir)) AssetDatabase.DeleteAsset(ScratchDir);
+            // Restore the real implementation, in case a test in this fixture swapped
+            // AssetCommands.MoveAssetToTrash to provoke the false-return path (DESIGN-04 §5.3.1) -
+            // see that field's own doc comment.
+            AssetCommands.MoveAssetToTrash = AssetDatabase.MoveAssetToTrash;
         }
 
         static JsonRpcRequest Request(string method, JsonValue @params) =>
@@ -244,6 +249,169 @@ namespace Hades.Tests.Editor
 
                 CollectionAssert.AreEqual(new[] { 0 }, AppliedIndices(result));
                 AssertExactlyOneLeaseWindow(fake, gate);
+            }
+        }
+
+        // ---------------------------------------------------------------- DESIGN-04 Lane D: delete
+
+        [Test]
+        public void Delete_MovesAssetToTrash_ReportsMovedToTrash_OneLeaseWindow()
+        {
+            var path = ScratchDir + "/ToDelete.mat";
+            AssetDatabase.CreateAsset(new Material(Shader.Find("Standard")), path);
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var result = CommandTable.Dispatch(gate, Request("asset.manage", Params(
+                    Op("delete", ("path", JsonValue.String(path))))));
+
+                CollectionAssert.AreEqual(new[] { 0 }, AppliedIndices(result));
+                Assert.IsNull(AssetDatabase.LoadAssetAtPath<Material>(path), "the asset must no longer be loadable after delete");
+
+                var deleteResult = ResultsItems(result).Items[0].TryGetProperty("result", out var r) ? r : null;
+                Assert.AreEqual(path, Str(deleteResult, "path"));
+                Assert.IsTrue(deleteResult.TryGetProperty("movedToTrash", out var moved) && moved.AsBoolean());
+
+                AssertExactlyOneLeaseWindow(fake, gate);
+            }
+        }
+
+        [Test]
+        public void Delete_RefusesAFolder_ActionableError_FolderStillExists()
+        {
+            var folder = ScratchDir + "/SubFolder";
+            AssetDatabase.CreateFolder(ScratchDir, "SubFolder");
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var result = CommandTable.Dispatch(gate, Request("asset.manage", Params(
+                    Op("delete", ("path", JsonValue.String(folder))))));
+
+                Assert.AreEqual(0, AppliedIndices(result).Length);
+                var failed = FailedItems(result);
+                Assert.AreEqual(1, failed.Items.Count);
+                StringAssert.Contains("folder", Str(failed.Items[0], "error"));
+                Assert.IsTrue(AssetDatabase.IsValidFolder(folder), "the folder must not have been touched");
+            }
+        }
+
+        [Test]
+        public void Delete_RefusesAPathOutsideAssets_ViaAssetPathGuard()
+        {
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var result = CommandTable.Dispatch(gate, Request("asset.manage", Params(
+                    Op("delete", ("path", JsonValue.String("../Outside.asset"))))));
+
+                Assert.AreEqual(0, AppliedIndices(result).Length);
+                var failed = FailedItems(result);
+                Assert.AreEqual(1, failed.Items.Count);
+                StringAssert.Contains("asset.delete", Str(failed.Items[0], "error"));
+            }
+        }
+
+        /// <summary>DESIGN-04 §5.3.1/test #16: a `false` return from MoveAssetToTrash must refuse
+        /// loudly - landing in 'failed', never 'applied' - and the asset must still exist afterwards.
+        /// Provoked deterministically through the AssetCommands.MoveAssetToTrash seam (see that
+        /// field's own doc comment) rather than accepted as untestable, since a real locked-file/VCS
+        /// failure cannot be produced on demand in this harness.</summary>
+        [Test]
+        public void Delete_MoveAssetToTrashReturnsFalse_RefusesLoudly_AssetStillExists_NeverInApplied()
+        {
+            var path = ScratchDir + "/Locked.mat";
+            AssetDatabase.CreateAsset(new Material(Shader.Find("Standard")), path);
+
+            AssetCommands.MoveAssetToTrash = _ => false;
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var result = CommandTable.Dispatch(gate, Request("asset.manage", Params(
+                    Op("delete", ("path", JsonValue.String(path))))));
+
+                Assert.AreEqual(0, AppliedIndices(result).Length, "a false MoveAssetToTrash must never be reported as applied");
+                var failed = FailedItems(result);
+                Assert.AreEqual(1, failed.Items.Count);
+                Assert.AreEqual("delete", Str(failed.Items[0], "op"));
+                StringAssert.Contains("Nothing was deleted", Str(failed.Items[0], "error"));
+
+                Assert.IsNotNull(AssetDatabase.LoadAssetAtPath<Material>(path), "the asset must still exist - nothing was actually deleted");
+            }
+        }
+
+        // ---------------------------------------------------------------- DESIGN-04 Lane D: duplicate
+
+        [Test]
+        public void Duplicate_CopiesAsset_CopyIsIndependentlyEditable_OneLeaseWindow()
+        {
+            var sourcePath = ScratchDir + "/Template.mat";
+            var source = new Material(Shader.Find("Standard"));
+            AssetDatabase.CreateAsset(source, sourcePath);
+            var destPath = ScratchDir + "/Copy.mat";
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var result = CommandTable.Dispatch(gate, Request("asset.manage", Params(
+                    Op("duplicate", ("sourcePath", JsonValue.String(sourcePath)), ("destPath", JsonValue.String(destPath))))));
+
+                CollectionAssert.AreEqual(new[] { 0 }, AppliedIndices(result));
+
+                var copy = AssetDatabase.LoadAssetAtPath<Material>(destPath);
+                Assert.IsNotNull(copy);
+
+                // Independently editable: changing the copy must not touch the source.
+                copy.SetColor("_Color", Color.red);
+                AssetDatabase.SaveAssetIfDirty(copy);
+                var reloadedSource = AssetDatabase.LoadAssetAtPath<Material>(sourcePath);
+                Assert.AreNotEqual(Color.red, reloadedSource.GetColor("_Color"));
+
+                var dupResult = ResultsItems(result).Items[0].TryGetProperty("result", out var r) ? r : null;
+                Assert.AreEqual(sourcePath, Str(dupResult, "source"));
+                Assert.AreEqual(destPath, Str(dupResult, "destination"));
+                Assert.IsFalse(string.IsNullOrEmpty(Str(dupResult, "guid")));
+
+                AssertExactlyOneLeaseWindow(fake, gate);
+            }
+        }
+
+        [Test]
+        public void Duplicate_RefusesAnExistingDestPath()
+        {
+            var sourcePath = ScratchDir + "/Src.mat";
+            AssetDatabase.CreateAsset(new Material(Shader.Find("Standard")), sourcePath);
+            var destPath = ScratchDir + "/AlreadyThere.mat";
+            AssetDatabase.CreateAsset(new Material(Shader.Find("Standard")), destPath);
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var result = CommandTable.Dispatch(gate, Request("asset.manage", Params(
+                    Op("duplicate", ("sourcePath", JsonValue.String(sourcePath)), ("destPath", JsonValue.String(destPath))))));
+
+                Assert.AreEqual(0, AppliedIndices(result).Length);
+                var failed = FailedItems(result);
+                Assert.AreEqual(1, failed.Items.Count);
+                StringAssert.Contains("already exists", Str(failed.Items[0], "error"));
+            }
+        }
+
+        [Test]
+        public void Duplicate_RefusesAMissingSourcePath()
+        {
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var result = CommandTable.Dispatch(gate, Request("asset.manage", Params(
+                    Op("duplicate", ("sourcePath", JsonValue.String(ScratchDir + "/Ghost.mat")), ("destPath", JsonValue.String(ScratchDir + "/NewCopy.mat"))))));
+
+                Assert.AreEqual(0, AppliedIndices(result).Length);
+                var failed = FailedItems(result);
+                Assert.AreEqual(1, failed.Items.Count);
+                StringAssert.Contains("Source asset not found", Str(failed.Items[0], "error"));
             }
         }
     }

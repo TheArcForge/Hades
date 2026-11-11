@@ -86,6 +86,8 @@ How many discrete states does the NPC have?
 
 ### NavMesh Navigation
 
+Every technique below presupposes a baked NavMesh. Bake it first, in the Editor's Navigation window (or via Unity's own CLI/pipeline tooling) — a `NavMeshAgent` on an unbaked NavMesh silently fails at runtime rather than erroring at author time.
+
 | Scenario | Approach |
 |---|---|
 | Simple point-to-point movement | `agent.SetDestination(target.position)` once on state enter, then poll `agent.remainingDistance` |

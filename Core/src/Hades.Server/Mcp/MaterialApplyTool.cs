@@ -113,6 +113,21 @@ public sealed record MaterialApplyResult
 /// setProperty/assign/swapShader, 'destPath' for duplicate's destination) - <see cref="BuildOperation"/>
 /// below is what translates the ONE caller-facing 'path' into whichever wire key each op's
 /// underlying command actually expects.</para>
+///
+/// <para><b>Undo correction (DESIGN-04 §5.2, Lane D).</b> This description used to claim "a single
+/// Ctrl/Cmd+Z reverts every operation in the spec" outright. Probe-verified against a scratch Unity
+/// project: <see cref="UnityEditor.Undo.RegisterCreatedObjectUndo"/> - the primitive 'create'/
+/// 'duplicate' both use (<see cref="Hades.Tools.MaterialCommands.CreateMaterial"/>/
+/// <see cref="Hades.Tools.MaterialCommands.DuplicateMaterial"/>) - destroys the in-memory
+/// <see cref="UnityEngine.Material"/> object on undo but leaves the <c>.mat</c> FILE it wrote on
+/// disk. So that claim was false for any batch containing 'create'/'duplicate': the object vanishes,
+/// but re-running the same batch then fails at 'create' with "already exists" (AssetPathGuard's
+/// overwrite refusal), which a caller told "reverts every operation" has no way to anticipate. Fixed
+/// here to state the actual behaviour; no plugin test previously asserted the file disappears (one
+/// asserting removal would have been asserting the bug). See
+/// <see cref="Hades.Tools.ScriptableObjectApplyCommands"/>'s own doc comment for the same finding
+/// applied to a brand-new tool that never repeated the original claim, and asset_manage's own
+/// description for 'duplicate's identical caveat.</para>
 /// </summary>
 [McpServerToolType]
 public sealed class MaterialApplyTool(EditorProxy editor, ProjectService projects)
@@ -120,38 +135,21 @@ public sealed class MaterialApplyTool(EditorProxy editor, ProjectService project
     static readonly string[] ValidOps = ["create", "setProperty", "assign", "duplicate", "swapShader"];
 
     [McpServerTool(Name = "material_apply", Title = "Apply Material Operations (Batch)", ReadOnly = false, UseStructuredContent = true)]
-    [Description("Applies a batch of material operations - create (path, shader?), setProperty "
-               + "(path, propertyName, value), assign (gameObjectPath, path, slot?), "
-               + "duplicate (sourcePath, path), swapShader (path, shader) - in ONE call, "
-               + "in the order given. 'path' is the ONE field name for the material every op acts "
-               + "on - its new file for create, its existing file for setProperty/assign/"
-               + "swapShader, its new copy for duplicate - always a file on disk. 'sourcePath' "
-               + "(duplicate only) is a SECOND, different material: the existing one being copied "
-               + "FROM. 'gameObjectPath' (assign only) is a scene object instead, never a file on "
-               + "disk - a different concept from 'path' entirely. This is the batch form of "
-               + "material_create/material_set_property/"
-               + "material_assign/material_duplicate/material_swap_shader. "
-               + "UNDO: the whole batch is ONE Unity Undo group - a single Ctrl/Cmd+Z reverts every "
-               + "operation in the spec, not just the last one. "
-               + "PARTIAL FAILURE, NOT ROLLED BACK: each operation's outcome is reported by its "
-               + "0-based index in 'applied' (succeeded) or 'failed' (with its own error) - operations "
-               + "that already succeeded are never undone because a LATER one failed. Every successful "
-               + "operation's own result (e.g. the new material's guid, or swapShader's "
-               + "'survivedProperties'/'lostProperties' - Unity silently drops shader properties the "
-               + "new shader does not declare, and this tells you which ones) is reported in 'results' "
-               + "alongside 'applied', never just a bare success flag. "
-               + "An unrecognised 'op' value rejects the WHOLE call before anything is sent to the "
-               + "Editor, listing the valid ops. Needs a live Editor - call hades_charon_status first "
-               + "if unsure.")]
+    [Description("Applies a batch of material operations in one call, as ONE Undo group: create, "
+               + "setProperty, assign, duplicate, swapShader. Per-op fields are listed on "
+               + "'operations'. Undo destroys create/duplicate's in-memory objects but leaves "
+               + "their .mat FILES on disk - use asset_manage's delete to finish undoing; "
+               + "re-running after a partial failure fails at create/duplicate with 'already "
+               + "exists'. swapShader reports 'survivedProperties'/'lostProperties' (Unity "
+               + "silently drops properties the new shader doesn't declare).")]
     public async Task<MaterialApplyResult> MaterialApply(
-        [Description("Operations to apply, in order. Each needs 'op' plus that op's own fields: "
+        [Description("Per-op fields (each op also needs 'op'): "
                    + "create{path,shader?}, setProperty{path,propertyName,value}, "
                    + "assign{gameObjectPath,path,slot?}, duplicate{sourcePath,path}, "
-                   + "swapShader{path,shader}. 'path' always names the material the op is about "
-                   + "(a file on disk); duplicate's 'sourcePath' is the separate, existing material "
-                   + "it copies from; assign's 'gameObjectPath' is a scene object, not a file.")]
+                   + "swapShader{path,shader}. 'path'/'sourcePath' are always files on disk; "
+                   + "'gameObjectPath' is a scene object.")]
         IReadOnlyList<MaterialApplyOperation> operations,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (operations is null || operations.Count == 0)

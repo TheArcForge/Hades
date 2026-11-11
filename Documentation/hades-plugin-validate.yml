@@ -63,7 +63,7 @@ jobs:
         run: |
           COUNT=$(find skills -name "SKILL.md" | wc -l | tr -d ' ')
           echo "Skills found: $COUNT"
-          [ "$COUNT" -eq 22 ] || { echo "FAIL: expected 22 skills, got $COUNT"; exit 1; }
+          [ "$COUNT" -eq 23 ] || { echo "FAIL: expected 23 skills, got $COUNT"; exit 1; }
 
       - name: Check command count
         run: |

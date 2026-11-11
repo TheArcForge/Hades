@@ -36,7 +36,7 @@ namespace Hades.Runtime
         /// sites Documentation/ReleasePipeline.md section 2 lists; nothing
         /// in this netstandard2.1, zero-dependency folder can read that file once installed into
         /// a stranger's project, so it cannot be computed automatically.</summary>
-        public const string PluginVersion = "1.4.0";
+        public const string PluginVersion = "1.5.0";
 
         static readonly MainThreadPump Pump;
         static readonly ReloadGate Gate;
@@ -159,6 +159,11 @@ namespace Hades.Runtime
                 UnityVersion = Application.unityVersion,
                 PluginVersion = PluginVersion,
                 ProcessId = Process.GetCurrentProcess().Id,
+
+                // DESIGN-06 §6.2 Layer 2 - Capabilities is left at Hello's own default (an empty
+                // list): the one capability set this ever reported (the bake targets DESIGN-06
+                // introduced, computed by the plugin's now-removed CapabilityProbe) was retired
+                // along with scene_bake. See Hello.Capabilities' own doc comment.
             };
         }
 

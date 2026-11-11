@@ -185,25 +185,17 @@ public sealed class SettingsTools(ProjectService projects)
     static readonly string[] ValidSections = ["player", "tags", "layers", "buildScenes", "renderPipeline", "importSettings"];
 
     [McpServerTool(Name = "project_settings", Title = "Project Settings", ReadOnly = true, UseStructuredContent = true)]
-    [Description("One section of the project's configuration, selected by 'section'. "
-               + "\"player\" - productGuid/companyName/productName/bundleVersion. \"tags\" - every "
-               + "custom tag; Unity's own builtin tags (Untagged, Respawn, ...) are not included. "
-               + "\"layers\" - all 32 layer slots, index 0-31 exactly as Unity's Tags & Layers "
-               + "window shows them; an unused slot is a real, meaningful empty string AT ITS OWN "
-               + "INDEX, never omitted or compacted - layer 8 being free is not the same as layers "
-               + "ending at 7. \"buildScenes\" - the Build Settings scene list in build-index order; "
-               + "each entry's 'enabled' flag is whether it is actually included in a build, not "
-               + "just present in the list. \"renderPipeline\" - \"Built-in\", \"URP\", \"HDRP\", or "
-               + "\"unknown\" when a custom pipeline is configured but cannot be positively "
-               + "identified - never guessed from a partial match, since Built-in/URP/HDRP differ "
-               + "enough that a guess would just be wrong sometimes. \"importSettings\" (also needs "
-               + "'assetPath') - one asset's importer block, e.g. a TextureImporter's compression "
-               + "settings. An unrecognised 'section' is refused, listing the valid ones."
+    [Description("One section of the project's configuration, selected by 'section'. \"player\" - "
+               + "productGuid/companyName/productName/bundleVersion. \"tags\" - custom tags only. "
+               + "\"layers\" - all 32 slots, index 0-31; an unused slot is a real empty string, "
+               + "never omitted. \"buildScenes\" - Build Settings list, build-index order. "
+               + "\"renderPipeline\" - \"Built-in\", \"URP\", \"HDRP\", or \"unknown\". "
+               + "\"importSettings\" (needs 'assetPath') - one asset's importer block."
                + ToolSupport.SavedStateClause)]
     public async Task<ProjectSettingsSectionResult> ProjectSettings(
         [Description("Which section to read: \"player\", \"tags\", \"layers\", \"buildScenes\", \"renderPipeline\", or \"importSettings\"")] string section,
         [Description("Required when section is \"importSettings\": the project-relative asset path to inspect, as returned by search_by_name")] string? assetPath = null,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (string.IsNullOrWhiteSpace(section))

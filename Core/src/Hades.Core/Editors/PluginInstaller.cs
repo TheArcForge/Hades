@@ -61,6 +61,7 @@ public static class PluginInstaller
         ("Hades.Plugin.Tools.ComponentCommands.cs", "Tools/ComponentCommands.cs"),
         ("Hades.Plugin.Tools.MaterialCommands.cs", "Tools/MaterialCommands.cs"),
         ("Hades.Plugin.Tools.MaterialApplyCommands.cs", "Tools/MaterialApplyCommands.cs"),
+        ("Hades.Plugin.Tools.ScriptableObjectApplyCommands.cs", "Tools/ScriptableObjectApplyCommands.cs"),
         ("Hades.Plugin.Tools.AnimationCommands.cs", "Tools/AnimationCommands.cs"),
         ("Hades.Plugin.Tools.AnimationApplyCommands.cs", "Tools/AnimationApplyCommands.cs"),
         ("Hades.Plugin.Tools.TagLayerCommands.cs", "Tools/TagLayerCommands.cs"),

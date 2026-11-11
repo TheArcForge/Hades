@@ -147,17 +147,71 @@ public static class BinaryAssetIndexer
     /// One node, no edges. Delete-then-insert, same discipline as every other indexer: a file
     /// re-imported under a different extension (rare, but not impossible) or that lost its .meta
     /// must not leave a stale node behind under its old identity.
+    ///
+    /// DESIGN-07: also populates the five introspection columns (<see cref="GraphNode.AssetSubtype"/>
+    /// etc.) — Tier 1 (asset_subtype/asset_max_size/asset_flags) via
+    /// <see cref="MetaIntrospection.ScanForIndexing"/>'s bounded scan of the sibling .meta, and
+    /// Tier 2 (asset_width/asset_height) via <see cref="ImageHeaderReader"/>, TEXTURES ONLY (§7.2:
+    /// the schema's own asset_width/asset_height doc comment). Both are best-effort: a missing or
+    /// unreadable .meta, an unrecognised importer, or a header Hades cannot sniff each degrade to
+    /// NULL columns, never an indexing failure — the node itself (guid, kind, name) is exactly as
+    /// resolvable as it was before this feature existed either way.
     /// </summary>
     static void IndexAsset(string absolutePath, string relativePath, string kind, GraphDatabase database)
     {
-        // The ENTIRE read: a GUID lookup against the sibling .meta, never the asset's own bytes.
+        // The GUID lookup against the sibling .meta, same as before this feature existed.
         var guid = MetaFileReader.TryReadGuid(absolutePath);
         var name = Path.GetFileNameWithoutExtension(relativePath);
+
+        var (assetSubtype, assetMaxSize, assetFlags) = ReadIndexingFields(absolutePath);
+        int? assetWidth = null, assetHeight = null;
+        if (kind == "Texture2D")
+        {
+            var header = ImageHeaderReader.Read(absolutePath);
+            assetWidth = header.Width;
+            assetHeight = header.Height;
+        }
 
         // F22: DeleteNodesAndEdgesForPath, never the file-state-clearing DeleteNodesForPath —
         // this file is being re-indexed, not retired (see that method's own doc comment for why
         // conflating the two silently emptied file_state on every repeated full rebuild).
         database.DeleteNodesAndEdgesForPath(relativePath);
-        database.UpsertNodes([new GraphNode { Kind = kind, Name = name, Path = relativePath, Guid = guid }]);
+        database.UpsertNodes([new GraphNode
+        {
+            Kind = kind,
+            Name = name,
+            Path = relativePath,
+            Guid = guid,
+            AssetSubtype = assetSubtype,
+            AssetWidth = assetWidth,
+            AssetHeight = assetHeight,
+            AssetMaxSize = assetMaxSize,
+            AssetFlags = assetFlags,
+        }]);
+    }
+
+    /// <summary>DESIGN-07 §7.4 — a bounded text scan of the sibling .meta, not the full YamlDotNet
+    /// parse <see cref="Reading.ReadThrough.GetImportSettings"/> does for the read-through detail
+    /// path: measured as the dominant added indexing cost per binary asset (see
+    /// <see cref="MetaIntrospection.ScanForIndexing"/>'s own doc comment for why this reads the
+    /// whole file rather than a fixed byte-prefix). Missing/unreadable .meta or an importer type
+    /// this file does not decode all degrade to (null, null, null) — never a failure.</summary>
+    static (string? Subtype, int? MaxSize, int? Flags) ReadIndexingFields(string absolutePath)
+    {
+        var metaPath = absolutePath + ".meta";
+        if (!File.Exists(metaPath)) return (null, null, null);
+
+        try
+        {
+            var content = File.ReadAllText(metaPath);
+            var fields = MetaIntrospection.ScanForIndexing(content);
+            return fields is null
+                ? (null, null, null)
+                : (fields.AssetSubtype, fields.MaxTextureSize, (int?)fields.Flags);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (null, null, null);
+        }
     }
 }

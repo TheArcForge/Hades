@@ -255,10 +255,10 @@ public class SettingsToolsTests : IClassFixture<WebApplicationFactory<Program>>,
     }
 
     [Fact]
-    public async Task ProjectSettings_IsAdvertisedAsReadOnlyWithASchemaAndTheSavedStateClause()
+    public async Task ProjectSettings_IsAdvertisedAsReadOnlyWithoutOutputSchemaAndTheSavedStateClause()
     {
         var tool = await ToolMeta("project_settings");
-        Assert.True(tool.TryGetProperty("outputSchema", out _));
+        Assert.False(tool.TryGetProperty("outputSchema", out _));
         Assert.True(tool.GetProperty("annotations").GetProperty("readOnlyHint").GetBoolean());
         Assert.Contains("saved state on disk", tool.GetProperty("description").GetString());
     }

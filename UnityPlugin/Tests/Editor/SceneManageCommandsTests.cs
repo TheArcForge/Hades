@@ -17,10 +17,11 @@ namespace Hades.Tests.Editor
     /// "create"/"duplicate" (class-1, from SceneManagementCommands) and "open" (class-2, from
     /// ProjectCommands). Like ProjectSettingsApplyCommandsTests/AssetManageCommandsTests, every test
     /// here proves the SAME headline lease property (<see cref="AssertExactlyOneLeaseWindow"/>), and
-    /// <see cref="Create_DoesNotSwitchActiveScene"/> re-proves - at THIS batch dispatch's own entry
-    /// point, not just at SceneManagementCommandsTests' direct-call level - the property Plan 9's own
-    /// E2E found the hard way: creating a new scene asset must never discard whatever the caller
-    /// currently has open (and possibly unsaved) in the Editor.
+    /// <see cref="Create_OpensTheNewSceneAsTheActiveScene"/>/<see cref="Create_RefusesWhenACurrentlyLoadedSceneIsDirty"/>/
+    /// <see cref="Open_NonAdditive_RefusesWhenACurrentlyLoadedSceneIsDirty"/> re-prove - at THIS batch
+    /// dispatch's own entry point, not just at SceneManagementCommandsTests' direct-call level - F5/F6's
+    /// fix: 'create' now opens the new scene as the active scene, and both it and non-additive 'open'
+    /// refuse (rather than silently discard) when a currently loaded scene has unsaved changes.
     /// </summary>
     [TestFixture]
     public sealed class SceneManageCommandsTests
@@ -119,15 +120,15 @@ namespace Hades.Tests.Editor
             StringAssert.Contains("operations", ex.Message);
         }
 
-        // ---------------------------------------------------------------- the headline property: create never switches scenes
+        // ---------------------------------------------------------------- F5/F6: create opens the new scene, both refuse when dirty
 
-        /// <summary>THE required behaviour Plan 9's own E2E found the hard way: OpenSceneMode.Single
-        /// would silently discard a caller's unsaved open scene with no prompt in a scripted
-        /// context. Proven here at scene.manage's own dispatch entry point (not merely inherited by
-        /// reading SceneManagementCommands.CreateScene's source) - if scene_manage's "create" op
-        /// were ever rerouted to a different implementation, THIS test would catch it.</summary>
+        /// <summary>F5's fix, proven here at scene.manage's own dispatch entry point (not merely
+        /// inherited by reading SceneManagementCommands.CreateScene's source) - if scene_manage's
+        /// "create" op were ever rerouted to a different implementation, THIS test would catch it.
+        /// The fixture scene from SetUp is freshly saved (never dirty), so this succeeds without
+        /// 'discardUnsaved'.</summary>
         [Test]
-        public void Create_DoesNotSwitchActiveScene()
+        public void Create_OpensTheNewSceneAsTheActiveScene()
         {
             var activeBefore = SceneManager.GetActiveScene().path;
             Assert.IsFalse(string.IsNullOrEmpty(activeBefore), "fixture scene must already have a path");
@@ -141,8 +142,129 @@ namespace Hades.Tests.Editor
 
                 CollectionAssert.AreEqual(new[] { 0 }, AppliedIndices(result));
                 Assert.IsNotNull(AssetDatabase.LoadAssetAtPath<SceneAsset>(newPath), "the new scene file must exist on disk");
-                Assert.AreEqual(activeBefore, SceneManager.GetActiveScene().path,
-                    "scene_manage's 'create' op must not change which scene is currently open");
+                Assert.AreEqual(newPath, SceneManager.GetActiveScene().path,
+                    "scene_manage's 'create' op must open the new scene as the active scene");
+                Assert.AreNotEqual(activeBefore, SceneManager.GetActiveScene().path);
+
+                var createResult = ResultsItems(result).Items[0].TryGetProperty("result", out var r) ? r : null;
+                Assert.AreEqual(newPath, Str(createResult, "activeScene"), "the result must report the new active scene's path");
+
+                AssertExactlyOneLeaseWindow(fake, gate);
+            }
+        }
+
+        [Test]
+        public void Create_RefusesWhenACurrentlyLoadedSceneIsDirty()
+        {
+            // MarkSceneDirty, not "new GameObject(...) and assume it dirties synchronously" - see
+            // ProjectCommandsTests.AssertRunTestsNeverSavesDirtyScene's own doc comment: Unity's own
+            // change-tracking that would otherwise flip isDirty runs deferred, off this call frame.
+            var dirtyPath = SceneManager.GetActiveScene().path;
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            Assert.IsTrue(SceneManager.GetActiveScene().isDirty, "fixture must start dirty for this test to prove anything");
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var newPath = ScratchDir + "/ShouldNotBeCreated.unity";
+                var result = CommandTable.Dispatch(gate, Request("scene.manage", Params(
+                    Op("create", ("path", JsonValue.String(newPath))))));
+
+                CollectionAssert.IsEmpty(AppliedIndices(result));
+                var failed = FailedItems(result);
+                Assert.AreEqual(1, failed.Items.Count);
+                StringAssert.Contains(dirtyPath, Str(failed.Items[0], "error"));
+                StringAssert.Contains("discardUnsaved", Str(failed.Items[0], "error"));
+                Assert.IsNull(AssetDatabase.LoadAssetAtPath<SceneAsset>(newPath), "a refused create must never write the new scene file");
+                Assert.AreEqual(dirtyPath, SceneManager.GetActiveScene().path, "the dirty scene must still be active - nothing was discarded");
+
+                AssertExactlyOneLeaseWindow(fake, gate);
+            }
+        }
+
+        [Test]
+        public void Create_DiscardUnsaved_ProceedsAndSwitchesScene_DespiteADirtyCurrentScene()
+        {
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            Assert.IsTrue(SceneManager.GetActiveScene().isDirty, "fixture must start dirty for this test to prove anything");
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var newPath = ScratchDir + "/CreatedDespiteDirty.unity";
+                var result = CommandTable.Dispatch(gate, Request("scene.manage", Params(
+                    Op("create", ("path", JsonValue.String(newPath)), ("discardUnsaved", JsonValue.Bool(true))))));
+
+                CollectionAssert.AreEqual(new[] { 0 }, AppliedIndices(result));
+                Assert.AreEqual(newPath, SceneManager.GetActiveScene().path);
+
+                AssertExactlyOneLeaseWindow(fake, gate);
+            }
+        }
+
+        [Test]
+        public void OpenNonAdditive_RefusesWhenACurrentlyLoadedSceneIsDirty()
+        {
+            var openTarget = SaveAdditiveScratchScene("OpenTarget.unity");
+            var dirtyPath = SceneManager.GetActiveScene().path;
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            Assert.IsTrue(SceneManager.GetActiveScene().isDirty, "fixture must start dirty for this test to prove anything");
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var result = CommandTable.Dispatch(gate, Request("scene.manage", Params(
+                    Op("open", ("path", JsonValue.String(openTarget))))));
+
+                CollectionAssert.IsEmpty(AppliedIndices(result));
+                var failed = FailedItems(result);
+                Assert.AreEqual(1, failed.Items.Count);
+                StringAssert.Contains(dirtyPath, Str(failed.Items[0], "error"));
+                Assert.AreEqual(dirtyPath, SceneManager.GetActiveScene().path, "the dirty scene must still be active - nothing was discarded");
+
+                AssertExactlyOneLeaseWindow(fake, gate);
+            }
+        }
+
+        [Test]
+        public void OpenNonAdditive_DiscardUnsaved_ProceedsAndSwitchesScene_DespiteADirtyCurrentScene()
+        {
+            var openTarget = SaveAdditiveScratchScene("OpenTargetDiscard.unity");
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            Assert.IsTrue(SceneManager.GetActiveScene().isDirty, "fixture must start dirty for this test to prove anything");
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var result = CommandTable.Dispatch(gate, Request("scene.manage", Params(
+                    Op("open", ("path", JsonValue.String(openTarget)), ("discardUnsaved", JsonValue.Bool(true))))));
+
+                CollectionAssert.AreEqual(new[] { 0 }, AppliedIndices(result));
+                Assert.AreEqual(openTarget, SceneManager.GetActiveScene().path);
+
+                var openResult = ResultsItems(result).Items[0].TryGetProperty("result", out var r) ? r : null;
+                Assert.AreEqual(openTarget, Str(openResult, "activeScene"));
+
+                AssertExactlyOneLeaseWindow(fake, gate);
+            }
+        }
+
+        [Test]
+        public void OpenAdditive_NeverRefused_EvenWhenACurrentlyLoadedSceneIsDirty()
+        {
+            // Additive open unloads nothing, so there is nothing here for a dirty currently-loaded
+            // scene to lose - see SceneManagementCommands.RequireNoUnsavedChanges' own doc comment.
+            var openTarget = SaveAdditiveScratchScene("AdditiveOpenTarget.unity");
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            Assert.IsTrue(SceneManager.GetActiveScene().isDirty, "fixture must start dirty for this test to prove anything");
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var result = CommandTable.Dispatch(gate, Request("scene.manage", Params(
+                    Op("open", ("path", JsonValue.String(openTarget)), ("additive", JsonValue.Bool(true))))));
+
+                CollectionAssert.AreEqual(new[] { 0 }, AppliedIndices(result));
 
                 AssertExactlyOneLeaseWindow(fake, gate);
             }
@@ -151,10 +273,11 @@ namespace Hades.Tests.Editor
         // ---------------------------------------------------------------- full op vocabulary sweep, one lease window
 
         /// <summary>One scene.manage call touching all four ops in an order where later ones act on
-        /// what earlier ones just created - create a new scene, duplicate an existing fixture scene,
-        /// open the just-created scene (switching the active scene for the FIRST time in this whole
-        /// sequence), then save in place - with EXACTLY one lease window for the whole thing even
-        /// though only "open" individually needs one.</summary>
+        /// what earlier ones just created - create a new scene (F5: already switches the active
+        /// scene to it), duplicate an existing fixture scene, re-open the just-created scene
+        /// (already active, and already clean, so this is a no-op switch that still succeeds), then
+        /// save in place - with EXACTLY one lease window for the whole thing even though only "open"
+        /// individually needs one.</summary>
         [Test]
         public void FullOperationSweep_AppliesEveryOpInOrder_OneLeaseWindow()
         {

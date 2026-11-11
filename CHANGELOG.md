@@ -4,6 +4,58 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+
+- **`scriptable_object_apply`.** Create ScriptableObject assets and set their serialized properties
+  in a batch, alongside the existing asset-authoring tools.
+- **Binary asset introspection.** `inspect_asset` can now read structural details out of common
+  binary asset formats (textures, sprites, and more) without a Unity Editor attached, and
+  `graph_query` gained filters over the richer per-asset data this makes available.
+- **Deeper animation authoring.** `animation_apply`/`inspect_asset` cover more of the Animator
+  surface — describing existing clips and controllers in more detail, building blend trees, and
+  authoring new clips and curves — beyond the property-level access that shipped before.
+- **A `tool-reference` skill.** The per-tool detail that the `tools/list` descriptions no longer
+  carry — rationale, edge cases, worked `graph_query`/`inspect_asset` patterns, and the batch
+  tools' shared result contract — now lives in a skill an agent loads when it needs it, instead of
+  being paid for on every turn. Brings the plugin to 23 skills.
+
+### Changed
+
+- **Tool definitions cost less than half what they did.** The `tools/list` payload is sent before
+  the first user message of every session, and at 33 tools it had grown to roughly 101 KB
+  (~27,000 tokens) — past the ~25,000-token budget the tool consolidation was designed around. It
+  now measures 43 KB (~12,000 tokens) for the same 33 tools. Two changes get there: `outputSchema`
+  is no longer advertised — it is optional per the MCP spec, results still arrive as structured
+  content, and it was almost entirely a restatement of what each description and `inputSchema`
+  already say — and the descriptions themselves were cut back to what a caller needs at the call
+  site. `project_get_console_log` keeps its `outputSchema`, the only place its `totalMatching`
+  pagination signal is discoverable without a second call.
+- **The knowledge graph rebuilds itself once, on the first launch after this update.** Binary asset
+  introspection and `.meta`-aware incremental indexing both needed new columns, so the graph schema
+  moves from v4 to v5. The graph is derived data, so the migration is a drop and a re-index rather
+  than a conversion — nothing you authored is at risk, but expect that first indexing pass to take
+  as long as a fresh one.
+- **The Unity plugin moves to 1.5.0, so a stale copy is detectable.** The new asset- and
+  animation-authoring tools are answered by commands that live in the plugin, so an `Assets/Hades/`
+  left at 1.4.0 cannot serve them. Its version line is independent of the app's by design, but it
+  is now the only thing that distinguishes the two — the one capability set it used to report went
+  out with `scene_bake` — so leaving it unchanged would have meant a bare failure where there is
+  now a warning naming both versions and pointing at Install/Update Plugin.
+- **`scene_manage` no longer discards unsaved work silently.** A non-additive `open`, and `create`,
+  now refuse while any loaded scene has unsaved changes, naming the scene; save first or pass
+  `discardUnsaved: true`. `create` now opens the scene it creates (previously later edits went to
+  whichever scene was already open), and both report the resulting `activeScene`.
+
+### Fixed
+
+- **A missing required field or parameter in a tool call now says which one.** Previously a nested
+  object missing a required field (for example an animation event without `function`) failed with a
+  bare "An error occurred" — and so did omitting a required top-level parameter, which 19 of the 33
+  tools declare, making it the most common way a call can go wrong. Both now name the tool, where
+  the gap is, what is missing, and what that position accepts.
+
 ## [2.1.0] — Windows Support — 2026-09-06
 
 Hades runs on **Windows** as well as macOS. Both platforms run the same .NET 10 core, expose the

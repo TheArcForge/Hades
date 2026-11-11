@@ -42,6 +42,13 @@ A reference that exists *only* through one of these will not appear in the graph
 - **Generics** are resolved best-effort; deeply nested or open generic relationships may be incomplete.
 - **Binary/imported assets (textures, models, audio, fonts, shaders, animation clips) are meta-only nodes** — path, name, kind, and GUID, so references into them resolve, but their own content (a texture's pixels, a clip's curves) is never read. Any remaining unindexed asset kind, or a reference resolving outside every scanned root entirely (most commonly a registry package's own copy under `Library/PackageCache` — a built-in shader or texture bundled with a Unity package, for example), still has no node; references into those are reported as unresolvable, not missing user code.
 - **Addressables are indexed only as generic ScriptableObjects** — there is no dedicated reader for Addressables groups, entries, or addresses.
+- **Binary image headers are read from a narrow, honest set of formats.** `inspect_asset`'s introspection reads dimensions from PNG, JPEG, TGA, and PSD headers only — any other image format reports the reason, by name, rather than a guessed or default size. TGA has no magic bytes, so it is read **only** as a last resort, gated on a literal `.tga` extension, after a plausibility check on the header fields; a real TGA saved under any other extension is reported as unreadable, not misread as something else. A Git LFS pointer file (the small text stub Git leaves behind for an asset actually stored in LFS) is sniffed first and reported by name — never misread as a truncated or corrupt image.
+
+## Editor-driving tools
+
+Structural facts about Hades' Editor-driving tools — the batch `apply` authoring tools (`scene_apply`, `prefab_apply`, `material_apply`, `animation_apply`, `asset_manage`, `scene_manage`, `project_settings_apply`, `scriptable_object_apply`) — are exact where stated below; the boundaries are inherent to what each can observe, not bugs.
+
+- **`animation_apply`'s `describe` on a clip is capped at 2,000 keyframes across all curves combined**, and emits **whole curves only** — a half-curve is never returned, so a genuinely short curve can always be told apart from a truncated one. The response reports `truncated`, `totalCurves`, and `curvesReturned` so a caller always knows whether it saw the whole clip.
 
 ## Operational notes
 

@@ -17,7 +17,7 @@ public static class AssetType
     /// (Plan 10 Task 6) validates a caller's input against - see QueryTools' own class doc comment
     /// for why that filter reads file identity rather than graph nodes.</summary>
     public static readonly string[] KnownTypes =
-        ["Script", "Scene", "Prefab", "Material", "AnimatorController", "ScriptableObject", "Asset"];
+        ["Script", "Scene", "Prefab", "Material", "AnimatorController", "AnimationClip", "ScriptableObject", "Asset"];
 
     public static string FromPath(string path) => Path.GetExtension(path).ToLowerInvariant() switch
     {
@@ -26,6 +26,7 @@ public static class AssetType
         ".prefab" => "Prefab",
         ".mat" => "Material",
         ".controller" => "AnimatorController",
+        ".anim" => "AnimationClip",
         ".asset" => "ScriptableObject",
         _ => "Asset",
     };

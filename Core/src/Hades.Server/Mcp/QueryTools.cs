@@ -108,70 +108,38 @@ public sealed class QueryTools(ProjectService projects)
     static readonly string[] ValidEdgeDirections = ["outgoing", "incoming"];
 
     [McpServerTool(Name = "graph_query", Title = "Query Graph (Extended)", ReadOnly = true, UseStructuredContent = true)]
-    [Description("General-purpose structured search over the knowledge graph - the single "
-               + "consolidated replacement for query_graph, find_prefabs_with_component, "
-               + "find_components_using_pattern, find_orphan_scripts, component_find, and "
-               + "asset_find. Base filters, AND-combined, at least one required: kind (exact node "
-               + "kind, e.g. \"Class\", \"MonoBehaviour\", \"GameObject\", \"Rigidbody\", "
-               + "\"Material\", \"AnimatorController\"), namePattern (case-insensitive substring on "
-               + "the node's own name), pathPrefix (project-relative), edgeKind (restrict to nodes "
-               + "that are one endpoint of an edge of this kind - \"references\", \"instance_of\", "
-               + "or \"corresponds_to\" - in edgeDirection, default \"outgoing\": this node is the "
-               + "edge's source; \"incoming\": this node is the edge's target). "
-               + "Four more filters, each requiring edgeKind and refused without it: edgeTargetPath "
-               + "(further restrict to edges pointing at this ONE asset, e.g. a script - reproduces "
-               + "find_prefabs_with_component; a path nothing in the graph owns simply matches "
-               + "nothing, same as any other filter, never an error), edgeTargetNamePattern "
-               + "(further restrict to edges whose target's own name matches this pattern - "
-               + "reproduces find_components_using_pattern, and component_find's MonoBehaviour-"
-               + "resolution branch when combined with kind: \"MonoBehaviour\" - by itself this does "
-               + "NOT check the target's own kind, so a same-named non-script asset, e.g. a Material "
-               + "or ScriptableObject also reached by a references edge, matches too; combine with "
-               + "edgeTargetKind for that), edgeTargetKind (further restrict to edges whose target's "
-               + "own node kind matches EXACTLY, e.g. \"Class\" - combined with edgeTargetNamePattern "
-               + "this restores find_components_using_pattern's and component_find's old guarantee "
-               + "that a name match actually resolved to a script, not a coincidentally-same-named "
-               + "asset of some other kind; usable alone too, e.g. edgeTargetKind: \"Class\" to find "
-               + "everything referencing ANY script. Omit to match a target of any kind, same as "
-               + "before this filter existed), and edgeAbsent "
-               + "(true to require NO matching edge instead of at least one - reproduces "
-               + "find_orphan_scripts: kind: \"Class\", edgeKind: \"references\", edgeDirection: "
-               + "\"incoming\", edgeAbsent: true finds script classes nothing references - HONEST "
-               + "SUPERSET, not confirmed dead code: a class only ever instantiated from C# "
-               + "(AddComponent<T>(), new, a static utility) has no incoming reference either, "
-               + "because code-level references are not tracked as graph edges yet, only Unity "
-               + "YAML references are - treat a result as \"worth checking\", not \"confirmed "
-               + "unused\"). "
-               + "A SEPARATE filter, fileType, answers asset_find's whole-file classification "
-               + "question instead of the node filters above: \"Script\", \"Scene\", \"Prefab\", "
-               + "\"Material\", \"AnimatorController\", \"ScriptableObject\", or \"Asset\" (anything "
-               + "else indexed but not classified further) - one hit per FILE, exactly what "
-               + "asset_find always returned, including for Scene/Prefab/ScriptableObject, which no "
-               + "node-kind filter can classify (a scene or prefab is many per-object nodes with no "
-               + "single summarising one; a ScriptableObject instance shares MonoBehaviour's generic "
-               + "kind with an ordinary component). fileType combines only with pathPrefix - refused "
-               + "together with kind/kindPattern/namePattern/edgeKind, which filter graph NODES, a "
-               + "different question. "
-               + "kindPattern is 'kind', but a case-insensitive SUBSTRING instead of an exact match - "
-               + "reproduces component_find's builtin-kind branch (e.g. \"Collider\" matches "
-               + "\"BoxCollider\"/\"SphereCollider\"/\"CapsuleCollider\" alike), which exact 'kind' "
-               + "cannot express. Refused together with 'kind' (same axis, pick one). "
-               + "This is a fixed set of scalar filters, not a query language - there is no way to "
-               + "pass raw SQL through any of them, by construction." + ToolSupport.SavedStateClause)]
+    [Description("General-purpose structured search over the knowledge graph. Filters (AND-combined, "
+               + ">=1 required): kind (exact node kind; refused with kindPattern), kindPattern "
+               + "(substring on kind; refused with kind), namePattern (substring on name), "
+               + "pathPrefix (project-relative). Edge filters, all requiring edgeKind: edgeKind "
+               + "(\"references\"|\"instance_of\"|\"corresponds_to\"), edgeDirection (\"outgoing\" "
+               + "default = source, \"incoming\" = target), edgeTargetPath (edges to one asset "
+               + "path), edgeTargetNamePattern (substring on target's name; add edgeTargetKind to "
+               + "also check its kind), edgeTargetKind (exact target kind), edgeAbsent (true = no "
+               + "matching edge; code-only refs are untracked, so a hit is unconfirmed). fileType "
+               + "classifies whole FILES instead: \"Script\"|\"Scene\"|\"Prefab\"|\"Material\"|"
+               + "\"AnimatorController\"|\"ScriptableObject\"|\"Asset\". Combines only with "
+               + "pathPrefix; refused with any filter above. minWidth/minHeight (textures, measured "
+               + "pixels) and assetSubtype (importer subtype) combine with kind/kindPattern/"
+               + "namePattern/pathPrefix/edge* but not fileType."
+               + ToolSupport.SavedStateClause)]
     public async Task<GraphQueryResult> GraphQuery(
-        [Description("Exact node kind, e.g. \"Class\", \"MonoBehaviour\", \"GameObject\", \"Rigidbody\", \"Material\", \"AnimatorController\". Refused together with 'kindPattern'.")] string? kind = null,
-        [Description("Substring to match against the node name, case-insensitive")] string? namePattern = null,
-        [Description("Project-relative path prefix, e.g. \"Assets/Scripts\". Combines with 'fileType' too.")] string? pathPrefix = null,
-        [Description("Restrict to nodes with at least one edge of this kind: \"references\", \"instance_of\", or \"corresponds_to\"")] string? edgeKind = null,
-        [Description("\"outgoing\" (default) - this node is the edge's source; \"incoming\" - this node is the edge's target. Only meaningful together with edgeKind.")] string edgeDirection = "outgoing",
-        [Description("Further restrict edgeKind to edges pointing at this project-relative asset path, e.g. a script. Requires edgeKind. A path nothing owns just matches nothing.")] string? edgeTargetPath = null,
-        [Description("Further restrict edgeKind to edges whose target's own name matches this substring, case-insensitive. Requires edgeKind. Does NOT by itself check the target's own kind - a same-named non-script asset (Material, ScriptableObject, ...) reached by a matching edge matches too. Combine with edgeTargetKind to guarantee the target is actually a script.")] string? edgeTargetNamePattern = null,
-        [Description("Further restrict edgeKind to edges whose target's own node kind matches EXACTLY, e.g. \"Class\". Requires edgeKind. Combine with edgeTargetKind: \"Class\" and edgeTargetNamePattern to restore find_components_using_pattern's/component_find's old guarantee that a name match resolved to an actual script, not a coincidentally-same-named asset of some other kind. Usable alone too. Omit to match a target of any kind.")] string? edgeTargetKind = null,
-        [Description("True to require NO matching edge instead of at least one (finds orphans). Requires edgeKind. Default false.")] bool edgeAbsent = false,
-        [Description("Whole-FILE classification by extension, from file identity rather than graph nodes - reproduces asset_find: \"Script\", \"Scene\", \"Prefab\", \"Material\", \"AnimatorController\", \"ScriptableObject\", or \"Asset\". One hit per file. Combines only with 'pathPrefix'; refused together with 'kind', 'kindPattern', 'namePattern', or 'edgeKind'.")] string? fileType = null,
-        [Description("Substring to match against the node kind, case-insensitive - e.g. \"Collider\" matches \"BoxCollider\"/\"SphereCollider\"/\"CapsuleCollider\". Reproduces component_find's builtin-kind branch. Refused together with 'kind'.")] string? kindPattern = null,
-        [Description("Maximum nodes to return (1-500, default 100)")] int limit = 100,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Exact node kind.")] string? kind = null,
+        [Description("Substring on node name.")] string? namePattern = null,
+        [Description("Project-relative path prefix.")] string? pathPrefix = null,
+        [Description("\"references\", \"instance_of\", or \"corresponds_to\".")] string? edgeKind = null,
+        [Description("\"outgoing\" (default) or \"incoming\".")] string edgeDirection = "outgoing",
+        [Description("Asset path the edge must point at.")] string? edgeTargetPath = null,
+        [Description("Substring on the edge target's name.")] string? edgeTargetNamePattern = null,
+        [Description("Exact edge target kind.")] string? edgeTargetKind = null,
+        [Description("True = require no matching edge.")] bool edgeAbsent = false,
+        [Description("Whole-file classification by extension.")] string? fileType = null,
+        [Description("Substring on node kind.")] string? kindPattern = null,
+        [Description("Textures only. Minimum source pixel width.")] int? minWidth = null,
+        [Description("Textures only. Minimum source pixel height.")] int? minHeight = null,
+        [Description("Exact importer subtype.")] string? assetSubtype = null,
+        [Description("Maximum nodes to return (1-500, default 100).")] int limit = 100,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         // Clamped to graph_query's own documented maximum BEFORE either branch below adds its "+1"
@@ -204,14 +172,16 @@ public sealed class QueryTools(ProjectService projects)
             if (!string.IsNullOrWhiteSpace(kind) || !string.IsNullOrWhiteSpace(kindPattern)
                 || !string.IsNullOrWhiteSpace(namePattern) || !string.IsNullOrWhiteSpace(edgeKind)
                 || !string.IsNullOrWhiteSpace(edgeTargetPath) || !string.IsNullOrWhiteSpace(edgeTargetNamePattern)
-                || !string.IsNullOrWhiteSpace(edgeTargetKind) || edgeAbsent)
+                || !string.IsNullOrWhiteSpace(edgeTargetKind) || edgeAbsent
+                || minWidth is not null || minHeight is not null || !string.IsNullOrWhiteSpace(assetSubtype))
             {
                 throw new McpException(
                     "graph_query's 'fileType' answers a whole-FILE identity question (from file "
                     + "identity, not graph nodes), so it cannot combine with 'kind', 'kindPattern', "
-                    + "'namePattern', 'edgeKind', 'edgeTargetPath', 'edgeTargetNamePattern', or "
-                    + "'edgeTargetKind' - those filter NODES, a different question. Call again with "
-                    + "just 'fileType' and, optionally, 'pathPrefix'.");
+                    + "'namePattern', 'edgeKind', 'edgeTargetPath', 'edgeTargetNamePattern', "
+                    + "'edgeTargetKind', 'minWidth', 'minHeight', or 'assetSubtype' - those filter "
+                    + "NODES, a different question. Call again with just 'fileType' and, optionally, "
+                    + "'pathPrefix'.");
             }
 
             var (fileTypeProject, _) = await ToolSupport.ResolveProjectAsync(projects, project, context).ConfigureAwait(false);
@@ -219,10 +189,12 @@ public sealed class QueryTools(ProjectService projects)
             return BuildFileTypeResult(assets, clampedLimit);
         }
 
-        if (string.IsNullOrWhiteSpace(kindPattern))
+        if (string.IsNullOrWhiteSpace(kindPattern) && minWidth is null && minHeight is null
+            && string.IsNullOrWhiteSpace(assetSubtype))
         {
-            // kindPattern alone already satisfies "at least one filter" - only reach the shared
-            // (query_graph-shared, byte-for-byte-preserved) check when it is absent too.
+            // kindPattern/minWidth/minHeight/assetSubtype each already satisfy "at least one
+            // filter" on their own - only reach the shared (query_graph-shared,
+            // byte-for-byte-preserved) check when all four are absent too.
             ValidateFilters(kind, namePattern, pathPrefix, edgeKind, "graph_query");
         }
         ValidateEdgeDirection(edgeDirection);
@@ -264,7 +236,7 @@ public sealed class QueryTools(ProjectService projects)
 
         var found = projects.QueryGraph(productGuid, kind, namePattern, pathPrefix, edgeKind,
             edgeDirection.ToLowerInvariant(), clampedLimit + 1, edgeTargetPath, edgeTargetNamePattern, edgeAbsent,
-            kindPattern, edgeTargetKind);
+            kindPattern, edgeTargetKind, minWidth, minHeight, assetSubtype);
 
         // F7: an unrecognised 'kind' (a typo, e.g. "Bananas", or a plausible-but-wrong guess, e.g.
         // "Scene" - a real Hades/Unity concept but never a graph NODE kind) used to return exactly

@@ -12,7 +12,7 @@
 
 ![Hades in action — the agent answers project-structure questions from the knowledge graph instead of grepping and guessing](Documentation/demo.gif)
 
-Hades is Unity-aware AI infrastructure for Claude Code. It's a **standalone desktop app** — a menu-bar app on macOS, a tray app on Windows (**beta**) — that builds a queryable knowledge graph of your entire Unity project — every scene, prefab, script, asset, and dependency — so your AI agent *knows* your project's structure instead of guessing at it. Out of the box you get 32 MCP tools, 22 skills, and 6 commands. Everything runs locally, and everything is version-controllable.
+Hades is Unity-aware AI infrastructure for Claude Code. It's a **standalone desktop app** — a menu-bar app on macOS, a tray app on Windows (**beta**) — that builds a queryable knowledge graph of your entire Unity project — every scene, prefab, script, asset, and dependency — so your AI agent *knows* your project's structure instead of guessing at it. Out of the box you get 33 MCP tools, 23 skills, and 6 commands. Everything runs locally, and everything is version-controllable.
 
 <!-- ===================== HERO DEMO GIF (placeholder) =====================
      TODO: render Documentation/media/demo-hero.gif as the final side-by-side.
@@ -43,8 +43,8 @@ Hades lets your agent **know and analyze**. When it asks "what references `Playe
 | **Graph** | A semantic knowledge graph of your Unity project — scenes, prefabs, scripts, assets, and their dependencies. The agent sees your project's structure, not just its files. |
 | **Charon** | Full observability — every tool call, graph query, and memory operation is traced. Inspect them in the app's **Charon** window. |
 | **Asphodel** | Persistent project memory in version-controlled markdown (`.arcforge/memory/`). Capture decisions, patterns, and conventions once; the agent reads them for context-aware advice every session. |
-| **22 Skills** | Architecture decisions, workflow guidance, and domain expertise — networking, audio, UI, shaders, ECS, testing, and more. |
-| **32 MCP Tools** | Graph queries, dependency tracing, inspection, project memory, observability, and editor actions (scenes, prefabs, components, materials, animation, assets). |
+| **23 Skills** | Architecture decisions, workflow guidance, and domain expertise — networking, audio, UI, shaders, ECS, testing, and more. |
+| **33 MCP Tools** | Graph queries, dependency tracing, inspection, project memory, observability, and editor actions (scenes, prefabs, components, materials, animation, assets). |
 | **6 Commands** | `/hades:status`, `/hades:rebuild-graph`, `/hades:show-traces`, `/hades:validate-memory`, `/hades:show-proposals`, `/hades:export-traces` |
 
 ### How the pieces fit together
@@ -52,7 +52,7 @@ Hades lets your agent **know and analyze**. When it asks "what references `Playe
 ```mermaid
 flowchart TD
     Agent["AI Agent<br/>(Claude Code)"]
-    Agent <-->|"32 MCP tools over HTTP<br/>127.0.0.1:7823"| Hades
+    Agent <-->|"33 MCP tools over HTTP<br/>127.0.0.1:7823"| Hades
 
     subgraph Hades["Hades — standalone desktop app<br/>menu bar on macOS · tray on Windows"]
         Graph["Graph<br/>project knowledge graph"]
@@ -179,7 +179,7 @@ Windows also installs a `hades` command-line tool onto your PATH. It only appear
 /plugin marketplace add TheArcForge/hades-plugin
 ```
 
-then `/plugin install hades`. Run `/mcp` afterwards and confirm `hades` reports **32 tools**.
+then `/plugin install hades`. Run `/mcp` afterwards and confirm `hades` reports **33 tools**.
 
 Working from a clone instead? Point Claude Code at the plugin directly — per-session, so pass it every time:
 
@@ -236,7 +236,7 @@ Claude Code connects over MCP to the Hades app on `127.0.0.1:7823` — no launch
 |---------|-----|
 | No tools appear in Claude Code | Is Hades running? Look for it in the menu bar (macOS) or the tray (Windows). Claude Code doesn't retry an MCP server that was unreachable at session start — run `/mcp` to reconnect, or start a new session. |
 | Windows: `hades` isn't a recognised command | Open a **new** terminal. Windows gives each process its environment at launch, so windows opened before the install never see the new PATH entry. |
-| `hades` reports ~90 tools, not 32 | You're on the retired v1.2 plugin. See [Installing Hades](Documentation/Installing.md), "Confirm you're testing the new Hades". |
+| `hades` reports ~90 tools, not 33 | You're on the retired v1.2 plugin. See [Installing Hades](Documentation/Installing.md), "Confirm you're testing the new Hades". |
 | Live-Editor tools fail, graph queries work | That's the split by design — the Unity plugin isn't installed or the Editor isn't running. Step 3 above. |
 | Project info seems stale | Run `/hades:rebuild-graph` to regenerate the knowledge graph. |
 

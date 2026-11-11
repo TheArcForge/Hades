@@ -209,6 +209,111 @@ namespace Hades.Tests.Editor
             }
         }
 
+        // F6: non-additive open must never silently discard unsaved changes
+
+        [Test]
+        public void SceneOpen_NonAdditive_CurrentSceneIsDirty_Refused_NamingItAndDiscardUnsaved_StillReleasesLease()
+        {
+            var scenePath = ScratchDir + "/OpenTarget.unity";
+            var freshScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            EditorSceneManager.SaveScene(freshScene, scenePath);
+            EditorSceneManager.CloseScene(freshScene, true);
+            SceneTestFixtures.ResetScene();
+
+            // MarkSceneDirty, not "new GameObject(...) and assume it dirties synchronously" - see
+            // AssertRunTestsNeverSavesDirtyScene's own doc comment.
+            var dirtyPath = UnityEngine.SceneManagement.SceneManager.GetActiveScene().path;
+            EditorSceneManager.MarkSceneDirty(UnityEngine.SceneManagement.SceneManager.GetActiveScene());
+            Assert.IsTrue(UnityEngine.SceneManagement.SceneManager.GetActiveScene().isDirty,
+                "fixture must start dirty for this test to prove anything");
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String(scenePath));
+
+                var ex = Assert.Throws<InvalidOperationException>(() => CommandTable.Dispatch(gate, Request("scene.open", @params)));
+                StringAssert.Contains(dirtyPath, ex.Message);
+                StringAssert.Contains("discardUnsaved", ex.Message);
+                Assert.AreEqual(dirtyPath, UnityEngine.SceneManagement.SceneManager.GetActiveScene().path,
+                    "the dirty scene must still be active - nothing was discarded");
+
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
+        [Test]
+        public void SceneOpen_NonAdditive_DiscardUnsaved_ProceedsDespiteADirtyCurrentScene_ReportsActiveScene()
+        {
+            var scenePath = ScratchDir + "/OpenTargetDiscard.unity";
+            var freshScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            EditorSceneManager.SaveScene(freshScene, scenePath);
+            EditorSceneManager.CloseScene(freshScene, true);
+            SceneTestFixtures.ResetScene();
+            EditorSceneManager.MarkSceneDirty(UnityEngine.SceneManagement.SceneManager.GetActiveScene());
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject()
+                    .SetProperty("path", JsonValue.String(scenePath))
+                    .SetProperty("discardUnsaved", JsonValue.Bool(true));
+                var result = CommandTable.Dispatch(gate, Request("scene.open", @params));
+
+                Assert.AreEqual(scenePath, StringProp(result, "opened"));
+                Assert.AreEqual(scenePath, StringProp(result, "activeScene"));
+                Assert.AreEqual(scenePath, UnityEngine.SceneManagement.SceneManager.GetActiveScene().path);
+
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
+        [Test]
+        public void SceneOpen_Additive_NeverRefused_EvenWhenCurrentSceneIsDirty()
+        {
+            var scenePath = ScratchDir + "/AdditiveDirtyTarget.unity";
+            var freshScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            EditorSceneManager.SaveScene(freshScene, scenePath);
+            EditorSceneManager.CloseScene(freshScene, true);
+            SceneTestFixtures.ResetScene();
+            EditorSceneManager.MarkSceneDirty(UnityEngine.SceneManagement.SceneManager.GetActiveScene());
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject()
+                    .SetProperty("path", JsonValue.String(scenePath))
+                    .SetProperty("additive", JsonValue.Bool(true));
+
+                JsonValue result = null;
+                Assert.DoesNotThrow(() => result = CommandTable.Dispatch(gate, Request("scene.open", @params)));
+                Assert.AreEqual("Additive", StringProp(result, "mode"));
+
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
+        [Test]
+        public void SceneOpen_ReportsActiveScenePath()
+        {
+            var scenePath = ScratchDir + "/ReportsActive.unity";
+            var freshScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            EditorSceneManager.SaveScene(freshScene, scenePath);
+            EditorSceneManager.CloseScene(freshScene, true);
+            SceneTestFixtures.ResetScene();
+
+            var (gate, fake, pump) = NoopGateParts();
+            using (pump) using (gate)
+            {
+                var @params = JsonValue.NewObject().SetProperty("path", JsonValue.String(scenePath));
+                var result = CommandTable.Dispatch(gate, Request("scene.open", @params));
+
+                Assert.AreEqual(scenePath, StringProp(result, "activeScene"));
+
+                AssertLeaseCleanlyReleased(fake, gate);
+            }
+        }
+
         // ---------------------------------------------------------------- project.recompile_scripts
 
         [Test]

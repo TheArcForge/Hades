@@ -124,34 +124,21 @@ public sealed class ProjectSettingsApplyTool(EditorProxy editor, ProjectService 
         ["createTag", "deleteTag", "createLayer", "setBuildScenes", "setImportSettings", "setClipImportSettings"];
 
     [McpServerTool(Name = "project_settings_apply", Title = "Apply Project Settings (Batch)", ReadOnly = false, UseStructuredContent = true)]
-    [Description("Applies a batch of project-settings mutations - createTag(name), deleteTag(name), "
-               + "createLayer(name, layerIndex?), setBuildScenes(scenes: [{path, enabled?}]), "
-               + "setImportSettings(path, properties: {name: value}), setClipImportSettings(path, "
-               + "clips: [{name, loopTime?, loopPose?, cycleOffset?, firstFrame?, lastFrame?}]) - in "
-               + "ONE call, in the order given. This is the batch form of tag_create/tag_delete/"
-               + "layer_create/scene_set_build/asset_set_import_settings/asset_set_clip_import_settings. "
-               + "UNDO IS UNEVEN, UNLIKE scene_apply: tag/layer ops are best-effort (never a tested "
-               + "claim - ProjectSettings/TagManager.asset is a project singleton, not scene-local "
-               + "state); setBuildScenes and the two import-settings ops have NO Undo at all (a "
-               + "static property and project configuration respectively) - do not assume one "
-               + "Ctrl/Cmd+Z reverts this batch. "
-               + "PARTIAL FAILURE, NOT ROLLED BACK: each operation's outcome is reported by its "
-               + "0-based index in 'applied' (succeeded) or 'failed' (with its own error) - "
-               + "operations that already succeeded are never undone because a LATER one failed. "
-               + "Every successful operation's own result (e.g. createLayer's assigned 'index', the "
-               + "one thing a caller cannot know in advance) is reported in 'results' alongside "
-               + "'applied', never just a bare success flag. "
-               + "An unrecognised 'op' value rejects the WHOLE call before anything is sent to the "
-               + "Editor, listing the valid ops. Needs a live Editor - call hades_charon_status first "
-               + "if unsure.")]
+    [Description("Applies a batch of project-settings mutations in one call, in order: createTag, "
+               + "deleteTag, createLayer, setBuildScenes, setImportSettings, "
+               + "setClipImportSettings. Per-op fields are listed on 'operations'. UNDO IS UNEVEN, "
+               + "unlike scene_apply: tag/layer ops are best-effort only; setBuildScenes and the "
+               + "two import-settings ops have NO Undo at all - do not assume one Ctrl/Cmd+Z "
+               + "reverts this batch. createLayer's assigned 'index' is reported in 'results'. "
+               + "Needs a live Editor.")]
     public async Task<ProjectSettingsApplyResult> ProjectSettingsApply(
-        [Description("Operations to apply, in order. Each needs 'op' plus that op's own fields: "
+        [Description("Per-op fields (each op also needs 'op'): "
                    + "createTag{name}, deleteTag{name}, createLayer{name,layerIndex?}, "
                    + "setBuildScenes{scenes:[{path,enabled?}]}, "
                    + "setImportSettings{path,properties:{name:value}}, "
                    + "setClipImportSettings{path,clips:[{name,loopTime?,loopPose?,cycleOffset?,firstFrame?,lastFrame?}]}.")]
         IReadOnlyList<ProjectSettingsApplyOperation> operations,
-        [Description("Project handle from hades_status. Omit when Hades knows only one project.")] string? project = null,
+        [Description("Project handle from hades_status (omit if only one).")] string? project = null,
         RequestContext<CallToolRequestParams> context = null!)
     {
         if (operations is null || operations.Count == 0)

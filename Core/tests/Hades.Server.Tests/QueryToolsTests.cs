@@ -40,6 +40,30 @@ public class QueryToolsTests : IClassFixture<WebApplicationFactory<Program>>, ID
         if (guid is not null) File.WriteAllText(full + ".meta", $"fileFormatVersion: 2\nguid: {guid}\n");
     }
 
+    // DESIGN-07: a real (minimal) PNG, written binary-safe — File.WriteAllText would corrupt the
+    // magic bytes through text encoding. 800x600, 8-bit, RGB (colour type 2).
+    static readonly byte[] BigPng =
+    [
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+        0, 0, 0, 13, (byte)'I', (byte)'H', (byte)'D', (byte)'R',
+        0, 0, 3, 32, 0, 0, 2, 88, 8, 2, // width=800 (0x320), height=600 (0x258)
+    ];
+
+    void WriteBinaryAsset(string relative, byte[] bytes, string metaContents)
+    {
+        var full = Path.Combine(_projectRoot, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllBytes(full, bytes);
+        File.WriteAllText(full + ".meta", metaContents);
+    }
+
+    static readonly byte[] MinimalSmallPng =
+    [
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+        0, 0, 0, 13, (byte)'I', (byte)'H', (byte)'D', (byte)'R',
+        0, 0, 0, 4, 0, 0, 0, 3, 8, 2, // width=4, height=3
+    ];
+
     public QueryToolsTests(WebApplicationFactory<Program> factory)
     {
         Directory.CreateDirectory(Path.Combine(_projectRoot, "ProjectSettings"));
@@ -66,6 +90,22 @@ public class QueryToolsTests : IClassFixture<WebApplicationFactory<Program>>, ID
         // inside a prefab. This is the fixture the fileType tests below need: no node-kind filter
         // could ever isolate it, which is exactly the gap fileType (file_state-backed) closes.
         Write("Assets/Data/Config.asset", Header + "--- !u!114 &11400000\nMonoBehaviour:\n  m_Name: Config\n");
+
+        // DESIGN-07 §8.2 fixtures: a big, GUI-subtype texture the minWidth/minHeight/assetSubtype
+        // filters must find, and a small Sprite whose dimensions/subtype must NOT match those
+        // filters — proving the filter is selective, not vacuously true.
+        WriteBinaryAsset("Assets/Textures/Big.png", BigPng, """
+            fileFormatVersion: 2
+            guid: dddd4444dddd4444dddd4444dddd4444
+            TextureImporter:
+              textureType: 2
+            """);
+        WriteBinaryAsset("Assets/Textures/Small.png", MinimalSmallPng, """
+            fileFormatVersion: 2
+            guid: eeee5555eeee5555eeee5555eeee5555
+            TextureImporter:
+              textureType: 8
+            """);
 
         _factory = factory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
@@ -465,12 +505,13 @@ public class QueryToolsTests : IClassFixture<WebApplicationFactory<Program>>, ID
     public async Task FileType_NoFilterAtAll_ReturnsEveryIndexedAsset_LikeAssetFindWithNoFilters()
     {
         var structured = Structured(await McpTestClient.CallTool(_factory, "graph_query",
-            new { fileType = "Asset" }));
+            new { fileType = "Asset", pathPrefix = "Assets/Scripts" }));
 
-        // Nothing in this fixture falls through to the "Asset" catch-all (every extension used
-        // here - .cs/.unity/.prefab/.asset - maps to one of the other six named types), so this
-        // just proves a legal, recognised fileType value that happens to match nothing is empty,
-        // not an error.
+        // Scoped to Assets/Scripts specifically: nothing there falls through to the "Asset"
+        // catch-all (.cs maps to "Script"), so this proves a legal, recognised fileType value
+        // that happens to match nothing is empty, not an error. (The DESIGN-07 texture fixtures
+        // under Assets/Textures DO fall through to "Asset" - proven instead by
+        // GraphQuery_MinWidthAndMinHeight_FindTheBigTextureNotTheSmallOne and its sibling, below.)
         Assert.Empty(structured.GetProperty("results").EnumerateArray());
     }
 
@@ -787,13 +828,13 @@ public class QueryToolsTests : IClassFixture<WebApplicationFactory<Program>>, ID
     }
 
     [Fact]
-    public async Task GraphQuery_IsAdvertisedAsReadOnlyWithASchemaAndTheSavedStateClause()
+    public async Task GraphQuery_IsAdvertisedAsReadOnlyWithoutOutputSchemaAndTheSavedStateClause()
     {
         var tool = Assert.Single((await McpTestClient.ListTools(_factory))
             .GetProperty("result").GetProperty("tools").EnumerateArray(),
             t => t.GetProperty("name").GetString() == "graph_query");
 
-        Assert.True(tool.TryGetProperty("outputSchema", out _));
+        Assert.False(tool.TryGetProperty("outputSchema", out _));
         Assert.True(tool.GetProperty("annotations").GetProperty("readOnlyHint").GetBoolean());
         Assert.Contains("saved state on disk", tool.GetProperty("description").GetString());
     }
@@ -856,6 +897,39 @@ public class QueryToolsTests : IClassFixture<WebApplicationFactory<Program>>, ID
 
         var summary = Structured(await McpTestClient.CallTool(_factory, "get_project_summary"));
         Assert.True(summary.GetProperty("totalNodes").GetInt32() > 0);
+    }
+
+    [Fact]
+    public async Task GraphQuery_MinWidthAndMinHeight_FindTheBigTextureNotTheSmallOne()
+    {
+        var structured = Structured(await McpTestClient.CallTool(_factory, "graph_query",
+            new { kind = "Texture2D", minWidth = 700 }));
+        var paths = structured.GetProperty("results").EnumerateArray()
+            .Select(r => r.GetProperty("path").GetString()).ToList();
+
+        Assert.Contains("Assets/Textures/Big.png", paths);
+        Assert.DoesNotContain("Assets/Textures/Small.png", paths);
+    }
+
+    [Fact]
+    public async Task GraphQuery_AssetSubtype_MatchesExactlyAndCaseSensitively()
+    {
+        var structured = Structured(await McpTestClient.CallTool(_factory, "graph_query",
+            new { kind = "Texture2D", assetSubtype = "Sprite" }));
+        var paths = structured.GetProperty("results").EnumerateArray()
+            .Select(r => r.GetProperty("path").GetString()).ToList();
+
+        Assert.Contains("Assets/Textures/Small.png", paths); // textureType: 8 -> "Sprite"
+        Assert.DoesNotContain("Assets/Textures/Big.png", paths); // textureType: 2 -> "GUI"
+    }
+
+    [Fact]
+    public async Task GraphQuery_MinWidthCombinesWithFileType_IsRefused()
+    {
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "graph_query",
+            new { fileType = "Asset", minWidth = 100 }));
+
+        Assert.Contains("minWidth", text);
     }
 
     public void Dispose()

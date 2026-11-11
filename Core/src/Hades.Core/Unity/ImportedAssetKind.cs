@@ -20,11 +20,12 @@ namespace Hades.Core.Unity;
 ///
 /// Extension list, deliberately smaller than Unity's full importer surface: the measured baseline
 /// (textures .png/.tga/.psd/.jpg, models .fbx, audio .wav, fonts .ttf/.otf, shaders
-/// .shader/.shadergraph, animation .anim) plus siblings whose kind mapping is unambiguous
+/// .shader/.shadergraph) plus siblings whose kind mapping is unambiguous
 /// (.jpeg/.exr alongside the other textures; .obj alongside .fbx; .mp3/.ogg/.aiff alongside .wav;
 /// .compute as its own ComputeShader kind, since a compute shader is a genuinely different Unity
 /// object from a surface shader). Video, terrain data, and the rest of Unity's importer surface
-/// are left out on purpose — a smaller honest set beats a speculative one.
+/// are left out on purpose — a smaller honest set beats a speculative one. ".anim" is NOT here —
+/// see the "AnimationClip" comment inline below.
 /// </summary>
 public static class ImportedAssetKind
 {
@@ -58,9 +59,10 @@ public static class ImportedAssetKind
             [".shadergraph"] = "ShaderGraph",
             [".compute"] = "ComputeShader",
 
-            // Animation — the binary/imported AnimationClip, distinct from AnimatorController
-            // (.controller), which is YAML and already indexed by AssetIndexer.
-            [".anim"] = "AnimationClip",
+            // ".anim" is DELIBERATELY absent — DESIGN-07 §11: it is plain Unity YAML (class ID 74,
+            // DeclaredTypeName "AnimationClip"), not binary, and is indexed by
+            // Indexing.AssetIndexer instead, exactly like ".controller". It was misfiled here
+            // before DESIGN-07's schema v4→5 migration moved it out.
         };
 
     /// <summary>Every extension this mapping recognises — the walk-set

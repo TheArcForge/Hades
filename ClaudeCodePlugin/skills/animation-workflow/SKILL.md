@@ -492,12 +492,17 @@ public static class ValidateAvatarSetup
 
 ### Alternative: Direct MCP Tool Calls
 
-If you prefer tool calls over scripting, `animation_apply` is the batch tool for animation operations — one call takes an ordered list of operations (`createController`, `editController`, `assignController`, `assignClip`) and applies them in a single Undo group.
+If you prefer tool calls over scripting, `animation_apply` is the batch tool for animation operations — one call takes an ordered list of operations and applies them in a single Undo group: `createController`, `editController`, `assignController`, `assignClip`, `addLayer`, `setBlendTree`, `createClip`, `setCurve`, `setEvents`, `describe`.
 - `animation_apply` `createController` — create an AnimatorController asset
 - `animation_apply` `editController` — modify controller layers, states, transitions, and parameters
 - `animation_apply` `assignController` — assign a controller to an Animator component
-- `animation_apply` `assignClip` — assign an AnimationClip to a state
-- `inspect_asset` — inspect controller structure (layers, states, parameters) without editing
+- `animation_apply` `assignClip` — assign an AnimationClip to a state (optionally `layer`-scoped)
+- `animation_apply` `addLayer` — add a layer (weight, blending mode, avatar mask, IK pass)
+- `animation_apply` `setBlendTree` — replace a state's whole Blend Tree (1D/2D/Direct, nested)
+- `animation_apply` `createClip` / `setCurve` — author procedural/utility clips (UI, pickups, doors) and their property curves, with named easing (`linear`/`easeIn`/`easeOut`/`easeInOut`/`constant`) — not for character animation, which stays FBX-sourced
+- `animation_apply` `setEvents` — set an **authored** `.anim` clip's animation events (replace-all). An **imported** (FBX) clip's events/curves are a different Unity mechanism entirely and go through `project_settings_apply` `setClipImportSettings` instead — `setEvents`/`setCurve` refuse an imported clip and name that tool
+- `animation_apply` `describe` — read a controller's layers/parameters/states (incl. Blend Tree contents) or a clip's curves/events back, in the same shape the write ops above accept — the round-trip loop for `setBlendTree`/`setCurve`/`setEvents`
+- `inspect_asset` — inspect controller structure (layers, parameters, states incl. each state's motion reference) offline, without a live Editor or edits
 
 Choose tools for quick one-off operations. Choose C# scripting (AnimatorController API) for reusable Editor tools or complex batch operations.
 
