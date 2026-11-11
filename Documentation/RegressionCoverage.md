@@ -88,7 +88,7 @@ Highlights; the full enumeration lives in the audit history. All pins verified g
 | Roots-resolved calls traced into the right traces.db | `RootsResolutionToolCallTests.RootsResolvedCall_IsTracedIntoTheResolvedProjectsOwnTracesDb` | COVERED |
 | Plugin version skew warning (incl. prerelease/4-part parsing; mirrors at 1.5.0) | `PluginVersionSkewTests` (4), `ProjectsResolveTests.PluginVersionMismatch_*` (3), `CharonStatusTests` major-skew pair | COVERED |
 | search_by_name kind description names imported-asset kinds | `ToolCallTests.SearchByName_KindParameterIsAdvertisedAsSupportingImportedAssetKinds` | COVERED |
-| Tool count stays 37 | `CharonStatusTests.ToolCount_Stays37`, `LeaseVisibilityTests.ToolCount_Stays37` | COVERED |
+| Tool count stays 33 | `CharonStatusTests.ToolCount_Stays33`, `LeaseVisibilityTests.ToolCount_Stays33` | COVERED |
 
 ## Bug hunt round 1 (uncommitted era)
 

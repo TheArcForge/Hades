@@ -1010,7 +1010,7 @@ When you do it:
    first. If that workflow is ever reverted there, re-apply it BEFORE tagging, not after.
 3. Confirm the synced marketplace actually serves the current plugin, not the retired one - the
    same check `Documentation/Installing.md`'s "Confirm you're testing the new Hades"
-   section already walks a tester through: tool count (32, not ~90) and `hades_status`'s `version`
+   section already walks a tester through: tool count (33, not ~90) and `hades_status`'s `version`
    field.
 
 ### 8.6 Post-publish

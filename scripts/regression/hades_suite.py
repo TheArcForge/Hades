@@ -592,7 +592,13 @@ def c_f21_scene_duplicate_self_refused():
     untouched on disk, not just that the call errors."""
     _clean_tmp()
     path = f"{TMP}/SelfDup.unity"
-    mk = call("scene_manage", {"operations": [{"op": "create", "path": path}]})
+    # discardUnsaved is explicit as of 2.2.0: scene_manage's create now REFUSES while any loaded
+    # scene has unsaved changes (the data-loss fix this release ships), and an Editor sitting on an
+    # untitled, never-saved scene is the ordinary case. This setup only wants a fixture scene on
+    # disk and has no stake in whatever scratch scene is loaded, so it says so rather than being
+    # refused - the assertion below, about duplicate with sourcePath==destPath, is unchanged.
+    mk = call("scene_manage", {"operations": [
+        {"op": "create", "path": path, "discardUnsaved": True}]})
     on_disk = os.path.join(UNITY_ROOT, path)
     if mk.get("failed") or not os.path.exists(on_disk):
         return False, f"SETUP FAILED: scene not written: {json.dumps(mk)[:150]}"
@@ -685,9 +691,10 @@ CASES = [
      "a repeated create refuses, or distinguishes created from replaced"),
     ("E11", "F21", True, "pass", c_f21_self_reparent_refused,
      "reparenting a GameObject under itself is refused"),
-    # E12 is an open finding as of this merge (2026-08-15): expect="fail" until the fix lands,
-    # then flip it to "pass" — it becomes a regression guard like every other case here.
-    ("E12", "F22", True, "fail", c_f22_move_after_rebuild,
+    # E12 was F22, open when round 3 shipped it (2026-08-15). It reported *** NOW FIXED *** on the
+    # 2026-11-11 release gate, so it is flipped per this file's own instruction and is now a
+    # regression guard like every other case here.
+    ("E12", "F22", True, "pass", c_f22_move_after_rebuild,
      "after a rebuild, a move still retires the old path (without a rebuild it does — see E2)"),
     ("E13", "F21", True, "pass", c_f21_scene_duplicate_self_refused,
      "scene_manage duplicate with sourcePath==destPath is refused, not silently self-overwritten"),
