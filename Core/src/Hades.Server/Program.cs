@@ -167,6 +167,19 @@ builder.Services.Configure<McpServerOptions>(options =>
             return rejection;
         }
 
+        // L1: a required TOP-LEVEL parameter the caller never sent at all. MissingRequiredFieldRejection
+        // below walks only INTO arguments that WERE sent, so it cannot see this; the SDK's own binding
+        // then failed with the opaque "An error occurred invoking '<tool>'." and nothing appended, for
+        // the 19 of 33 tools that declare a required parameter - the single most common call mistake
+        // there is. Refused here, in the same position and for the same reason as its two siblings;
+        // see MissingRequiredParameterRejection's own doc comment.
+        if (MissingRequiredParameterRejection(context) is { } missingParameterRejection)
+        {
+            await RecordTraceForRefusalAsync(context, toolName, startUtcMs, stopwatch.ElapsedMilliseconds,
+                DescribeError(missingParameterRejection), missingParameterRejection, cancellationToken).ConfigureAwait(false);
+            return missingParameterRejection;
+        }
+
         // F7: a required field missing from a typed operation array (e.g. animation_apply's
         // setEvents sending 'functionName' instead of 'function') used to bind successfully at the
         // TOP level - 'operations' is itself just a JSON array - and only fail deep inside the SDK's
@@ -769,6 +782,75 @@ static CallToolResult? UnknownParameterRejection(RequestContext<CallToolRequestP
             {
                 Text = $"{context.Params.Name} does not accept {noun} named {quotedUnknown}. "
                      + $"Valid parameters: {string.Join(", ", validNames)}.",
+            },
+        ],
+    };
+}
+
+/// <summary>
+/// L1: null when every parameter the matched tool's own JSON Schema marks <c>required</c> at the TOP
+/// level is present in <c>context.Params.Arguments</c>; otherwise a ready-to-return error
+/// <see cref="CallToolResult"/> naming the missing parameter(s), the tool's full parameter list, and
+/// which of them are required - so a caller can self-correct without guessing.
+///
+/// <para>The ROOT-level sibling of <see cref="MissingRequiredFieldRejection"/> just below, which
+/// iterates the arguments the caller actually SENT and walks into each one; a required parameter
+/// that was never sent at all appears nowhere in that iteration, so nothing checked it. The SDK's
+/// own binding then failed with the opaque "An error occurred invoking '&lt;tool&gt;'." and nothing
+/// appended - confirmed live against 6 tools, with 19 of 33 declaring a required parameter and so
+/// exposed - found by the 2026-11-10 pre-merge live pass (finding L1; that pass's own notes live
+/// under the gitignored docs/, so the substance is restated here rather than referenced). Reads
+/// <c>tool.ProtocolTool.InputSchema</c>, the SAME schema <c>tools/list</c> advertises and both
+/// siblings already read, rather than a second hand-maintained list.</para>
+///
+/// <para>Unlike both siblings this deliberately runs even when the call carried NO arguments at
+/// all: a tool with a required parameter called with <c>{}</c> is exactly the case that must be
+/// refused, and their shared <c>Arguments is not { Count: &gt; 0 }</c> early-out is what let it
+/// through. <c>graph_query</c>, which declares no <c>required</c> and validates its filter
+/// combination by hand, is unaffected - no <c>required</c> array means nothing to enforce.</para>
+///
+/// <para>Presence only, never the value's type - the same deliberate narrowness
+/// <see cref="MissingRequiredFieldRejection"/> documents for itself. A present-but-null required
+/// parameter counts as sent; whether null is acceptable is the tool's own business, and reporting
+/// it here would claim the caller omitted something they did not.</para>
+/// </summary>
+static CallToolResult? MissingRequiredParameterRejection(RequestContext<CallToolRequestParams> context)
+{
+    if (context.MatchedPrimitive is not McpServerTool tool) return null;
+
+    var schema = tool.ProtocolTool.InputSchema;
+    if (!schema.TryGetProperty("required", out var requiredElement) || requiredElement.ValueKind != JsonValueKind.Array)
+    {
+        return null;
+    }
+
+    var required = requiredElement.EnumerateArray()
+        .Select(element => element.GetString())
+        .Where(name => !string.IsNullOrEmpty(name))
+        .Select(name => name!)
+        .ToList();
+    if (required.Count == 0) return null;
+
+    var arguments = context.Params.Arguments;
+    var missing = required.Where(name => arguments is null || !arguments.ContainsKey(name)).ToList();
+    if (missing.Count == 0) return null;
+
+    var validNames = schema.TryGetProperty("properties", out var properties) && properties.ValueKind == JsonValueKind.Object
+        ? properties.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal).ToList()
+        : required;
+    var quotedMissing = string.Join(", ", missing.Select(name => $"'{name}'"));
+    var noun = missing.Count == 1 ? "parameter" : "parameters";
+
+    return new CallToolResult
+    {
+        IsError = true,
+        Content =
+        [
+            new TextContentBlock
+            {
+                Text = $"{context.Params.Name} is missing required {noun} {quotedMissing}. "
+                     + $"Valid parameters: {string.Join(", ", validNames)}; "
+                     + $"required: {string.Join(", ", required)}.",
             },
         ],
     };

@@ -50,9 +50,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
-- **A missing required field in a tool call now says which one.** Previously a nested object missing
-  a required field (for example an animation event without `function`) failed with a bare "An error
-  occurred"; the error now names the tool, the path, the missing field, and the valid fields there.
+- **A missing required field or parameter in a tool call now says which one.** Previously a nested
+  object missing a required field (for example an animation event without `function`) failed with a
+  bare "An error occurred" — and so did omitting a required top-level parameter, which 19 of the 33
+  tools declare, making it the most common way a call can go wrong. Both now name the tool, where
+  the gap is, what is missing, and what that position accepts.
 
 ## [2.1.0] — Windows Support — 2026-09-06
 

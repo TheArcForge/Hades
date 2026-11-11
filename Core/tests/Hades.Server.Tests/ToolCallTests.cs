@@ -341,28 +341,106 @@ public class ToolCallTests : IClassFixture<WebApplicationFactory<Program>>, IDis
     public async Task BlankPatternReturnsAnActionableError()
     {
         // Anthropic's tool guidance: errors should give "specific and actionable improvements,
-        // rather than opaque error codes or tracebacks". This is the REACHABLE bad input — the
-        // inputSchema marks namePattern required, so a conforming client cannot omit it, but it
-        // can pass an empty one.
+        // rather than opaque error codes or tracebacks". A blank pattern is the bad input the
+        // inputSchema's own `required` cannot catch - the parameter IS present, just useless.
+        // (Omitting it entirely is caught too, by MissingRequiredParameterRejection; see the L1
+        // group below.)
         var text = McpTestClient.ErrorText(
             await McpTestClient.CallTool(_factory, "search_by_name", new { namePattern = "  " }));
         Assert.Contains("namePattern", text, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("call again", text, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ---------------------------------------------------------------- L1: a missing required top-level parameter names itself
+    //
+    // This was once asserted here as a "known SDK limitation", left alone on the premise that it was
+    // "unreachable for a client that honours inputSchema's `required`". That premise was wrong, and
+    // the 2026-11-10 pre-merge live pass (finding L1) is what showed it: six tools hit in one
+    // session by a schema-honouring caller, because an agent composing a
+    // call from a tool's DESCRIPTION omits a parameter routinely - and `fe9c6a4` cut those
+    // descriptions back, which leans the caller harder on the error text to recover. 19 of 33 tools
+    // declare a required parameter, so all 19 were returning the bare, information-free sentence on
+    // the single most common call mistake there is. Fixed in Program.cs's CallToolFilters as the
+    // ROOT-level sibling of the two checks already there - see MissingRequiredParameterRejection.
+
     [Fact]
-    public async Task OmittingARequiredArgumentIsReportedAsAToolError()
+    public async Task OmittingARequiredArgument_NamesTheParameter_NotJustTheBareSdkSentence()
     {
-        // Known SDK limitation, asserted so a future improvement is noticed: omitting a required
-        // argument yields only "An error occurred invoking 'search_by_name'." — no indication of
-        // WHICH argument. Unreachable for a client that honours inputSchema's `required`, which
-        // is why it is documented rather than worked around. If this ever starts naming the
-        // parameter, the SDK improved and the workaround note in the plan can go.
         var envelope = await McpTestClient.CallTool(_factory, "search_by_name");
 
         var result = envelope.GetProperty("result");
         Assert.True(result.GetProperty("isError").GetBoolean(), envelope.GetRawText());
-        Assert.Contains("search_by_name", result.GetProperty("content")[0].GetProperty("text").GetString()!);
+
+        var text = result.GetProperty("content")[0].GetProperty("text").GetString()!;
+        Assert.Contains("search_by_name", text);
+        // The whole point: WHICH parameter, not merely that something went wrong.
+        Assert.Contains("namePattern", text);
+        // Same regression idiom InspectToolTests already uses for this failure shape: the bare
+        // generic sentence with nothing appended is the defect, so pin that it is not the answer.
+        Assert.NotEqual("An error occurred invoking 'search_by_name'.", text);
+    }
+
+    [Fact]
+    public async Task OmittingARequiredArgument_AlsoListsTheToolsOtherParameters()
+    {
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "search_by_name"));
+
+        // Named so a caller can compose a correct retry from this message alone, exactly as the
+        // unknown-parameter sibling above does.
+        Assert.Contains("kind", text);
+        Assert.Contains("limit", text);
+        Assert.Contains("project", text);
+        Assert.Contains("required", text);
+    }
+
+    [Fact]
+    public async Task OmittingSeveralRequiredArguments_NamesEveryOneOfThem()
+    {
+        // propose_memory_update requires BOTH targetFile and content, so this also pins the plural
+        // wording rather than a message that stops at the first miss.
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "propose_memory_update"));
+
+        Assert.Contains("targetFile", text);
+        Assert.Contains("content", text);
+        Assert.Contains("parameters", text);
+    }
+
+    [Fact]
+    public async Task ATool_WithNoRequiredArray_IsUnaffected_AndKeepsItsOwnHandWrittenGuard()
+    {
+        // graph_query declares no `required` at all - it validates its filter COMBINATION by hand,
+        // which no JSON Schema `required` array can express. The new check must stay out of its way
+        // and let that guard's own (much better) message through, rather than inventing a
+        // required-parameter complaint for a tool that has none.
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "graph_query"));
+
+        Assert.Contains("at least one filter", text);
+        Assert.DoesNotContain("is missing required parameter", text);
+    }
+
+    [Fact]
+    public async Task AnUnknownParameterStillWins_WhenARequiredOneIsAlsoMissing()
+    {
+        // Ordering in the filter is deliberate: 'namePatern' is a typo for the very parameter that
+        // is missing, so the unknown-name message - which shows the caller the real spelling - is
+        // strictly more useful than "you omitted namePattern". Pinned so a future reordering of the
+        // three checks does not silently downgrade this case.
+        var text = McpTestClient.ErrorText(await McpTestClient.CallTool(_factory, "search_by_name",
+            new { namePatern = "player" }));
+
+        Assert.Contains("namePatern", text);
+        Assert.Contains("does not accept", text);
+    }
+
+    [Fact]
+    public async Task SupplyingEveryRequiredArgument_IsNotRefused_NoFalsePositive()
+    {
+        // Regression guard for the check itself, mirroring OnlyKnownParameters_... above: the
+        // required parameter IS present, so the call must reach the tool normally.
+        var structured = Structured(await McpTestClient.CallTool(_factory, "search_by_name",
+            new { namePattern = "player" }));
+
+        Assert.Equal(1, structured.GetProperty("totalReturned").GetInt32());
     }
 
     public void Dispose()

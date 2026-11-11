@@ -62,6 +62,12 @@ predate every round below and pin none of these issues exclusively.
 | F20 | Repeated create silently replaced the existing file | Plugin `*_ExistingFile_Refused_*` / `*_ExistingDestFile_Refused*` set, `CreateController_AlreadyExists_ThrowsActionableError` | E10 | COVERED |
 | F21 | Cycle-shaped inputs accepted (reparent under self/descendant; scene onto itself; variant base==target destroyed the base) | Plugin `SceneCommandsTests.ReparentGameObject_UnderItself/_UnderOwnDescendant_Refused`, `SceneManagementCommandsTests.DuplicateScene_OntoItself_Refused`, `PrefabCommandsTests.CreateVariant_BaseEqualsVariant_Refused…` | E11, **E13, E14** | COVERED |
 
+## Pre-merge live pass, 2026-11-10 (L1)
+
+| ID | Issue | Pinning tests | Suite | Status |
+|---|---|---|---|---|
+| L1 | A missing required TOP-LEVEL parameter returned the bare `An error occurred invoking '<tool>'.` with nothing appended — 19 of 33 tools declare one. Previously asserted here as an unfixable SDK limitation on the premise that it was "unreachable for a client that honours inputSchema"; the live pass hit it on six tools in one session | `ToolCallTests.OmittingARequiredArgument_NamesTheParameter_NotJustTheBareSdkSentence`, `…_AlsoListsTheToolsOtherParameters`, `OmittingSeveralRequiredArguments_NamesEveryOneOfThem`, `ATool_WithNoRequiredArray_IsUnaffected_AndKeepsItsOwnHandWrittenGuard`, `AnUnknownParameterStillWins_WhenARequiredOneIsAlsoMissing`, `SupplyingEveryRequiredArgument_IsNotRefused_NoFalsePositive` (6) | — | COVERED |
+
 ## Committed hardening rounds (pre-round-1 sweep through pre-DMG)
 
 Highlights; the full enumeration lives in the audit history. All pins verified green.
