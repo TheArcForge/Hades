@@ -42,8 +42,8 @@ $Version = '2.2.0'
 # Sentinel, not a placeholder to be quietly ignored: the script hard-fails while either is unset,
 # because an installer that skips checksum verification is worse than one that refuses to run.
 $Sha256 = @{
-    'win-x64'   = 'bff4275a63eff5b98684d0d53906d37580a840411689059fc65c813e78a168d6'
-    'win-arm64' = 'eea686c6730b443b766925cdb170bf2ce7f75d5e7861c87d81a44be574933904'
+    'win-x64'   = '41abad9506d0899bffd1701bfda18c2f788fea416a86dffd5875c0740d1030f0'
+    'win-arm64' = '0069660f0b1f3a493675d397e18a656988b273af3197435b84156f4affdeab16'
 }
 
 $Repo = 'TheArcForge/Hades'
