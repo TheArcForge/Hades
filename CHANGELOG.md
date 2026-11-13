@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+
+- **`CITATION.cff`, and an author the repository actually names.** Nothing in the repository said
+  who builds Hades, and there was no way to cite it in published work. It now carries Citation File
+  Format 1.2.0 metadata, which GitHub renders as a **Cite this repository** button with ready APA
+  and BibTeX, and the README has an Author section that names Mykhailo Kukharuk and acknowledges
+  Paolo Oranges for the project-local installation work. The file's `version` and `date-released`
+  are now checked by `scripts/check-version-lockstep.sh`, so a release cannot hand a stale version
+  to anyone citing it.
+
+### Changed
+
+- **The LICENSE copyright line names a person.** `Copyright (c) 2026 ArcForge` became
+  `Copyright (c) 2026 Mykhailo Kukharuk`. ArcForge remains the brand name; the rights holder is the
+  author, which is also what the Citation File Format records.
+
+### Fixed
+
+- **The README no longer claims confidence signals that v2 does not emit.** The comparison table
+  advertised *Confidence signals (tells you when not to trust a result)* as a Hades capability, and
+  "Project status" told readers to "trust the confidence signals" — while the trust rubric two
+  sections above, and LIMITATIONS, correctly state that there is no confidence score on a v2
+  result. The v1.2 architecture emitted those signals; v2 does not. The table row and the sentence
+  are gone, as is the Documentation link to the retired v1.2 page describing them.
+- **"Project status" no longer reports a stale version.** It read *Hades is 2.0.0* as of the 2.2.0
+  release. It is now version-agnostic, so it cannot drift again.
+- **The headline comparison figures say where they come from.** The numbers at the top of the
+  README are from a single prompt on a purpose-built project, measured on v1.2. They now say so,
+  instead of reading as a current, general benchmark.
+
 ## [2.2.0] — Asset Authoring & a Leaner Tool Surface — 2026-11-11
 
 ### Added

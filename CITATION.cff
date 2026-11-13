@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use Hades in your work, please cite it as below."
+title: Hades
+abstract: >-
+  Hades builds a queryable knowledge graph of a Unity project — its scenes,
+  prefabs, scripts, assets and the references between them — and serves it to
+  MCP-compatible coding agents over local HTTP, so an agent can read structural
+  facts about a project instead of inferring them from text search. It works on
+  any Unity project, including simulations, training environments and digital
+  twins, and runs entirely on the user's machine with no telemetry.
+type: software
+authors:
+  - family-names: Kukharuk
+    given-names: Mykhailo
+repository-code: "https://github.com/TheArcForge/Hades"
+url: "https://github.com/TheArcForge/Hades"
+license: MIT
+version: 2.2.0
+date-released: "2026-11-11"
+keywords:
+  - unity
+  - mcp
+  - model-context-protocol
+  - knowledge-graph
+  - ai-agents
+  - simulation
+  - digital-twin
+  - robotics
+  - developer-tools

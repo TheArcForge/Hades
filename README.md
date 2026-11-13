@@ -29,6 +29,9 @@ Hades is Unity-aware AI infrastructure for Claude Code. It's a **standalone desk
 > correctly — 4 prefabs, 3 scenes — in **7 tool calls for 27% less cost.**
 > That gap is the whole project.
 > → [see the full side-by-side breakdown](Documentation/comparison.md)
+>
+> *One prompt, one purpose-built project, measured on Hades v1.2 — an illustration
+> of the gap, not a general benchmark.*
 
 ## Know, don't guess
 
@@ -82,7 +85,6 @@ Most AI-for-Unity tooling falls into one of two camps. **Action bridges** let an
 | "What references X?" as a structural fact, not text grep | ❌ | ✅ code | ✅ code **+ assets** |
 | Persistent, version-controlled project memory | ❌ | ❌ | ✅ |
 | Full observability / tracing of every operation | ❌ | ❌ | ✅ |
-| Confidence signals (tells you when *not* to trust a result) | ❌ | ❌ | ✅ |
 | Runs entirely locally, no cloud, version-controllable | ⚠️ varies | ⚠️ varies | ✅ |
 
 ## See it in action
@@ -242,7 +244,7 @@ Claude Code connects over MCP to the Hades app on `127.0.0.1:7823` — no launch
 
 ## Project status
 
-Hades is **2.0.0** — the standalone app replacing the in-Editor v1.x architecture. It's been field-tested on a large production Unity project, but not yet across many projects, Unity versions, or OS versions. Static analysis has known boundaries (see [Limitations](LIMITATIONS.md)). If a result looks wrong on *your* project, please [open an issue](https://github.com/TheArcForge/Hades/issues) — concrete repros on real projects are exactly how this gets solid. The tools are built to tell you when they're uncertain, so trust the confidence signals and verify before anything destructive.
+Hades v2 is the standalone app that replaced the in-Editor v1.x architecture. It's been field-tested on a large production Unity project, but not yet across many projects, Unity versions, or OS versions. Static analysis has known boundaries (see [Limitations](LIMITATIONS.md)). If a result looks wrong on *your* project, please [open an issue](https://github.com/TheArcForge/Hades/issues) — concrete repros on real projects are exactly how this gets solid. The tools do **not** flag their own uncertainty — apply the [trust rubric](#what-to-trust-and-what-to-verify) yourself, and verify before anything destructive.
 
 **Windows support is beta.** The Windows shell is a view layer over the same core the Mac uses — it renders, the core decides — so the analysis you get is identical on both. What is newer is everything *around* that: the installer, the tray, process supervision, and the environmental hazards no CI can reach (long paths, OneDrive placeholders, antivirus locking database files). Those are named individually in [Limitations](LIMITATIONS.md). `hades diagnose` exports an environment report for exactly this reason — if something misbehaves on Windows, that output in an issue is worth more than a description.
 
@@ -292,11 +294,20 @@ The app detects an existing v1.2 install (Unity package + in-Editor MCP server +
 ## Documentation
 
 - [Installing Hades](Documentation/Installing.md) — install, first launch, plugins, migration, known issues
-- [Interpreting results](Documentation/Retired/interpreting-results.md) — an archived v1.2 doc describing the confidence signals that architecture emitted
 - [Limitations](LIMITATIONS.md) — the boundaries that are there by design
 - [Architecture](Documentation/Architecture.md) — system design, data flow, component responsibilities
 - [Comparison](Documentation/comparison.md) — with and without Hades, one prompt, side by side
 - [Contributing](CONTRIBUTING.md) — repository layout, running the tests, conventions
+
+## Author
+
+Hades is created and maintained by **Mykhailo Kukharuk** under the ArcForge brand — [GitHub](https://github.com/mikeKuharuk) · [LinkedIn](https://www.linkedin.com/in/mykhailo-kukharuk-23008518a/).
+
+If you use Hades in published work, please cite it — GitHub's **Cite this repository** button generates APA and BibTeX from [`CITATION.cff`](CITATION.cff).
+
+### Acknowledgements
+
+- [Paolo Oranges](https://github.com/paolooranges-voodoo) — project-local installation ([PR #2](https://github.com/TheArcForge/Hades/pull/2)).
 
 ## License
 
