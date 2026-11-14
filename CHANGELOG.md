@@ -15,6 +15,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   Paolo Oranges for the project-local installation work. The file's `version` and `date-released`
   are now checked by `scripts/check-version-lockstep.sh`, so a release cannot hand a stale version
   to anyone citing it.
+- **An independent reference scanner, for checking the graph against something that is not the
+  graph.** `scripts/benchmark/reference_scan.py` reads a Unity project's `.meta` and
+  text-serialized asset files and reports every `guid:` occurrence with its file, line and column.
+  It shares no code with Hades and interprets nothing — no variant resolution, no semantics, no
+  deduplication — so its output can serve as a second opinion when verifying what the graph says
+  about a project. Standard library only, read-only, with its own tests and an explicit list of
+  what it cannot see.
 
 ### Changed
 
