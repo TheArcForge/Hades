@@ -44,6 +44,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **The issue templates are YAML forms, and three of them were lying.** `bug_report`,
+  `feature_request` and `wrong_result` are now `.yml` issue forms with required fields: OS as a
+  dropdown that includes Windows, the Hades and Unity versions, which MCP client, and `hades
+  diagnose` output — asked for by name, since on Windows most failures are environmental. The old
+  markdown versions told users Hades was version `2.0.0`, asked only for a macOS version, assumed
+  Claude Code, and — in `wrong_result` — asked them to paste a **"confidence signal (Trust / Verify /
+  Confirm)"** and linked to the retired v1.2 page explaining it. v2 emits no such signal, so the
+  form asked for something that does not exist and pointed at a document that was removed from the
+  README for the same reason two commits ago. The new `wrong_result` form instead states the two
+  real boundaries up front, and asks which known-hard case applies (prefab variants, reflection, DI,
+  precompiled DLLs, generics, Addressables, generated code, asmdefs). **Note for the maintainer:
+  these forms apply a `wrong-result` label that does not exist in the repository yet** — the old
+  template referenced it too, so it has been silently dropped all along.
+- **`CONTRIBUTING.md` says where skills live and stops quoting a stale version.** It pointed at
+  `skills/<name>/SKILL.md`; the directory is `ClaudeCodePlugin/skills/`. Its "Reporting Bugs"
+  checklist also carried the same `2.0.0` as the issue templates, and duplicated fields the forms now
+  collect — it defers to them instead. New in the same pass: guidance on what `good first issue` and
+  `help wanted` mean here, including the honest observation that the most useful `help wanted` items
+  are the ones needing hardware or clients the maintainer does not have.
 - **"Step 2: Claude Code plugin" is now "Step 2: Connect your agent."** Same for
   `Documentation/Installing.md`, where the only section on connecting an agent was titled *Install
   the Claude Code plugin*. Claude Code still comes first and is still named as the only client Hades

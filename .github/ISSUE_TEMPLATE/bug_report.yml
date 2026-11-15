@@ -1,0 +1,92 @@
+name: Bug Report
+description: Something in Hades does not work
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please run `hades diagnose` and paste its output below — if `hades` is not on your PATH, it
+        lives at `/Applications/Hades.app/Contents/Resources/HadesCli/hades` on macOS. It reports the
+        OS build, architecture, runtime, long-path status and storage layout, and it never prints your
+        access token. It **does** list your project names and paths, so redact those if you would
+        rather not share them.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, including the exact error text if there was one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - Windows x64 (beta)
+        - Windows ARM64 (beta)
+    validations:
+      required: true
+
+  - type: input
+    id: hades-version
+    attributes:
+      label: Hades version
+      description: From `hades_status`, or `hades diagnose` under `core:`.
+    validations:
+      required: true
+
+  - type: input
+    id: unity-version
+    attributes:
+      label: Unity version
+      description: 'For example 6000.3.2f1 or 2022.3.52f1. Say "Editor not running" if it was closed.'
+    validations:
+      required: true
+
+  - type: input
+    id: client
+    attributes:
+      label: Which agent / MCP client
+      description: Claude Code is the one Hades is developed against. Name any other client and its version.
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnose
+    attributes:
+      label: hades diagnose output
+      description: Required for anything on Windows, where most failures are environmental. Helpful everywhere else.
+      render: text
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Unity console output, or your agent's error messages.
+      render: text
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else

@@ -1,0 +1,55 @@
+name: Feature Request
+description: Suggest something Hades should do
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you hitting?
+      description: The limitation or friction, rather than the solution you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: What would you like to happen?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Which part of Hades?
+      description: A guess is fine.
+      options:
+        - .NET core / graph engine
+        - MCP tools
+        - Unity plugin (Editor actions)
+        - macOS app
+        - Windows app
+        - Memory and tracing
+        - Skills and commands
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: project-type
+    attributes:
+      label: What kind of Unity project is this for?
+      description: Hades is built for all of these; knowing the mix helps us prioritise.
+      options:
+        - Game
+        - Simulation or training environment
+        - Digital twin
+        - Robotics simulator
+        - Tooling or something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else

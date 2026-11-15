@@ -102,6 +102,21 @@ See `Documentation/RegressionCoverage.md` for the per-issue regression coverage 
 Merged pull requests are credited by GitHub handle in the `CHANGELOG.md` entry for the release they
 ship in, and in the merge commit. You don't need to add this yourself.
 
+### Finding something to work on
+
+Two labels mark work that is ready for someone who has not worked on Hades before:
+
+- **`good first issue`** — small, self-contained, and described well enough to start without asking:
+  a known defect with a named file, a documentation correction, a test for behaviour that already
+  exists. It should not require a decision about how Hades ought to work.
+- **`help wanted`** — the scope is clear but it needs something the maintainer does not have. The
+  honest examples right now are *other machines and other clients*: nobody has run Hades against
+  Cursor, Codex CLI or VS Code Copilot, and the Windows ARM64 build has never been run on ARM64
+  hardware. If you have one of those, a report is worth more than a patch.
+
+If an issue carries neither label and you want to take it on, say so in a comment first — some
+backlog items look small and are not.
+
 ## What NOT to Do
 
 - **Never edit the plugin repo** (`TheArcForge/hades-plugin`) directly — it is auto-synced from this repo and any changes will be overwritten
@@ -113,13 +128,14 @@ ship in, and in the merge commit. You don't need to add this yourself.
 
 ## Contributing Skills
 
-Skills live in `skills/<name>/SKILL.md`. Each file must have YAML frontmatter with at minimum a `description` field. See any existing skill for the expected format.
+Skills live in `ClaudeCodePlugin/skills/<name>/SKILL.md`. Each file must have YAML frontmatter with at minimum a `description` field. See any existing skill for the expected format.
 
 ## Reporting Bugs
 
-Open a [GitHub Issue](https://github.com/TheArcForge/Hades/issues) and include:
+Open a [GitHub Issue](https://github.com/TheArcForge/Hades/issues). The issue forms ask for what is
+needed — the Hades and Unity versions, your OS, your MCP client, and the steps — so there is no
+separate checklist to follow here. On Windows, include the output of `hades diagnose`: most failures
+there are environmental and cannot be reproduced from a description.
 
-- Unity version
-- Hades app version (`2.0.0`, from `hades_status`)
-- OS and version
-- Steps to reproduce
+If Hades returned something *wrong* about your project rather than failing outright, use the **Wrong
+Result on My Project** form. Those reports are the most useful ones the project gets.
