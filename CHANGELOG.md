@@ -25,6 +25,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **The README says what Hades is for, and which Unity versions it was measured on.** The opening
+  line read "AI infrastructure for Claude Code"; it now says MCP-compatible coding agents, while
+  naming Claude Code as the only client it has been used with so far, and states plainly that the
+  project's domain is irrelevant to the graph — games, simulation and training environments, digital
+  twins and robotics simulators index the same way. "See it in action" gained two simulation
+  questions *beside* the game ones rather than appended after them. The single `Unity 6000.0+` badge
+  implied the whole product needed Unity 6, so it is now two: 2022.3+ for the graph, 6000.0+ for the
+  Editor actions. Prerequisites records what was actually measured — a 1.1M-edge 2022.3 LTS project
+  indexed and checked case by case against ground truth from a scanner that shares no code with
+  Hades — and that the in-Editor plugin is *known to work* on 2022.3 LTS without being supported
+  there yet, naming the missing CI matrix and the untested test running as the reasons. Claiming
+  6000.0-only would have been the confidence-signal overclaim in reverse.
 - **The LICENSE copyright line names a person.** `Copyright (c) 2026 ArcForge` became
   `Copyright (c) 2026 Mykhailo Kukharuk`. ArcForge remains the brand name; the rights holder is the
   author, which is also what the Citation File Format records.

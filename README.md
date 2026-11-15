@@ -5,14 +5,15 @@
 [![CI](https://github.com/TheArcForge/Hades/actions/workflows/ci.yml/badge.svg)](https://github.com/TheArcForge/Hades/actions/workflows/ci.yml)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B%20Apple%20Silicon-black?logo=apple)](https://www.apple.com/macos/)
 [![Windows 10 1607+ beta](https://img.shields.io/badge/Windows-10%201607%2B%20beta-black?logo=windows)](#prerequisites)
-[![Unity 6000.0+](https://img.shields.io/badge/Unity-6000.0%2B-black?logo=unity)](https://unity.com)
+[![Unity 2022.3+ graph](https://img.shields.io/badge/Unity-2022.3%2B%20graph-black?logo=unity)](#prerequisites)
+[![Unity 6000.0+ Editor actions](https://img.shields.io/badge/Unity-6000.0%2B%20Editor%20actions-black?logo=unity)](#prerequisites)
 [![MCP compatible](https://img.shields.io/badge/MCP-compatible-blue)](https://modelcontextprotocol.io)
 
 > **In the underworld of your Unity project, nothing is hidden from Hades. And now, nothing is hidden from your AI agent.**
 
 ![Hades in action — the agent answers project-structure questions from the knowledge graph instead of grepping and guessing](Documentation/demo.gif)
 
-Hades is Unity-aware AI infrastructure for Claude Code. It's a **standalone desktop app** — a menu-bar app on macOS, a tray app on Windows (**beta**) — that builds a queryable knowledge graph of your entire Unity project — every scene, prefab, script, asset, and dependency — so your AI agent *knows* your project's structure instead of guessing at it. Out of the box you get 33 MCP tools, 23 skills, and 6 commands. Everything runs locally, and everything is version-controllable.
+Hades is Unity-aware AI infrastructure for MCP-compatible coding agents — developed against Claude Code, which is so far the only client it has been used with. It's a **standalone desktop app** — a menu-bar app on macOS, a tray app on Windows (**beta**) — that builds a queryable knowledge graph of your entire Unity project — every scene, prefab, script, asset, and dependency — and serves it over MCP, so your agent *knows* your project's structure instead of guessing at it. It assumes nothing about what the project is for: games, simulation and training environments, digital twins and robotics simulators all index the same way. Out of the box you get 33 MCP tools, plus 23 skills and 6 commands for Claude Code. Everything runs locally, and everything is version-controllable.
 
 <!-- ===================== HERO DEMO GIF (placeholder) =====================
      TODO: render Documentation/media/demo-hero.gif as the final side-by-side.
@@ -99,12 +100,22 @@ The agent uses the graph to give a project-specific overview — not a generic s
 ```
 Where do we use PlayerController?
 ```
-Structural search across scenes, prefabs, and scripts — not just text grep.
+Structural search for the scenes, prefabs and assets that reference it — resolved by GUID, which a text grep cannot see. (For *which code* uses a type, your agent still greps — see [Limitations](LIMITATIONS.md).)
+
+```
+Which scenes use the LidarSensor prefab, and which of them only override it?
+```
+Override-aware, and it tells you which is which: every hit reports the property it came through, so an override reads as `m_Modifications[...]` instead of an ordinary field. In the 2022.3 probe a material reachable *only* through override records returned all 13 of its scenes — a tool that skips those records returns zero.
 
 ```
 I want to remove OldNetworkManager. What would break?
 ```
 Dependency analysis that traces references through the full project graph *before* you change anything.
+
+```
+If I change VehicleController, which vehicle prefabs and test scenes are affected?
+```
+The same impact question a game team asks about an enemy script. The graph does not care which domain the project is in — a vehicle rig and an enemy prefab are the same shape of fact.
 
 **Want proof?** [**With and without Hades: one prompt, side by side**](Documentation/comparison.md) — the same task run twice under identical conditions. Stock Claude Code misses 3 prefab variants and recommends a change that would break inheritance; Hades returns the correct impact map for 27% less cost. Includes full uncut recordings and reproduction steps.
 
@@ -135,8 +146,9 @@ Hades is a **navigator, not an oracle**: it makes understanding your project fas
 
 **Both**
 
-- **Claude Code** — other MCP clients are untested.
-- **Unity 6000.0+** — only for the optional in-Editor plugin. Reading and querying your project works without it.
+- **Claude Code** — other MCP clients are untested. The server speaks plain MCP over Streamable HTTP at a fixed address, and picks your project out of the client's `roots`; a client that does not report roots can still name one explicitly through the `project` parameter that 31 of the 33 tools take.
+- **Unity, to read and query your project** — no Editor plugin, and no Editor running. Measured on **2022.3 LTS** and **Unity 6000.3**: a 1.1M-edge 2022.3 project was indexed and checked case by case against ground truth generated by a [separate scanner that shares no code with Hades](scripts/benchmark/).
+- **Unity 6000.0+ — for the optional in-Editor plugin**, which adds the Editor actions: scene and prefab editing, the console, running tests. The plugin is also **known to work on 2022.3 LTS** — it compiles there with no errors, attaches, boots and indexes — but 2022.3 is **not supported yet**: there is no CI across both Editor versions, and test running in particular has not been exercised there.
 
 ## Installation
 
