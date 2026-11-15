@@ -42,6 +42,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - **The headline comparison figures say where they come from.** The numbers at the top of the
   README are from a single prompt on a purpose-built project, measured on v1.2. They now say so,
   instead of reading as a current, general benchmark.
+- **The shipped docs and agent skills no longer promise a C# code-relationship graph.** Five skills
+  that ship in the Claude Code plugin, `LIMITATIONS.md`, and the README's trust rubric told readers
+  and agents that `find_references_to` returns "both asset references and C# code references
+  (fields, parameters, constructors, casts, inheritance)", that inheritance / `implements` edges
+  could be queried, and — in `unity-reviewer` — to **not** use `grep`, because "the graph is
+  authoritative for both asset and code-level dependencies". None of it is true in v2: the graph
+  holds exactly three edge kinds (`references`, `instance_of`, `corresponds_to`), every edge starts
+  at an asset file, and type declarations are nodes carrying only their file, namespace and line.
+  So a script has no outward edges at all, and a library class reached only from other C# code
+  reports zero references — which an agent told to trust the graph over `grep` would read as dead
+  code. The v1.x scanner did extract code references; the v2 rewrite dropped them and the prose was
+  carried forward. Three skills also pointed `trace_dependencies` at inward "what references this"
+  questions, which it cannot answer, or called it on a script path, where it returns nothing at any
+  depth. Every one of those statements now describes what the graph actually holds and sends
+  code-to-code questions to `grep`, and `tool-reference` gained a `find_references_to` section
+  recording that it walks exactly one hop inward, with no depth parameter.
 
 ## [2.2.0] — Asset Authoring & a Leaner Tool Surface — 2026-11-11
 

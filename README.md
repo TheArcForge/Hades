@@ -116,7 +116,8 @@ Different answers deserve different levels of trust, and **the tools do not flag
 |---|---|---|
 | **Trust** | Structural facts: type → file, prefab/scene/material/ScriptableObject contents, asset GUID/type, direct dependencies | Use directly — these read serialized data straight from your project. |
 | **Verify** | "What references X?" for scripts and prefabs | Treat the result as a strong lead. A count of zero means "nothing found statically", not "unused" — check by hand before deleting, since a prefab variant or nested prefab can embed an asset without producing a reference edge. |
-| **Confirm** | Inheritance / `implements` edges, C# dependency traces, "which prefabs use this component" | Confirm independently when the answer involves types from precompiled packages/DLLs, generics, or reflection/DI wiring. |
+| **Confirm** | "Which prefabs use this component" | Confirm independently when the answer involves types from precompiled packages/DLLs or reflection/DI wiring. |
+| **Don't ask** | Inheritance, call graphs, "which code uses this type" | Not indexed at all — no graph edge starts at a `.cs` file. Use `grep` or your editor's find-usages. |
 
 Hades is a **navigator, not an oracle**: it makes understanding your project fast and structural, and its blind spots are documented rather than signalled — so knowing them is on you and your agent, before anything destructive. See [Limitations](LIMITATIONS.md) for the boundaries that are there by design, and for what the tools do and don't tell you at runtime.
 

@@ -1,34 +1,45 @@
 # Hades — Limitations
 
-Hades is honest about what it can and can't know. Most of the boundaries below are **by design** (a consequence of static analysis), not bugs. **The tools do not announce them at runtime** — there is no confidence score on a result and no health field to check, so this page is the record, not a reminder. Read it before you hit an edge rather than after.
+Hades is honest about what it can and can't know. Most of the boundaries below are **by design** (a consequence of reading your project's serialized assets rather than running your game), not bugs. **The tools do not announce them at runtime** — there is no confidence score on a result and no health field to check, so this page is the record, not a reminder. Read it before you hit an edge rather than after.
 
 If you see a result that's wrong *outside* these boundaries, that's a real bug — please [open an issue](https://github.com/TheArcForge/Hades/issues) with a repro.
 
 ## The one-line version
 
-**Structural facts are exact. Inferred C# relationships are a strong lead, not gospel.** Trust "what is this / where is it / what does it contain"; verify "who references this / what inherits this" before destructive changes — especially across package boundaries.
+**Asset facts are exact. C# code relationships are not indexed at all.** Trust "what is this / where is it / what does it contain"; verify "who references this" before destructive changes — especially across package boundaries. "What inherits this / what calls this" is not a question Hades can answer at all — use `grep`.
 
 ## What Hades is rock-solid at
 
 These come from reading your project's serialized data directly, so they're exact:
 
-- Type → declaring file; class/struct/interface/enum membership
+- Type → declaring file, namespace and line (class, struct, interface, enum, record)
 - Prefab / scene / material / ScriptableObject contents (hierarchy, components, serialized values), including variants and nested/stripped roots
 - Asset GUID, type, and direct dependency lists
 - Project structure, counts, and "where is X" lookups
 
 Use these without second-guessing them.
 
+## What Hades does not index at all: C# code relationships
+
+The graph holds exactly three edge kinds — `references`, `instance_of`, `corresponds_to` — and every edge starts at a **serialized asset** file: a scene, prefab, material, ScriptableObject and so on. No edge ever starts at a `.cs` file. So:
+
+- **There is no inheritance, call, or type-usage graph.** No `implements`, no `inherits_from`, no "which code constructs this". Type declarations are indexed as nodes carrying their file, namespace, line and the script's GUID — and no relationships whatsoever.
+- **`find_references_to("Foo.cs")` returns the assets that attach the script** — the scenes, prefabs and ScriptableObjects whose `m_Script` points at it. It never returns the C# files that use the type, so a pure library class reached only from other code comes back with **zero** references.
+- **`trace_dependencies` on a `.cs` file returns nothing**, at any depth, because scripts have no outward edges. Trace outward from scenes, prefabs and other assets instead.
+
+For "which code uses this type", use `grep` or your editor's find-usages. Hades is authoritative for the GUID-based asset references grep cannot see, and silent about the rest.
+
 ## Where Hades is partial (verify before acting)
 
-The C# **relationship** layer is inferred by static analysis, so it's a strong lead rather than a guarantee. Confirm independently before deleting/refactoring when the answer touches:
+Confirm independently before deleting or refactoring when the answer touches:
 
 - **Reference queries** — "what references X" for scripts and prefabs. A count of zero means "nothing was found statically", never "definitely unused", and nothing in the response distinguishes the two for you. Check by hand — a prefab variant or a nested prefab can embed an asset without producing a reference edge — before treating an asset as unused.
-- **Inheritance / `implements`, dependency traces, "which prefabs use this component"** — most reliable for plain types defined under `Assets/`; less so across the cases below.
+- **Depth.** `find_references_to` walks exactly **one hop** inward and has no depth parameter. A prefab nested inside another prefab that a scene uses reports the middle prefab, not the scene, so "everything that would break" needs repeated queries.
+- **"Which prefabs use this component"** — most reliable for plain types defined under `Assets/`; less so across the cases below.
 
-## What static analysis cannot see (by design)
+## What asset scanning cannot see (by design)
 
-None of these are extracted, because they aren't visible without running your game:
+On top of the code-relationship gap above, none of these are extracted even on the asset side, because they aren't visible without running your game:
 
 - **Reflection** and runtime/string-based dispatch (`Type.GetType`, `SendMessage`, string-keyed lookups)
 - **Dependency-injection / service-locator wiring** resolved at runtime
@@ -38,8 +49,7 @@ A reference that exists *only* through one of these will not appear in the graph
 
 ## Coverage boundaries
 
-- **Precompiled DLL types** can't be turned into graph nodes from source, so edges *to* a base class/interface/type that lives in a compiled package or DLL may stay unresolved. Hades reports these as external/unindexed rather than pretending they don't exist.
-- **Generics** are resolved best-effort; deeply nested or open generic relationships may be incomplete.
+- **Precompiled DLL types are never nodes.** A type that lives in a compiled package or DLL is not indexed from source, so it cannot be found by name or located in a file.
 - **Binary/imported assets (textures, models, audio, fonts, shaders, animation clips) are meta-only nodes** — path, name, kind, and GUID, so references into them resolve, but their own content (a texture's pixels, a clip's curves) is never read. Any remaining unindexed asset kind, or a reference resolving outside every scanned root entirely (most commonly a registry package's own copy under `Library/PackageCache` — a built-in shader or texture bundled with a Unity package, for example), still has no node; references into those are reported as unresolvable, not missing user code.
 - **Addressables are indexed only as generic ScriptableObjects** — there is no dedicated reader for Addressables groups, entries, or addresses.
 - **Binary image headers are read from a narrow, honest set of formats.** `inspect_asset`'s introspection reads dimensions from PNG, JPEG, TGA, and PSD headers only — any other image format reports the reason, by name, rather than a guessed or default size. TGA has no magic bytes, so it is read **only** as a last resort, gated on a literal `.tga` extension, after a plausibility check on the header fields; a real TGA saved under any other extension is reported as unreadable, not misread as something else. A Git LFS pointer file (the small text stub Git leaves behind for an asset actually stored in LFS) is sniffed first and reported by name — never misread as a truncated or corrupt image.

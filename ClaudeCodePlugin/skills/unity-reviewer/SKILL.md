@@ -18,16 +18,16 @@ Run through these checks after modifying or creating C# scripts. Organized by se
 Before running the checklist, gather impact context using Hades Graph and memory:
 
 ```
-find_references_to("<changed_script_path>")   — returns BOTH asset references (prefabs, scenes) AND C# code references (fields, parameters, constructors, casts, inheritance)
-trace_dependencies("<changed_script_path>")   — what the changed script depends on
+find_references_to("<changed_script_path>")    — the scenes, prefabs and ScriptableObjects that attach this script
+grep -rn "ClassName" --include=*.cs            — the C# code that uses the type; the graph holds no script-to-script edges
 recall_memory("code review conventions style") — documented team conventions and past decisions
 ```
 
 Use these results to:
-- Flag ripple risks (e.g., a change to a base class affects many dependents — `find_references_to` shows both prefab dependents and C# code dependents)
+- Flag ripple risks (e.g., a change to a base class affects many dependents — `find_references_to` gives you the asset-side dependents, grep the code-side ones)
 - Adjust severity: a performance issue in a script referenced by 40 prefabs is higher priority than one referenced by 1
 - Verify the change aligns with team conventions before marking Style issues as acceptable
-- Do NOT use `grep` to find references — the graph is authoritative for both asset and code-level dependencies
+- Use each for what it can see. Asset references are GUID-based, so grep cannot find them and the graph is authoritative. C# code relationships are not indexed at all, so a zero from `find_references_to` says nothing about code usage — that half is grep's job
 
 ## Decision Framework
 
@@ -322,14 +322,14 @@ After running the checklist, use the Hades Graph to understand blast radius:
 find_references_to("<changed_script_path>")
 ```
 
-- If the changed script is a base class or shared utility, every dependent is potentially affected by the bug or change.
+- Returns the assets that attach the script. If it is a base class or shared utility reached only from other C# code, this comes back **zero** — that is not evidence it is unused.
 - Flag high-reference scripts as requiring broader testing — the review should note this explicitly.
 
 ```
-trace_dependencies("<changed_script_path>")
+grep -rn "ClassName" --include=*.cs
 ```
 
-- Identify what the changed script depends on. If a dependency changed recently too, check for interaction bugs.
+- Covers the other half of the blast radius: the code that uses the type. `trace_dependencies` returns nothing for a `.cs` file at any depth, because no graph edge starts at a script.
 - Use this to catch cases where a "safe" local change breaks an upstream assumption.
 
 ## Memory-Backed Convention Checking
