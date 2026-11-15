@@ -15,6 +15,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   Paolo Oranges for the project-local installation work. The file's `version` and `date-released`
   are now checked by `scripts/check-version-lockstep.sh`, so a release cannot hand a stale version
   to anyone citing it.
+- **`Documentation/Clients.md` — how to connect an agent that is not Claude Code.** The server has
+  always been plain MCP over Streamable HTTP with no auth, but the only documented way to connect
+  anything was the Claude Code plugin, so a Codex or Cursor user had no route at all. The new page
+  states what is portable and what is not — **the 33 tools work on any MCP client; the 23 skills and
+  6 commands are Claude Code plugin features** — gives a `curl` check that tells "Hades is not
+  running" apart from "my client is misconfigured", and explains how Hades picks a project (the
+  client's MCP roots, else the `project` parameter that 31 of the 33 tools take). Measured for the
+  page rather than assumed: only `/mcp` is served, `GET /` is a 404, and a request to the same port
+  on this machine's LAN address is refused, so loopback-only is a verified property. **Gemini CLI 0.68.0 is
+  the first non-Claude client actually run against Hades** — it reports the server as `Connected`,
+  and it does so *before* any Gemini sign-in exists, which makes it a clean check of Hades rather
+  than of a Google account. Tool execution through it is **not** claimed and is recorded as blocked
+  on Google's side: the latest CLI refuses an individual Google sign-in and redirects to
+  Antigravity, so it would need an API key or Vertex AI. The page leads with the trap that costs the
+  most time: Gemini CLI silently disables MCP
+  servers, user-level ones included, in a folder you have not trusted, and says only `Disabled`,
+  which reads like a Hades fault. Configurations for Codex CLI and Cursor are transcribed from vendor
+  documentation and labelled as not run, and Cursor's transport field could not be confirmed from
+  its own docs at all.
 - **An independent reference scanner, for checking the graph against something that is not the
   graph.** `scripts/benchmark/reference_scan.py` reads a Unity project's `.meta` and
   text-serialized asset files and reports every `guid:` occurrence with its file, line and column.
@@ -25,6 +44,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **"Step 2: Claude Code plugin" is now "Step 2: Connect your agent."** Same for
+  `Documentation/Installing.md`, where the only section on connecting an agent was titled *Install
+  the Claude Code plugin*. Claude Code still comes first and is still named as the only client Hades
+  has been used with; the difference is that the other route now exists on the page instead of only
+  in the protocol. `Documentation/Architecture.md` also claimed that quitting the app is safe because
+  the transport reconnects — true of Claude Code's transport specifically, so it now says so rather
+  than presenting one client's behaviour as a property of the system.
 - **The README says what Hades is for, and which Unity versions it was measured on.** The opening
   line read "AI infrastructure for Claude Code"; it now says MCP-compatible coding agents, while
   naming Claude Code as the only client it has been used with so far, and states plainly that the

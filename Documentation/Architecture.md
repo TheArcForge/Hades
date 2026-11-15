@@ -174,7 +174,8 @@ that answered one ping and then died moments later got a *fresh* 5-attempt budge
 death, so `maxRestartAttempts` never actually bound — 49 spawn attempts in 75 seconds, observed
 live, before the fix.
 
-Quitting `Hades.app` is safe from Claude Code's side: the MCP Streamable HTTP transport
+Quitting `Hades.app` is safe from Claude Code's side — another client may need a manual
+reconnect, since this is a property of that client's transport rather than of the server: the MCP Streamable HTTP transport
 auto-reconnects with backoff on its own, so relaunching the app resumes a session Claude Code never
 needed to restart.
 
