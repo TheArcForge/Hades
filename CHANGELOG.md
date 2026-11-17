@@ -15,6 +15,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   Paolo Oranges for the project-local installation work. The file's `version` and `date-released`
   are now checked by `scripts/check-version-lockstep.sh`, so a release cannot hand a stale version
   to anyone citing it.
+- **`ROADMAP.md` and `Documentation/related-work.md`, both linked from the README.** The roadmap is
+  three horizons with no dates, and it names what Hades is behind on rather than only what is
+  coming: one-hop reference queries, no C# relationship layer, and the missing MCP `instructions`
+  field that leaves a non–Claude Code user with 33 tools and no guidance. It closes with **"Where
+  Hades is not, and why"** — the official MCP Registry indexes package-manager artifacts and network
+  -reachable servers, and Hades is a loopback-only desktop app, so the obstacle is its distribution
+  shape rather than the transport.
+  Related work describes the neighbours from their own primary sources, each linked and checked:
+  Unity's first-party plugin (which closes "the agent doesn't know Unity", a different gap from "the
+  agent doesn't know *your project*"), the Editor-action bridges, `Shades-28/UnityGraph`, the
+  **Unity Insight** paper (arXiv 2609.27585 — 53% fewer tokens and 52% less wall-clock time on 28
+  questions, quoted with the paper's own "one run per arm" limit, which our README figure shares),
+  and general code-graph tools. It states where those projects are **ahead**: UnityGraph's
+  documented graph carries `inherits` / `subscribes_to` / `depends_on` edges and a multi-hop
+  `impact_of`, which is exactly what Hades lacks. Nothing on the page is asserted from having run
+  it, and it asks for corrections from the maintainers of anything described.
 - **`Documentation/Clients.md` — how to connect an agent that is not Claude Code.** The server has
   always been plain MCP over Streamable HTTP with no auth, but the only documented way to connect
   anything was the Claude Code plugin, so a Codex or Cursor user had no route at all. The new page

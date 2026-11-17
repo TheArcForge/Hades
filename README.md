@@ -88,6 +88,8 @@ Most AI-for-Unity tooling falls into one of two camps. **Action bridges** let an
 | Full observability / tracing of every operation | ❌ | ❌ | ✅ |
 | Runs entirely locally, no cloud, version-controllable | ⚠️ varies | ⚠️ varies | ✅ |
 
+For the neighbours this table does not cover — Unity's own plugin, the Editor-action bridges, UnityGraph, the Unity Insight paper, and where Hades is behind them — see [Related work](Documentation/related-work.md).
+
 ## See it in action
 
 Open Claude Code from your Unity project directory and ask:
@@ -315,6 +317,8 @@ The app detects an existing v1.2 install (Unity package + in-Editor MCP server +
 - [Limitations](LIMITATIONS.md) — the boundaries that are there by design
 - [Architecture](Documentation/Architecture.md) — system design, data flow, component responsibilities
 - [Connecting an agent](Documentation/Clients.md) — Claude Code, any other MCP client, and what is portable
+- [Roadmap](ROADMAP.md) — what is likely next, and where Hades deliberately is not
+- [Related work](Documentation/related-work.md) — Unity's own plugin, action bridges, UnityGraph, Unity Insight, and how Hades differs
 - [Comparison](Documentation/comparison.md) — with and without Hades, one prompt, side by side
 - [Contributing](CONTRIBUTING.md) — repository layout, running the tests, conventions
 
