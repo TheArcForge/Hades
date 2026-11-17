@@ -125,6 +125,8 @@ public class RootsRouterTests : IDisposable
         Assert.Contains("Ambiguous", result.Error);
         Assert.Contains(Path.GetFileName(first), result.Error);
         Assert.Contains(Path.GetFileName(second), result.Error);
+        Assert.Contains("project parameter", result.Error);
+        Assert.DoesNotContain("Claude Code", result.Error);
     }
 
     [Fact]
@@ -242,6 +244,8 @@ public class RootsRouterTests : IDisposable
 
         Assert.False(result.IsResolved);
         Assert.Contains("Ambiguous", result.Error);
+        Assert.Contains("project parameter", result.Error);
+        Assert.DoesNotContain("Claude Code", result.Error);
     }
 
     [Fact]
