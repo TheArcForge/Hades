@@ -151,7 +151,7 @@ public sealed class RootsRouter(ProjectService projects)
             _ => RootResolution.Failed(
                 "Ambiguous workspace — several Unity projects are in scope: "
                 + string.Join(", ", matches.Values.Select(Path.GetFileName))
-                + ". Open Claude Code in a single project directory."),
+                + ". Pass the project parameter (a handle from hades_status) to choose one."),
         };
     }
 
@@ -214,7 +214,7 @@ public sealed class RootsRouter(ProjectService projects)
             return RootResolution.Failed(
                 "Ambiguous workspace — several Unity projects are in scope: "
                 + string.Join(", ", matches.Keys.Select(guid => projects.Get(guid)?.Name ?? guid))
-                + ". Open Claude Code in a single project directory.");
+                + ". Pass the project parameter (a handle from hades_status) to choose one.");
         }
 
         var (productGuid, (adoptPath, wasAlreadyKnown)) = matches.First();
