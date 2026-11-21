@@ -25,14 +25,31 @@ Hades is Unity-aware AI infrastructure for MCP-compatible coding agents — deve
 ====================================================================== -->
 
 > **One prompt — *"which prefabs and scenes break if I change `EnemyAI`?"***
-> Stock Claude Code reads ~200k tokens of YAML, finds **1 prefab, misses 3
-> variants, and tells you to add code that breaks them.** Hades answers
-> correctly — 4 prefabs, 3 scenes — in **7 tool calls for 27% less cost.**
-> That gap is the whole project.
+> On a purpose-built project, stock Claude Code finds **1 prefab, misses 3 variants,
+> and tells you to add code that breaks them.** Hades answers correctly — 4 prefabs,
+> 3 scenes — in 7 tool calls.
 > → [see the full side-by-side breakdown](Documentation/comparison.md)
 >
-> *One prompt, one purpose-built project, measured on Hades v1.2 — an illustration
-> of the gap, not a general benchmark.*
+> *One prompt, one purpose-built project, measured on Hades v1.2 — an illustration,
+> not a benchmark.*
+
+> **⚠️ And here is what we measured since, which cuts the other way.**
+> On [AutoDRIVE](https://github.com/Tinker-Twins/AutoDRIVE), a public 539k-node simulator,
+> over **24 runs on Hades v2.2.0**: an agent with nothing but shell tools matched Hades
+> **exactly** on both asset-reference questions we posed — 13/13 and 3/3 — and did it for
+> **1.6–2.2x less cost.** Simply having Hades connected costs tokens before a single tool
+> is called. A capable model writes good `grep`s, including walking a nested-prefab chain
+> in two passes.
+>
+> Both of those questions were chosen *because* we expected the graph to win them.
+> **The "27% less cost" figure from v1.2 does not reproduce, and has been withdrawn.**
+> The correctness gap above turns on prefab variants, which AutoDRIVE does not use at all,
+> so it is neither confirmed nor refuted in public.
+>
+> **Making the graph cheaper than the shell is the goal of the next release.**
+> Full numbers and method: [the measurement](scripts/benchmark/results-2026-11-21-autodrive-cost.md).
+> See [the roadmap](ROADMAP.md). We would rather publish this than quietly keep a number
+> that our own measurement did not support.
 
 ## Know, don't guess
 
@@ -119,7 +136,7 @@ If I change VehicleController, which vehicle prefabs and test scenes are affecte
 ```
 The same impact question a game team asks about an enemy script. The graph does not care which domain the project is in — a vehicle rig and an enemy prefab are the same shape of fact.
 
-**Want proof?** [**With and without Hades: one prompt, side by side**](Documentation/comparison.md) — the same task run twice under identical conditions. Stock Claude Code misses 3 prefab variants and recommends a change that would break inheritance; Hades returns the correct impact map for 27% less cost. Includes full uncut recordings and reproduction steps.
+**Want proof?** [**With and without Hades: one prompt, side by side**](Documentation/comparison.md) — the same task run twice under identical conditions on a purpose-built project. Stock Claude Code misses 3 prefab variants and recommends a change that would break inheritance; Hades returns the correct impact map. Includes full uncut recordings and reproduction steps. **On cost, read the measured caveat at the top of this page first** — on a large public project we could not reproduce a cost advantage, and that is what the next release is for.
 
 ## What to trust (and what to verify)
 

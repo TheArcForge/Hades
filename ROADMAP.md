@@ -9,6 +9,21 @@ than anything else, because the alternative is guessing which of these people ac
 
 ## Now
 
+- **Earn the cost claim, or drop it.** This is the top priority, and it exists because our own
+  measurement embarrassed us. Over 24 runs on a public 539k-node project, an agent with only shell
+  tools matched Hades on accuracy and cost **1.6–2.2x less** — on the two questions we picked
+  expecting the graph to win. Worse, simply having Hades connected costs tokens before a tool is
+  called: 33 tool schemas and 23 skills sit in context whether used or not. Three things follow,
+  and they are the next release:
+  - **Cut the standing cost.** The resting overhead of being connected has to come down. Fewer
+    tools in the default surface, leaner schemas, or loading by need rather than by default.
+  - **Make the graph worth calling.** One `find_references_to` should beat two `grep` passes, not
+    tie them. That means answering in one hop what currently takes the agent two, which is the same
+    `maxDepth` gap listed below — now with a measured reason to fix it.
+  - **Tell the client the graph exists.** An agent that is told in one line will use it; unprompted
+    it will not, even with the plugin installed. The missing MCP `instructions` field below is no
+    longer a nicety.
+
 - **Agents other than Claude Code.** The server has always been plain MCP over Streamable HTTP, but
   until recently the only documented way to connect was the Claude Code plugin.
   [Connecting an agent](Documentation/Clients.md) is that documentation. Gemini CLI connects;

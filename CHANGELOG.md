@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+- **The v1.2 "27% less cost" headline is withdrawn.** A first benchmark on
+  [AutoDRIVE](https://github.com/Tinker-Twins/AutoDRIVE) — a public 539k-node Unity simulator,
+  24 runs on v2.2.0, four conditions — did not reproduce it. An agent with only shell tools
+  matched Hades exactly on both questions posed (13/13 and 3/3) and cost **1.6–2.2x less**. Both
+  questions had been chosen because we expected the graph to win them: a material reachable only
+  through prefab-instance override records, and a three-level nested-prefab chain. A capable model
+  greps both correctly, the chain in two passes.
+
+  Two further measured facts sit behind that. **Being connected is not free** — 33 tool schemas and
+  23 skills cost tokens before anything is called, so the arms that never touched Hades still cost
+  more than the control. And **an agent does not reach for the graph unprompted**, even with the
+  plugin installed exactly as a user installs it; told in one line that a project graph exists, it
+  does.
+
+  The correctness half of the v1.2 comparison is untouched by this: it turns on prefab variants,
+  and AutoDRIVE contains none (0 of 530 prefabs), so it remains untested in public.
+
+  Closing that cost gap is now the top item on [the roadmap](ROADMAP.md).
+
 ### Added
 
 - **`CITATION.cff`, and an author the repository actually names.** Nothing in the repository said
