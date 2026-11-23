@@ -260,7 +260,12 @@ simply a path you type in rather than something the app finds.
 
 ---
 
-## Install the Claude Code plugin
+## Connect your agent
+
+Claude Code is the client Hades is developed against; for any other MCP
+client see [Connecting an agent](Clients.md).
+
+### The Claude Code plugin
 
 The plugin is `ClaudeCodePlugin/` in the repo — skills, commands, and a plugin-root
 `.mcp.json` pointing straight at `http://127.0.0.1:7823/mcp` (the app itself; no separate Node

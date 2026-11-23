@@ -4,6 +4,154 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed
+- **The v1.2 "27% less cost" headline is withdrawn.** A first benchmark on
+  [AutoDRIVE](https://github.com/Tinker-Twins/AutoDRIVE) — a public 539k-node Unity simulator,
+  24 runs on v2.2.0, four conditions — did not reproduce it. An agent with only shell tools
+  matched Hades exactly on both questions posed (13/13 and 3/3) and cost **1.6–2.2x less**. Both
+  questions had been chosen because we expected the graph to win them: a material reachable only
+  through prefab-instance override records, and a three-level nested-prefab chain. A capable model
+  greps both correctly, the chain in two passes.
+
+  Two further measured facts sit behind that. **Being connected is not free** — 33 tool schemas and
+  23 skills cost tokens before anything is called, so the arms that never touched Hades still cost
+  more than the control. And **an agent does not reach for the graph unprompted**, even with the
+  plugin installed exactly as a user installs it; told in one line that a project graph exists, it
+  does.
+
+  The correctness half of the v1.2 comparison is untouched by this: it turns on prefab variants,
+  and AutoDRIVE contains none (0 of 530 prefabs), so it remains untested in public.
+
+  Closing that cost gap is now the top item on [the roadmap](ROADMAP.md).
+
+### Added
+
+- **`CITATION.cff`, and an author the repository actually names.** Nothing in the repository said
+  who builds Hades, and there was no way to cite it in published work. It now carries Citation File
+  Format 1.2.0 metadata, which GitHub renders as a **Cite this repository** button with ready APA
+  and BibTeX, and the README has an Author section that names Mykhailo Kukharuk and acknowledges
+  Paolo Oranges for the project-local installation work. The file's `version` and `date-released`
+  are now checked by `scripts/check-version-lockstep.sh`, so a release cannot hand a stale version
+  to anyone citing it.
+- **`ROADMAP.md` and `Documentation/related-work.md`, both linked from the README.** The roadmap is
+  three horizons with no dates, and it names what Hades is behind on rather than only what is
+  coming: one-hop reference queries, no C# relationship layer, and the missing MCP `instructions`
+  field that leaves a non–Claude Code user with 33 tools and no guidance. It closes with **"Where
+  Hades is not, and why"** — the official MCP Registry indexes package-manager artifacts and network
+  -reachable servers, and Hades is a loopback-only desktop app, so the obstacle is its distribution
+  shape rather than the transport.
+  Related work describes the neighbours from their own primary sources, each linked and checked:
+  Unity's first-party plugin (which closes "the agent doesn't know Unity", a different gap from "the
+  agent doesn't know *your project*"), the Editor-action bridges, `Shades-28/UnityGraph`, the
+  **Unity Insight** paper (arXiv 2609.27585 — 53% fewer tokens and 52% less wall-clock time on 28
+  questions, quoted with the paper's own "one run per arm" limit, which our README figure shares),
+  and general code-graph tools. It states where those projects are **ahead**: UnityGraph's
+  documented graph carries `inherits` / `subscribes_to` / `depends_on` edges and a multi-hop
+  `impact_of`, which is exactly what Hades lacks. Nothing on the page is asserted from having run
+  it, and it asks for corrections from the maintainers of anything described.
+- **`Documentation/Clients.md` — how to connect an agent that is not Claude Code.** The server has
+  always been plain MCP over Streamable HTTP with no auth, but the only documented way to connect
+  anything was the Claude Code plugin, so a Codex or Cursor user had no route at all. The new page
+  states what is portable and what is not — **the 33 tools work on any MCP client; the 23 skills and
+  6 commands are Claude Code plugin features** — gives a `curl` check that tells "Hades is not
+  running" apart from "my client is misconfigured", and explains how Hades picks a project (the
+  client's MCP roots, else the `project` parameter that 31 of the 33 tools take). Measured for the
+  page rather than assumed: only `/mcp` is served, `GET /` is a 404, and a request to the same port
+  on this machine's LAN address is refused, so loopback-only is a verified property. **Gemini CLI 0.68.0 is
+  the first non-Claude client actually run against Hades** — it reports the server as `Connected`,
+  and it does so *before* any Gemini sign-in exists, which makes it a clean check of Hades rather
+  than of a Google account. Tool execution through it is **not** claimed and is recorded as blocked
+  on Google's side: the latest CLI refuses an individual Google sign-in and redirects to
+  Antigravity, so it would need an API key or Vertex AI. The page leads with the trap that costs the
+  most time: Gemini CLI silently disables MCP
+  servers, user-level ones included, in a folder you have not trusted, and says only `Disabled`,
+  which reads like a Hades fault. Configurations for Codex CLI and Cursor are transcribed from vendor
+  documentation and labelled as not run, and Cursor's transport field could not be confirmed from
+  its own docs at all.
+- **An independent reference scanner, for checking the graph against something that is not the
+  graph.** `scripts/benchmark/reference_scan.py` reads a Unity project's `.meta` and
+  text-serialized asset files and reports every `guid:` occurrence with its file, line and column.
+  It shares no code with Hades and interprets nothing — no variant resolution, no semantics, no
+  deduplication — so its output can serve as a second opinion when verifying what the graph says
+  about a project. Standard library only, read-only, with its own tests and an explicit list of
+  what it cannot see.
+
+### Changed
+
+- **The issue templates are YAML forms, and three of them were lying.** `bug_report`,
+  `feature_request` and `wrong_result` are now `.yml` issue forms with required fields: OS as a
+  dropdown that includes Windows, the Hades and Unity versions, which MCP client, and `hades
+  diagnose` output — asked for by name, since on Windows most failures are environmental. The old
+  markdown versions told users Hades was version `2.0.0`, asked only for a macOS version, assumed
+  Claude Code, and — in `wrong_result` — asked them to paste a **"confidence signal (Trust / Verify /
+  Confirm)"** and linked to the retired v1.2 page explaining it. v2 emits no such signal, so the
+  form asked for something that does not exist and pointed at a document that was removed from the
+  README for the same reason two commits ago. The new `wrong_result` form instead states the two
+  real boundaries up front, and asks which known-hard case applies (prefab variants, reflection, DI,
+  precompiled DLLs, generics, Addressables, generated code, asmdefs). **Note for the maintainer:
+  these forms apply a `wrong-result` label that does not exist in the repository yet** — the old
+  template referenced it too, so it has been silently dropped all along.
+- **`CONTRIBUTING.md` says where skills live and stops quoting a stale version.** It pointed at
+  `skills/<name>/SKILL.md`; the directory is `ClaudeCodePlugin/skills/`. Its "Reporting Bugs"
+  checklist also carried the same `2.0.0` as the issue templates, and duplicated fields the forms now
+  collect — it defers to them instead. New in the same pass: guidance on what `good first issue` and
+  `help wanted` mean here, including the honest observation that the most useful `help wanted` items
+  are the ones needing hardware or clients the maintainer does not have.
+- **"Step 2: Claude Code plugin" is now "Step 2: Connect your agent."** Same for
+  `Documentation/Installing.md`, where the only section on connecting an agent was titled *Install
+  the Claude Code plugin*. Claude Code still comes first and is still named as the only client Hades
+  has been used with; the difference is that the other route now exists on the page instead of only
+  in the protocol. `Documentation/Architecture.md` also claimed that quitting the app is safe because
+  the transport reconnects — true of Claude Code's transport specifically, so it now says so rather
+  than presenting one client's behaviour as a property of the system.
+- **The README says what Hades is for, and which Unity versions it was measured on.** The opening
+  line read "AI infrastructure for Claude Code"; it now says MCP-compatible coding agents, while
+  naming Claude Code as the only client it has been used with so far, and states plainly that the
+  project's domain is irrelevant to the graph — games, simulation and training environments, digital
+  twins and robotics simulators index the same way. "See it in action" gained two simulation
+  questions *beside* the game ones rather than appended after them. The single `Unity 6000.0+` badge
+  implied the whole product needed Unity 6, so it is now two: 2022.3+ for the graph, 6000.0+ for the
+  Editor actions. Prerequisites records what was actually measured — a 1.1M-edge 2022.3 LTS project
+  indexed and checked case by case against ground truth from a scanner that shares no code with
+  Hades — and that the in-Editor plugin is *known to work* on 2022.3 LTS without being supported
+  there yet, naming the missing CI matrix and the untested test running as the reasons. Claiming
+  6000.0-only would have been the confidence-signal overclaim in reverse.
+- **The LICENSE copyright line names a person.** `Copyright (c) 2026 ArcForge` became
+  `Copyright (c) 2026 Mykhailo Kukharuk`. ArcForge remains the brand name; the rights holder is the
+  author, which is also what the Citation File Format records.
+
+### Fixed
+
+- **The README no longer claims confidence signals that v2 does not emit.** The comparison table
+  advertised *Confidence signals (tells you when not to trust a result)* as a Hades capability, and
+  "Project status" told readers to "trust the confidence signals" — while the trust rubric two
+  sections above, and LIMITATIONS, correctly state that there is no confidence score on a v2
+  result. The v1.2 architecture emitted those signals; v2 does not. The table row and the sentence
+  are gone, as is the Documentation link to the retired v1.2 page describing them.
+- **"Project status" no longer reports a stale version.** It read *Hades is 2.0.0* as of the 2.2.0
+  release. It is now version-agnostic, so it cannot drift again.
+- **The headline comparison figures say where they come from.** The numbers at the top of the
+  README are from a single prompt on a purpose-built project, measured on v1.2. They now say so,
+  instead of reading as a current, general benchmark.
+- **The shipped docs and agent skills no longer promise a C# code-relationship graph.** Five skills
+  that ship in the Claude Code plugin, `LIMITATIONS.md`, and the README's trust rubric told readers
+  and agents that `find_references_to` returns "both asset references and C# code references
+  (fields, parameters, constructors, casts, inheritance)", that inheritance / `implements` edges
+  could be queried, and — in `unity-reviewer` — to **not** use `grep`, because "the graph is
+  authoritative for both asset and code-level dependencies". None of it is true in v2: the graph
+  holds exactly three edge kinds (`references`, `instance_of`, `corresponds_to`), every edge starts
+  at an asset file, and type declarations are nodes carrying only their file, namespace and line.
+  So a script has no outward edges at all, and a library class reached only from other C# code
+  reports zero references — which an agent told to trust the graph over `grep` would read as dead
+  code. The v1.x scanner did extract code references; the v2 rewrite dropped them and the prose was
+  carried forward. Three skills also pointed `trace_dependencies` at inward "what references this"
+  questions, which it cannot answer, or called it on a script path, where it returns nothing at any
+  depth. Every one of those statements now describes what the graph actually holds and sends
+  code-to-code questions to `grep`, and `tool-reference` gained a `find_references_to` section
+  recording that it walks exactly one hop inward, with no depth parameter.
+
 ## [2.2.0] — Asset Authoring & a Leaner Tool Surface — 2026-11-11
 
 ### Added

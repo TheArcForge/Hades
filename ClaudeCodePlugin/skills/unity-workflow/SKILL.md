@@ -127,12 +127,12 @@ propose_memory_update("<domain>", "<what was decided and why>")
 - Jumping straight to implementation without running `get_project_summary` or `recall_memory` — produces designs that duplicate existing systems or contradict prior decisions.
 - Asking no clarifying questions when the request is ambiguous — produces implementations that solve the wrong problem.
 - Presenting a design and immediately starting implementation before the user responds — skips the approval gate.
-- Using `grep -r "ClassName"` to find references instead of `find_references_to` — the graph knows about both asset references and C# code-level references (fields, parameters, constructors, casts, inheritance).
-- Using `find . -name "*.cs"` to locate scripts instead of `search_by_name` — the graph indexes every script, type, and method with their relationships.
+- Using `grep -r "ClassName"` to find which scenes and prefabs attach a component instead of `find_references_to` — those references are GUID-based, so grep on the class name cannot see them. The reverse holds too: for C#-to-C# usage grep *is* the right tool, because the graph holds no script-to-script edges.
+- Using `find . -name "*.cs"` to locate scripts instead of `search_by_name` — the graph indexes every script and every type declaration with its file, namespace and line.
 - Reading `.unity` or `.prefab` files as YAML instead of using `get_scene_summary` or `inspect_asset` — the graph provides parsed, structured data.
 
 ## Cross-References
 
 **Skills:** `hades:unity-architect` — architecture decision frameworks. `hades:scene-authoring` — scene construction workflows. `hades:prefab-workflow` — prefab creation and editing. `hades:animation-workflow` — animation controller setup. `hades:unity-reviewer` — code review for Unity anti-patterns.
 
-**Hades MCP Tools:** `get_project_summary`, `get_scene_summary`, `search_by_name` (namePattern substring + optional declaration `kind` filter — no path or exact-match option), `find_references_to` (asset + C# code references), `trace_dependencies`, `recall_memory`, `propose_memory_update`, `graph_query`, `project_get_console_log`, `project_run_tests`, `script_editing_session` (action: `begin`/`end`), `scriptable_object_apply` (create/configure ScriptableObject asset instances).
+**Hades MCP Tools:** `get_project_summary`, `get_scene_summary`, `search_by_name` (namePattern substring + optional declaration `kind` filter — no path or exact-match option), `find_references_to` (asset references only — one hop inward; no script-to-script edges exist), `trace_dependencies`, `recall_memory`, `propose_memory_update`, `graph_query`, `project_get_console_log`, `project_run_tests`, `script_editing_session` (action: `begin`/`end`), `scriptable_object_apply` (create/configure ScriptableObject asset instances).

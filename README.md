@@ -5,14 +5,15 @@
 [![CI](https://github.com/TheArcForge/Hades/actions/workflows/ci.yml/badge.svg)](https://github.com/TheArcForge/Hades/actions/workflows/ci.yml)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B%20Apple%20Silicon-black?logo=apple)](https://www.apple.com/macos/)
 [![Windows 10 1607+ beta](https://img.shields.io/badge/Windows-10%201607%2B%20beta-black?logo=windows)](#prerequisites)
-[![Unity 6000.0+](https://img.shields.io/badge/Unity-6000.0%2B-black?logo=unity)](https://unity.com)
+[![Unity 2022.3+ graph](https://img.shields.io/badge/Unity-2022.3%2B%20graph-black?logo=unity)](#prerequisites)
+[![Unity 6000.0+ Editor actions](https://img.shields.io/badge/Unity-6000.0%2B%20Editor%20actions-black?logo=unity)](#prerequisites)
 [![MCP compatible](https://img.shields.io/badge/MCP-compatible-blue)](https://modelcontextprotocol.io)
 
 > **In the underworld of your Unity project, nothing is hidden from Hades. And now, nothing is hidden from your AI agent.**
 
 ![Hades in action — the agent answers project-structure questions from the knowledge graph instead of grepping and guessing](Documentation/demo.gif)
 
-Hades is Unity-aware AI infrastructure for Claude Code. It's a **standalone desktop app** — a menu-bar app on macOS, a tray app on Windows (**beta**) — that builds a queryable knowledge graph of your entire Unity project — every scene, prefab, script, asset, and dependency — so your AI agent *knows* your project's structure instead of guessing at it. Out of the box you get 33 MCP tools, 23 skills, and 6 commands. Everything runs locally, and everything is version-controllable.
+Hades is Unity-aware AI infrastructure for MCP-compatible coding agents — developed against Claude Code, which is so far the only client it has been used with. It's a **standalone desktop app** — a menu-bar app on macOS, a tray app on Windows (**beta**) — that builds a queryable knowledge graph of your entire Unity project — every scene, prefab, script, asset, and dependency — and serves it over MCP, so your agent *knows* your project's structure instead of guessing at it. It assumes nothing about what the project is for: games, simulation and training environments, digital twins and robotics simulators all index the same way. Out of the box you get 33 MCP tools, plus 23 skills and 6 commands for Claude Code. Everything runs locally, and everything is version-controllable.
 
 <!-- ===================== HERO DEMO GIF (placeholder) =====================
      TODO: render Documentation/media/demo-hero.gif as the final side-by-side.
@@ -24,11 +25,31 @@ Hades is Unity-aware AI infrastructure for Claude Code. It's a **standalone desk
 ====================================================================== -->
 
 > **One prompt — *"which prefabs and scenes break if I change `EnemyAI`?"***
-> Stock Claude Code reads ~200k tokens of YAML, finds **1 prefab, misses 3
-> variants, and tells you to add code that breaks them.** Hades answers
-> correctly — 4 prefabs, 3 scenes — in **7 tool calls for 27% less cost.**
-> That gap is the whole project.
+> On a purpose-built project, stock Claude Code finds **1 prefab, misses 3 variants,
+> and tells you to add code that breaks them.** Hades answers correctly — 4 prefabs,
+> 3 scenes — in 7 tool calls.
 > → [see the full side-by-side breakdown](Documentation/comparison.md)
+>
+> *One prompt, one purpose-built project, measured on Hades v1.2 — an illustration,
+> not a benchmark.*
+
+> **⚠️ And here is what we measured since, which cuts the other way.**
+> On [AutoDRIVE](https://github.com/Tinker-Twins/AutoDRIVE), a public 539k-node simulator,
+> over **24 runs on Hades v2.2.0**: an agent with nothing but shell tools matched Hades
+> **exactly** on both asset-reference questions we posed — 13/13 and 3/3 — and did it for
+> **1.6–2.2x less cost.** Simply having Hades connected costs tokens before a single tool
+> is called. A capable model writes good `grep`s, including walking a nested-prefab chain
+> in two passes.
+>
+> Both of those questions were chosen *because* we expected the graph to win them.
+> **The "27% less cost" figure from v1.2 does not reproduce, and has been withdrawn.**
+> The correctness gap above turns on prefab variants, which AutoDRIVE does not use at all,
+> so it is neither confirmed nor refuted in public.
+>
+> **Making the graph cheaper than the shell is the goal of the next release.**
+> Full numbers and method: [the measurement](scripts/benchmark/results-2026-11-21-autodrive-cost.md).
+> See [the roadmap](ROADMAP.md). We would rather publish this than quietly keep a number
+> that our own measurement did not support.
 
 ## Know, don't guess
 
@@ -82,8 +103,9 @@ Most AI-for-Unity tooling falls into one of two camps. **Action bridges** let an
 | "What references X?" as a structural fact, not text grep | ❌ | ✅ code | ✅ code **+ assets** |
 | Persistent, version-controlled project memory | ❌ | ❌ | ✅ |
 | Full observability / tracing of every operation | ❌ | ❌ | ✅ |
-| Confidence signals (tells you when *not* to trust a result) | ❌ | ❌ | ✅ |
 | Runs entirely locally, no cloud, version-controllable | ⚠️ varies | ⚠️ varies | ✅ |
+
+For the neighbours this table does not cover — Unity's own plugin, the Editor-action bridges, UnityGraph, the Unity Insight paper, and where Hades is behind them — see [Related work](Documentation/related-work.md).
 
 ## See it in action
 
@@ -97,14 +119,24 @@ The agent uses the graph to give a project-specific overview — not a generic s
 ```
 Where do we use PlayerController?
 ```
-Structural search across scenes, prefabs, and scripts — not just text grep.
+Structural search for the scenes, prefabs and assets that reference it — resolved by GUID, which a text grep cannot see. (For *which code* uses a type, your agent still greps — see [Limitations](LIMITATIONS.md).)
+
+```
+Which scenes use the LidarSensor prefab, and which of them only override it?
+```
+Override-aware, and it tells you which is which: every hit reports the property it came through, so an override reads as `m_Modifications[...]` instead of an ordinary field. In the 2022.3 probe a material reachable *only* through override records returned all 13 of its scenes — a tool that skips those records returns zero.
 
 ```
 I want to remove OldNetworkManager. What would break?
 ```
 Dependency analysis that traces references through the full project graph *before* you change anything.
 
-**Want proof?** [**With and without Hades: one prompt, side by side**](Documentation/comparison.md) — the same task run twice under identical conditions. Stock Claude Code misses 3 prefab variants and recommends a change that would break inheritance; Hades returns the correct impact map for 27% less cost. Includes full uncut recordings and reproduction steps.
+```
+If I change VehicleController, which vehicle prefabs and test scenes are affected?
+```
+The same impact question a game team asks about an enemy script. The graph does not care which domain the project is in — a vehicle rig and an enemy prefab are the same shape of fact.
+
+**Want proof?** [**With and without Hades: one prompt, side by side**](Documentation/comparison.md) — the same task run twice under identical conditions on a purpose-built project. Stock Claude Code misses 3 prefab variants and recommends a change that would break inheritance; Hades returns the correct impact map. Includes full uncut recordings and reproduction steps. **On cost, read the measured caveat at the top of this page first** — on a large public project we could not reproduce a cost advantage, and that is what the next release is for.
 
 ## What to trust (and what to verify)
 
@@ -114,7 +146,8 @@ Different answers deserve different levels of trust, and **the tools do not flag
 |---|---|---|
 | **Trust** | Structural facts: type → file, prefab/scene/material/ScriptableObject contents, asset GUID/type, direct dependencies | Use directly — these read serialized data straight from your project. |
 | **Verify** | "What references X?" for scripts and prefabs | Treat the result as a strong lead. A count of zero means "nothing found statically", not "unused" — check by hand before deleting, since a prefab variant or nested prefab can embed an asset without producing a reference edge. |
-| **Confirm** | Inheritance / `implements` edges, C# dependency traces, "which prefabs use this component" | Confirm independently when the answer involves types from precompiled packages/DLLs, generics, or reflection/DI wiring. |
+| **Confirm** | "Which prefabs use this component" | Confirm independently when the answer involves types from precompiled packages/DLLs or reflection/DI wiring. |
+| **Don't ask** | Inheritance, call graphs, "which code uses this type" | Not indexed at all — no graph edge starts at a `.cs` file. Use `grep` or your editor's find-usages. |
 
 Hades is a **navigator, not an oracle**: it makes understanding your project fast and structural, and its blind spots are documented rather than signalled — so knowing them is on you and your agent, before anything destructive. See [Limitations](LIMITATIONS.md) for the boundaries that are there by design, and for what the tools do and don't tell you at runtime.
 
@@ -132,8 +165,9 @@ Hades is a **navigator, not an oracle**: it makes understanding your project fas
 
 **Both**
 
-- **Claude Code** — other MCP clients are untested.
-- **Unity 6000.0+** — only for the optional in-Editor plugin. Reading and querying your project works without it.
+- **Claude Code** — the only client Hades has been used with; other MCP clients are untested, and [Connecting an agent](Documentation/Clients.md) says what that means in practice. The server speaks plain MCP over Streamable HTTP at a fixed address, and picks your project out of the client's `roots`; a client that does not report roots can still name one explicitly through the `project` parameter that 31 of the 33 tools take.
+- **Unity, to read and query your project** — no Editor plugin, and no Editor running. Measured on **2022.3 LTS** and **Unity 6000.3**: a 1.1M-edge 2022.3 project was indexed and checked case by case against ground truth generated by a [separate scanner that shares no code with Hades](scripts/benchmark/).
+- **Unity 6000.0+ — for the optional in-Editor plugin**, which adds the Editor actions: scene and prefab editing, the console, running tests. The plugin is also **known to work on 2022.3 LTS** — it compiles there with no errors, attaches, boots and indexes — but 2022.3 is **not supported yet**: there is no CI across both Editor versions, and test running in particular has not been exercised there.
 
 ## Installation
 
@@ -173,13 +207,18 @@ Launch Hades — it lives in the menu bar on macOS, the notification-area tray o
 
 Windows also installs a `hades` command-line tool onto your PATH. It only appears in terminals you open *after* installing, because Windows hands each process its environment at launch.
 
-### Step 2: Claude Code plugin
+### Step 2: Connect your agent
+
+Claude Code is the client Hades is developed against:
+
 
 ```
 /plugin marketplace add TheArcForge/hades-plugin
 ```
 
 then `/plugin install hades`. Run `/mcp` afterwards and confirm `hades` reports **33 tools**.
+
+Using a different agent? The server is plain MCP over Streamable HTTP with no auth, so other clients can connect — see [Connecting an agent](Documentation/Clients.md) for what is portable (the 33 tools) and what is not (the 23 skills and 6 commands).
 
 Working from a clone instead? Point Claude Code at the plugin directly — per-session, so pass it every time:
 
@@ -242,7 +281,7 @@ Claude Code connects over MCP to the Hades app on `127.0.0.1:7823` — no launch
 
 ## Project status
 
-Hades is **2.0.0** — the standalone app replacing the in-Editor v1.x architecture. It's been field-tested on a large production Unity project, but not yet across many projects, Unity versions, or OS versions. Static analysis has known boundaries (see [Limitations](LIMITATIONS.md)). If a result looks wrong on *your* project, please [open an issue](https://github.com/TheArcForge/Hades/issues) — concrete repros on real projects are exactly how this gets solid. The tools are built to tell you when they're uncertain, so trust the confidence signals and verify before anything destructive.
+Hades v2 is the standalone app that replaced the in-Editor v1.x architecture. It's been field-tested on a large production Unity project, but not yet across many projects, Unity versions, or OS versions. Static analysis has known boundaries (see [Limitations](LIMITATIONS.md)). If a result looks wrong on *your* project, please [open an issue](https://github.com/TheArcForge/Hades/issues) — concrete repros on real projects are exactly how this gets solid. The tools do **not** flag their own uncertainty — apply the [trust rubric](#what-to-trust-and-what-to-verify) yourself, and verify before anything destructive.
 
 **Windows support is beta.** The Windows shell is a view layer over the same core the Mac uses — it renders, the core decides — so the analysis you get is identical on both. What is newer is everything *around* that: the installer, the tray, process supervision, and the environmental hazards no CI can reach (long paths, OneDrive placeholders, antivirus locking database files). Those are named individually in [Limitations](LIMITATIONS.md). `hades diagnose` exports an environment report for exactly this reason — if something misbehaves on Windows, that output in an issue is worth more than a description.
 
@@ -292,11 +331,23 @@ The app detects an existing v1.2 install (Unity package + in-Editor MCP server +
 ## Documentation
 
 - [Installing Hades](Documentation/Installing.md) — install, first launch, plugins, migration, known issues
-- [Interpreting results](Documentation/Retired/interpreting-results.md) — an archived v1.2 doc describing the confidence signals that architecture emitted
 - [Limitations](LIMITATIONS.md) — the boundaries that are there by design
 - [Architecture](Documentation/Architecture.md) — system design, data flow, component responsibilities
+- [Connecting an agent](Documentation/Clients.md) — Claude Code, any other MCP client, and what is portable
+- [Roadmap](ROADMAP.md) — what is likely next, and where Hades deliberately is not
+- [Related work](Documentation/related-work.md) — Unity's own plugin, action bridges, UnityGraph, Unity Insight, and how Hades differs
 - [Comparison](Documentation/comparison.md) — with and without Hades, one prompt, side by side
 - [Contributing](CONTRIBUTING.md) — repository layout, running the tests, conventions
+
+## Author
+
+Hades is created and maintained by **Mykhailo Kukharuk** under the ArcForge brand — [GitHub](https://github.com/mikeKuharuk) · [LinkedIn](https://www.linkedin.com/in/mykhailo-kukharuk-23008518a/).
+
+If you use Hades in published work, please cite it — GitHub's **Cite this repository** button generates APA and BibTeX from [`CITATION.cff`](CITATION.cff).
+
+### Acknowledgements
+
+- [Paolo Oranges](https://github.com/paolooranges-voodoo) — project-local installation ([PR #2](https://github.com/TheArcForge/Hades/pull/2)).
 
 ## License
 

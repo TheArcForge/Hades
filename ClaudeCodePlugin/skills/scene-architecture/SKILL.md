@@ -635,6 +635,6 @@ Always check `SceneManager.GetSceneByName().isLoaded` before calling `SetActiveS
   - `get_project_summary` — project scale, scene count
   - `get_scene_summary` — inspect scene hierarchy before recommending changes
   - `search_by_name` — discover existing scene loaders and transition scripts
-  - `trace_dependencies` — check what depends on a scene being loaded first
+  - `trace_dependencies` — see what a scene itself depends on (scripts, prefabs, assets) before changing load order; it walks outward, not inward
   - `recall_memory` — retrieve documented scene strategy and manager decisions
   - `propose_memory_update` — record new scene architecture decisions for the team

@@ -26,7 +26,7 @@ Before making recommendations, gather current project state:
 1. **Check existing prefab patterns:**
    - Call `graph_query(edgeKind: "references", edgeTargetPath: "<path/to/Component.cs>")` to discover how similar objects are currently structured — e.g. the path for `EnemyController` (resolve it with `search_by_name` first if you only have the class name) before designing a new enemy variant
    - Call `search_by_name("*.prefab")` for a broad inventory of prefab assets; look for naming conventions (Base_, Variant_, NPC_, etc.)
-   - Call `trace_dependencies("<PrefabName>")` on a candidate base prefab to see what scenes and other prefabs reference it — changes to a heavily-referenced base have wide blast radius
+   - Call `find_references_to("<path/to/Base.prefab>")` on a candidate base prefab to see what scenes and other prefabs reference it — changes to a heavily-referenced base have wide blast radius. `trace_dependencies` walks the opposite way (what the prefab itself uses), so it cannot answer this
 
 2. **Check team decisions in memory:**
    - Call `recall_memory("prefab architecture variant")` to find documented prefab strategy
@@ -538,6 +538,6 @@ Root position should always be `(0, 0, 0)` on prefab assets. Position is set by 
 - Hades MCP tools used in this skill:
   - `graph_query` — discover existing prefab patterns before introducing new ones (edgeKind: "references", edgeTargetPath)
   - `search_by_name` — inventory prefab assets and naming conventions
-  - `trace_dependencies` — understand blast radius before modifying a base prefab
+  - `find_references_to` — understand blast radius before modifying a base prefab (which scenes and prefabs reference it)
   - `recall_memory` — retrieve documented prefab strategy and SO config decisions
   - `propose_memory_update` — record new prefab architecture decisions for the team

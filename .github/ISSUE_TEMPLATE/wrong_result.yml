@@ -1,0 +1,105 @@
+name: Wrong Result on My Project
+description: Hades returned something incorrect — a query, a dependency trace, or "what references X"
+labels: ["wrong-result"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Concrete repros on real projects are how this gets solid, so these are welcome.
+
+        Two things worth checking first, because they are known boundaries rather than bugs:
+        **Hades does not index C# code relationships at all** — no inheritance or call graph, and
+        `find_references_to` on a script returns the assets that attach it, never the code that uses
+        the type — and a result of **zero** means "nothing found statically", not "unused".
+        [Limitations](https://github.com/TheArcForge/Hades/blob/main/LIMITATIONS.md) has the full list, including reflection, DI wiring and
+        precompiled DLL types.
+
+  - type: textarea
+    id: asked
+    attributes:
+      label: What did you ask?
+      description: 'The question or the tool call — for example `find_references_to("Assets/Scripts/PlayerController.cs")`.'
+    validations:
+      required: true
+
+  - type: textarea
+    id: returned
+    attributes:
+      label: What Hades returned
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: truth
+    attributes:
+      label: What is actually true
+      description: And how you know — the file you can see, the reference you found by hand.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of thing was it about?
+      options:
+        - Script or type
+        - Prefab
+        - Prefab variant
+        - Scene
+        - Material
+        - ScriptableObject
+        - Texture, model, audio or other imported asset
+        - Dependency trace
+        - Something else
+    validations:
+      required: true
+
+  - type: dropdown
+    id: project-type
+    attributes:
+      label: What kind of Unity project is it?
+      options:
+        - Game
+        - Simulation or training environment
+        - Digital twin
+        - Robotics simulator
+        - Tooling or something else
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: unusual
+    attributes:
+      label: Does any of this apply to the part of the project involved?
+      description: These are the known-hard cases, and knowing which one you hit usually explains the result.
+      options:
+        - label: Prefab variants or nested prefabs
+        - label: Reflection, `SendMessage`, or string-keyed lookups
+        - label: Dependency injection or a service locator
+        - label: Types from a precompiled DLL or a registry package
+        - label: Generics
+        - label: Addressables
+        - label: Generated code
+        - label: Assembly definitions (`.asmdef`)
+        - label: None of these, as far as I can tell
+
+  - type: input
+    id: hades-version
+    attributes:
+      label: Hades version
+      description: From `hades_status`, or `hades diagnose` under `core:`.
+    validations:
+      required: true
+
+  - type: input
+    id: unity-version
+    attributes:
+      label: Unity version
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else

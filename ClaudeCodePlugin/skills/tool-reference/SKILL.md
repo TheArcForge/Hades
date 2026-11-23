@@ -91,6 +91,11 @@ Hades' `tools/list` descriptions are kept short on purpose (payload size — an 
 
 - A tool whose result varies between calls (a timestamp, an uptime counter — e.g. `hades_ping`) replays as a mismatch every time under `expected` comparison; such tools make poor fixture entries for `action='replay'`.
 
+## find_references_to
+
+- Walks inward exactly **one hop**: the asset files holding an edge that points at the target's GUID (any of the three kinds). There is no `maxDepth` — a prefab nested inside another prefab that a scene uses reports the middle prefab, not the scene.
+- Asset-side only. No edge in the graph starts at a `.cs` file, so a script's referrers are the scenes, prefabs and ScriptableObjects that attach it — never the C# code that uses the type. For that, use grep; a zero here says nothing about code usage.
+
 ## trace_dependencies
 
 - Walks `references` and `instance_of` edges outward; `corresponds_to` is deliberately excluded from the walk because every nested prefab instance that writes a `corresponds_to` edge also writes an `instance_of` edge to the same file, so including both would just duplicate hits.

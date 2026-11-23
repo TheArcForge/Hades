@@ -124,6 +124,18 @@ F='ClaudeCodePlugin/.claude-plugin/plugin.json'
 row "${F} (version)" "$F" \
     "$(extract "$F" 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')" "$WANT"
 
+# CITATION.cff carries the version that GitHub's "Cite this repository" hands to anyone citing a
+# release. A stale line here misattributes published work rather than merely looking untidy.
+F='CITATION.cff'
+row "${F} (version)" "$F" \
+    "$(extract "$F" 's/^version:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p')" "$WANT"
+
+# The release date has no second source to compare against at gate time, so this checks only that
+# it is present and ISO-formatted. Confirm by eye that it is THIS release's date.
+CFF_DATE="$(extract "$F" 's/^date-released:[[:space:]]*"\{0,1\}\([0-9][0-9-]*\)"\{0,1\}[[:space:]]*$/\1/p')"
+[[ "$CFF_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || CFF_DATE=''
+row "${F} (date-released, format only)" "$F" "$CFF_DATE" "$CFF_DATE"
+
 # --------------------------------------------------- the Unity plugin's own, independent version
 
 echo

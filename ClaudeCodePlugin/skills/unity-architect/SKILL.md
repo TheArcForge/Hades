@@ -23,13 +23,13 @@ Do NOT activate for narrow implementation questions about a specific existing sy
 
 Before making recommendations:
 
-1. **Check existing patterns in the graph (always use Hades tools first, not grep/find):**
+1. **Check existing patterns in the graph (Hades tools first for asset and declaration questions; grep for C#-to-C# usage, which the graph does not index):**
    - Call `get_project_summary()` to understand project scale, render pipeline, assembly count, asset coverage, and asset volumes — a 200-prefab project warrants different advice than a 20-prefab one
    - Call `search_by_name("<keyword>", kind="Class")` to filter by declaration kind — `search_by_name` has no path-prefix or exact-match option anymore; use `graph_query(namePattern: "<keyword>", pathPrefix: "Assets/Scripts")` to scope a search to one directory
-   - Call `find_references_to("<script_path>")` to discover all dependents — returns both asset references (prefabs, scenes) and C# code references (fields, parameters, inheritance, constructors)
+   - Call `find_references_to("<script_path>")` to discover asset-side dependents — the prefabs, scenes and ScriptableObjects that attach the script. It returns no C# code references, so pair it with a grep for the type name to see the code-side dependents
    - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "Pool", edgeTargetKind: "Class")` or with `edgeTargetNamePattern: "Factory"` to discover whether spawn infrastructure already exists
    - Call `graph_query(edgeKind: "references", edgeTargetNamePattern: "GameEvent", edgeTargetKind: "Class")` or with `edgeTargetNamePattern: "EventChannel"` to detect event architecture
-   - Call `trace_dependencies("<CentralSystem>")` on any system the new feature depends on to surface tight coupling early
+   - Call `find_references_to("<path/to/CentralSystem.cs>")` on any system the new feature depends on to see how widely it is already wired into scenes and prefabs, and surface tight coupling early — `trace_dependencies` returns nothing for a script, so trace outward from a prefab or scene instead
 
 2. **Check team decisions in memory:**
    - Call `recall_memory("architecture decisions conventions")` to find documented conventions
